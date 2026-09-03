@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PDF Signer
+Comment=Click-to-place digital PDF signer
+Exec=pdf-signer
+Icon=pdf-signer
+Terminal=false
+Categories=Office;Utility;
+StartupWMClass=pdf-signer
+Keywords=pdf;sign;signature;crypto;x509;
+MimeType=application/pdf;

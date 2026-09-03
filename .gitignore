@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+electron/dist/
+tauri/src-tauri/target/
+tauri/src-tauri/gen/
+packaging/pkg/pkg/
+packaging/pkg/src/
+packaging/pkg/*.pkg.tar.zst
+
+# Editor / OS junk
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# User identity data — never commit these
+*.p12
+*.pfx
+*.pdfsigner.json
+
+# Stale hand-saved copy
+web/pdf-signer.html

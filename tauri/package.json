@@ -1,0 +1,15 @@
+{
+  "name": "pdf-signer-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:deb": "tauri build --bundles deb",
+    "build:appimage": "tauri build --bundles appimage",
+    "build:dmg": "tauri build --bundles dmg"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

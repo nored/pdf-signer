@@ -1,0 +1,49 @@
+# Maintainer: schwarz <schwarz553@googlemail.com>
+#
+# Local package: wraps the binary already built in
+# tauri/src-tauri/target/release/pdf-signer (no recompile, no download).
+#
+# Build & install with:
+#     cd packaging/pkg && makepkg -fi
+#
+# Rebuild the binary first if it is stale:
+#     (cd tauri/src-tauri && cargo build --release)
+#
+pkgname=pdf-signer
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Click-to-place digital PDF signer"
+arch=('x86_64')
+url="https://github.com/"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'hicolor-icon-theme')
+provides=('pdf-signer')
+conflicts=('pdf-signer-bin')
+options=('!strip' '!debug')
+
+# Workspace root, relative to this PKGBUILD (packaging/pkg/).
+_repo="$(realpath "$startdir/../..")"
+
+package() {
+  local rel="$_repo/tauri/src-tauri/target/release"
+  if [[ ! -x "$rel/pdf-signer" ]]; then
+    echo "error: $rel/pdf-signer not found — build it first:" >&2
+    echo "  (cd tauri/src-tauri && cargo build --release)" >&2
+    return 1
+  fi
+
+  install -Dm755 "$rel/pdf-signer" "$pkgdir/usr/bin/pdf-signer"
+
+  install -Dm644 "$_repo/packaging/pkg/pdf-signer.desktop" \
+    "$pkgdir/usr/share/applications/pdf-signer.desktop"
+
+  local _icons="$_repo/tauri/src-tauri/icons"
+  install -Dm644 "$_icons/32x32.png"   "$pkgdir/usr/share/icons/hicolor/32x32/apps/pdf-signer.png"
+  install -Dm644 "$_icons/128x128.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/pdf-signer.png"
+  install -Dm644 "$_icons/256x256.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/pdf-signer.png"
+  install -Dm644 "$_icons/512x512.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/pdf-signer.png"
+
+  if [[ -f "$_repo/LICENSE" ]]; then
+    install -Dm644 "$_repo/LICENSE" "$pkgdir/usr/share/licenses/pdf-signer/LICENSE"
+  fi
+}
