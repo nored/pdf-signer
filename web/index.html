@@ -3531,7 +3531,7 @@ function renderVerifyBanner(results, isUnsignedField=false) {
   } else {
     state = overallVerifyState(results);
     label = state === 'valid'    ? { badge: '✓ Valid', text: 'signed, unchanged since signing' }
-          : state === 'modified' ? { badge: '⚠ Voided', text: 'the document was modified after signing — the signature no longer covers the whole file and should NOT be treated as valid' }
+          : state === 'modified' ? { badge: '⚠ Voided', text: 'the document was modified after signing. The signature no longer covers the whole file. Do NOT treat this as valid' }
           :                        { badge: '✕ Broken', text: 'signature does NOT match the document — the signed bytes have been altered' };
   }
   banner.className = 'verify-banner ' + state;
@@ -3699,14 +3699,14 @@ async function runAutoVerifyFromHash() {
 
   function render(state, opts={}) {
     const glyph = state === 'valid' ? '✓' : state === 'modified' ? '⚠' : state === 'broken' ? '✕' : '…';
-    const label = opts.label || (state === 'valid' ? 'Verified' : state === 'modified' ? 'Voided — modified after signing' : state === 'broken' ? 'Invalid' : 'Verifying…');
+    const label = opts.label || (state === 'valid' ? 'Verified' : state === 'modified' ? 'Voided. Modified after signing.' : state === 'broken' ? 'Invalid' : 'Verifying…');
     const detail = opts.detail || '';
     const fieldsHtml = opts.fields ? '<dl class="verifier-fields">' + Object.entries(opts.fields).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v || '<span style="color:var(--muted)">(none)</span>'}</dd>`).join('') + '</dl>' : '';
     const ctaHtml = opts.cta || '';
     root.innerHTML = `
       <div class="verifier-brand">pdf-signer verifier</div>
       <h1 class="verifier-title">Signed document check</h1>
-      <div class="verifier-sub">Decrypts the vault the QR points to and verifies the signature inside — entirely in your browser. Nothing is uploaded.</div>
+      <div class="verifier-sub">Decrypts the vault the QR points to and verifies the signature inside. Runs in your browser. Nothing is uploaded.</div>
       <div class="verifier-card">
         <div class="verifier-status ${state}">
           <div class="glyph">${glyph}</div>
@@ -3779,9 +3779,9 @@ async function runAutoVerifyFromHash() {
                 : 'broken';
     const first = results[0] || {};
     const detail = state === 'valid'    ? 'Cryptographic signature is valid and covers the entire document.'
-                 : state === 'modified' ? 'Bytes were added after signing. The signature no longer covers the whole file — treat this document as voided.'
+                 : state === 'modified' ? 'Bytes were added after signing. The signature no longer covers the whole file. Treat this document as voided.'
                  : first.error          ? 'Signature could not be verified: ' + first.error
-                                        : 'The signed bytes were altered — the digest no longer matches.';
+                                        : 'The signed bytes were altered. The digest no longer matches.';
 
     const csvRow = parsed.csv
       ? (csvOk ? '<span style="color:var(--good)">matches</span> the AES key in the QR'
@@ -3818,10 +3818,10 @@ async function runAutoVerifyFromHash() {
         if (previewPanel) {
           const notice = document.createElement('div');
           notice.style.cssText = 'padding:12px 14px; margin-bottom:10px; border-left: 3px solid var(--good); background: rgba(31,122,58,.08); border-radius: 0 6px 6px 0; font-size:13px; line-height:1.55; color: var(--text);';
-          notice.innerHTML = '<b>This is the signed original.</b> Any other copy — a printout, a scanned page, a PDF someone emailed you — is a derivative. Trust only what this page shows.';
+          notice.innerHTML = '<b>This is the signed original.</b> Any file or print from anywhere else is a copy.';
           const link = document.createElement('div');
           link.style.cssText = 'margin-top:8px; font-size:12px; color:var(--muted);';
-          link.innerHTML = 'Received a digital copy as well? <a href="#" id="btnCompareLocal" style="color:var(--accent); text-decoration:none;">Byte-compare it with this original</a> (won\'t work for scanned pages).';
+          link.innerHTML = 'Have a digital copy? <a href="#" id="btnCompareLocal" style="color:var(--accent); text-decoration:none;">Byte-compare it</a>. Scans always fail; the bytes differ.';
           notice.appendChild(link);
           // Slot in right after the "Decrypted document" heading, before the pages.
           const h3 = previewPanel.querySelector('h3');
