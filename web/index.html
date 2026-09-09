@@ -501,10 +501,12 @@
   .verifier-fields dd { margin: 0; word-break: break-all; }
   .verifier-fields code { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 12px; }
   .verifier-cta {
-    display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap;
+    display: grid; gap: 10px; margin-top: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   }
   .verifier-cta button {
-    width: auto; margin: 0; padding: 9px 16px; font-size: 14px;
+    width: 100%; margin: 0; padding: 10px 14px; font-size: 14px;
+    white-space: normal; line-height: 1.25;
   }
   .verifier-footer {
     margin-top: 22px; font-size: 12px; color: var(--muted); text-align: center;
@@ -3704,7 +3706,7 @@ async function runAutoVerifyFromHash() {
     root.innerHTML = `
       <div class="verifier-brand">pdf-signer verifier</div>
       <h1 class="verifier-title">Signed document check</h1>
-      <div class="verifier-sub">This page decrypts an encrypted vault carried in the QR you scanned, then verifies the cryptographic PDF signature inside it — entirely in your browser. Nothing is uploaded.</div>
+      <div class="verifier-sub">Decrypts the vault the QR points to and verifies the signature inside — entirely in your browser. Nothing is uploaded.</div>
       <div class="verifier-card">
         <div class="verifier-status ${state}">
           <div class="glyph">${glyph}</div>
@@ -3776,10 +3778,10 @@ async function runAutoVerifyFromHash() {
                 : results.length && results.every(r => r.cryptoValid) ? 'modified'
                 : 'broken';
     const first = results[0] || {};
-    const detail = state === 'valid'    ? 'Signature is cryptographically valid and covers the entire document.'
-                 : state === 'modified' ? 'The signed byte range is intact but bytes were added afterwards. The signature no longer covers the whole file — treat this document as VOIDED, not as validly signed.'
+    const detail = state === 'valid'    ? 'Cryptographic signature is valid and covers the entire document.'
+                 : state === 'modified' ? 'Bytes were added after signing. The signature no longer covers the whole file — treat this document as voided.'
                  : first.error          ? 'Signature could not be verified: ' + first.error
-                                        : 'The signed byte range does not match the cryptographic digest. Contents have been altered.';
+                                        : 'The signed bytes were altered — the digest no longer matches.';
 
     const csvRow = parsed.csv
       ? (csvOk ? '<span style="color:var(--good)">matches</span> the AES key in the QR'
@@ -3797,9 +3799,9 @@ async function runAutoVerifyFromHash() {
         'Document size':    plaintext.length + ' bytes',
       },
       cta: `
-        <button id="btnCompareLocal" class="primary">Check a local PDF matches this</button>
-        <button id="btnDownload">Download decrypted PDF</button>
-        <button id="btnDetails">See raw verification details</button>
+        <button id="btnCompareLocal" class="primary">Compare with local PDF</button>
+        <button id="btnDownload">Download signed PDF</button>
+        <button id="btnDetails">Verification details</button>
       `,
       wire: r => {
         r.querySelector('#btnDownload').onclick = () => download('vault-' + (parsed.csv || 'decrypted') + '.pdf', plaintext, 'application/pdf');
@@ -3810,11 +3812,11 @@ async function runAutoVerifyFromHash() {
         };
         r.querySelector('#btnCompareLocal').onclick = () => compareVerifierWithLocal(r, plaintext);
         renderVerifierPreview(r, plaintext);
-        // Prominent notice about the vault vs. local-file gap.
+        // Small notice explaining the vault-vs-local-file gap.
         const card = r.querySelector('.verifier-card');
         const notice = document.createElement('div');
-        notice.style.cssText = 'margin-top:14px; padding:12px 14px; border:1px solid var(--border); border-left: 3px solid var(--accent); background: rgba(47,111,235,.06); border-radius:6px; font-size:13px; line-height:1.5;';
-        notice.innerHTML = '<b>This is the file that was signed.</b> If someone handed you a PDF file (not just a printout), click <b>Check a local PDF matches this</b> to make sure it is the same document — a copy that was altered after signing will NOT match, no matter what the printout claims.';
+        notice.style.cssText = 'margin-top:14px; padding:10px 12px; border-left: 3px solid var(--accent); background: rgba(47,111,235,.06); border-radius: 0 6px 6px 0; font-size:13px; line-height:1.5; color: var(--text);';
+        notice.innerHTML = 'Got the document as a file too? Use <b>Compare with local PDF</b> to check it wasn\'t modified after signing.';
         const cta = card.querySelector('.verifier-cta');
         if (cta) cta.after(notice); else card.appendChild(notice);
       },
