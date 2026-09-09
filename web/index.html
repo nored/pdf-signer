@@ -3799,8 +3799,7 @@ async function runAutoVerifyFromHash() {
         'Document size':    plaintext.length + ' bytes',
       },
       cta: `
-        <button id="btnCompareLocal" class="primary">Compare with local PDF</button>
-        <button id="btnDownload">Download signed PDF</button>
+        <button id="btnDownload" class="primary">Download signed PDF</button>
         <button id="btnDetails">Verification details</button>
       `,
       wire: r => {
@@ -3810,15 +3809,23 @@ async function runAutoVerifyFromHash() {
           body.innerHTML = verifyResultsHtml(results);
           await modal({ title: 'Signature verification — raw', body, confirmText: 'Close', cancelText: '' });
         };
-        r.querySelector('#btnCompareLocal').onclick = () => compareVerifierWithLocal(r, plaintext);
         renderVerifierPreview(r, plaintext);
-        // Small notice explaining the vault-vs-local-file gap.
+        // Emphasize that the vault copy IS the document. UGR does the same:
+        // their server-hosted PDF is the authoritative one; no local compare.
         const card = r.querySelector('.verifier-card');
         const notice = document.createElement('div');
-        notice.style.cssText = 'margin-top:14px; padding:10px 12px; border-left: 3px solid var(--accent); background: rgba(47,111,235,.06); border-radius: 0 6px 6px 0; font-size:13px; line-height:1.5; color: var(--text);';
-        notice.innerHTML = 'Got the document as a file too? Use <b>Compare with local PDF</b> to check it wasn\'t modified after signing.';
+        notice.style.cssText = 'margin-top:14px; padding:12px 14px; border-left: 3px solid var(--good); background: rgba(31,122,58,.08); border-radius: 0 6px 6px 0; font-size:13px; line-height:1.55; color: var(--text);';
+        notice.innerHTML = '<b>The document shown above is the signed original.</b> Any other copy — a printout, a scanned page, a PDF someone emailed you — is a derivative. Trust only what this page shows.';
         const cta = card.querySelector('.verifier-cta');
         if (cta) cta.after(notice); else card.appendChild(notice);
+        // Escape hatch for the paranoid: a small link that opens the byte-
+        // comparison flow. Clarifies it only works on a DIGITAL copy — a
+        // scanned printout will always mismatch on bytes.
+        const link = document.createElement('div');
+        link.style.cssText = 'margin-top:10px; font-size:12px; color:var(--muted); text-align:center;';
+        link.innerHTML = 'Received a digital copy as well? <a href="#" id="btnCompareLocal" style="color:var(--accent); text-decoration:none;">Byte-compare it with this original</a> (won\'t work for scanned pages).';
+        notice.after(link);
+        r.querySelector('#btnCompareLocal').onclick = ev => { ev.preventDefault(); compareVerifierWithLocal(r, plaintext); };
       },
     });
   } catch (e) {
