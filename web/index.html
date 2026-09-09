@@ -3615,6 +3615,36 @@ function autoDetectVerifierUrl() {
   return CANONICAL_VERIFIER_URL;
 }
 
+function printPdf(u8) {
+  const blob = new Blob([u8], { type: 'application/pdf' });
+  const url  = URL.createObjectURL(blob);
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed; right:0; bottom:0; width:0; height:0; border:0; visibility:hidden;';
+  let called = false;
+  iframe.onload = () => {
+    setTimeout(() => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        called = true;
+      } catch (_) {
+        window.open(url, '_blank');
+      }
+      // Give the print dialog plenty of time before revoking the URL.
+      setTimeout(() => { URL.revokeObjectURL(url); iframe.remove(); }, 120000);
+    }, 300);
+  };
+  document.body.appendChild(iframe);
+  iframe.src = url;
+  // Safari sometimes never fires onload for PDF iframes — fall back after a
+  // short wait if that happened.
+  setTimeout(() => {
+    if (!called && document.body.contains(iframe)) {
+      window.open(url, '_blank');
+    }
+  }, 2000);
+}
+
 async function sha256Hex(u8) {
   const buf = await crypto.subtle.digest('SHA-256', u8);
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -3804,11 +3834,13 @@ async function runAutoVerifyFromHash() {
         'Document size':    plaintext.length + ' bytes',
       },
       cta: `
-        <button id="btnDownload" class="primary">Download signed PDF</button>
+        <button id="btnPrint" class="primary">Print original</button>
+        <button id="btnDownload">Download signed PDF</button>
         <button id="btnDetails">Verification details</button>
       `,
       wire: r => {
         r.querySelector('#btnDownload').onclick = () => download('vault-' + (parsed.csv || 'decrypted') + '.pdf', plaintext, 'application/pdf');
+        r.querySelector('#btnPrint').onclick = () => printPdf(plaintext);
         r.querySelector('#btnDetails').onclick = async () => {
           const body = document.createElement('div');
           body.innerHTML = verifyResultsHtml(results);
