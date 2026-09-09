@@ -54,17 +54,29 @@
   }
   h1 { font-size: 16px; margin: 0 0 2px; letter-spacing: -0.01em; }
   .sub { color: var(--muted); font-size: 12px; }
-  .section {
+  .section, .section-details {
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 12px;
     background: var(--panel);
   }
-  .section h2 {
+  .section h2, .section-details h2 {
     font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
-    color: var(--muted); margin: 0 0 10px; font-weight: 600;
+    color: var(--muted); margin: 0; font-weight: 600;
+    display: inline-block;
   }
-  .id-status { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+  .section-details > summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    margin: 0 0 10px;
+  }
+  .section-details > summary::-webkit-details-marker { display: none; }
+  .section-details > summary::before {
+    content: "▸"; font-size: 10px; color: var(--muted); width: 10px;
+  }
+  .section-details[open] > summary::before { content: "▾"; }
+  .section-details:not([open]) > summary { margin: 0; }
+  .id-status { display: flex; align-items: center; gap: 8px; font-size: 13px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
   .dot.ok { background: var(--good); }
   .id-name { font-weight: 600; }
@@ -331,8 +343,10 @@
   .empty {
     text-align: center; color: var(--muted); padding: 60px 20px;
   }
-  .empty h3 { font-weight: 500; font-size: 18px; margin: 12px 0; color: var(--text); }
-  .empty .drop { border: 2px dashed var(--border); border-radius: 12px; padding: 40px; margin: 20px auto; max-width: 400px; }
+  .empty h3 { font-weight: 500; font-size: 22px; margin: 8px 0 0; color: var(--text); letter-spacing: -0.01em; }
+  .empty .drop { border: 2px dashed var(--border); border-radius: 12px; padding: 22px; margin: 20px auto; max-width: 460px; color: var(--muted); font-size: 13px; }
+  .empty-actions { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 320px; margin: 0 auto; }
+  .empty-actions button.big { width: 100%; margin: 0; padding: 12px 18px; font-size: 14px; font-weight: 500; }
   .backdrop {
     position: fixed; inset: 0; background: rgba(0,0,0,.5);
     display: flex; align-items: center; justify-content: center; z-index: 500;
@@ -528,66 +542,87 @@
       <button class="theme-toggle" id="themeToggle" title="Toggle theme">◐</button>
     </div>
 
+    <!-- Identity: dropdown + status always visible; everything else collapses -->
     <div class="section" id="idSection">
-      <h2>Identity</h2>
-      <select id="idSelector" style="width:100%; margin-bottom:8px; padding:6px 8px; border-radius:6px; background: var(--bg); color: var(--text); border:1px solid var(--border); font: inherit;">
+      <select id="idSelector" style="width:100%; padding:6px 8px; border-radius:6px; background: var(--bg); color: var(--text); border:1px solid var(--border); font: inherit;">
         <option value="">— No identity —</option>
       </select>
-      <div class="id-status">
+      <div class="id-status" style="margin-top:8px">
         <span class="dot" id="idDot"></span>
         <span id="idText">No identity</span>
+        <span id="idHeaderNote" style="color:var(--muted); font-size:12px; margin-left:auto"></span>
       </div>
-      <div class="id-name" id="idName"></div>
-      <div class="id-email" id="idEmail"></div>
-      <div id="idFingerprint" style="font-size:10px; color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; margin-top:4px; word-break: break-all;"></div>
 
-      <details class="collapse" id="sigImgSubsection" style="margin-top:12px; display:none">
-        <summary>Signature image <span id="sigImgHeaderNote" style="opacity:.6"></span></summary>
+      <details class="collapse" id="idSettings" style="margin-top:10px">
+        <summary>Identity settings <span id="idSettingsNote" style="opacity:.6"></span></summary>
         <div style="margin-top:8px">
-          <div id="sigImgArea">
-            <div class="empty-sig" id="sigEmpty">No image for this identity</div>
-            <div class="sig-img-preview" id="sigPreview" style="display:none">
-              <img id="sigImg" alt="signature">
+          <div class="id-name" id="idName"></div>
+          <div class="id-email" id="idEmail"></div>
+          <div id="idFingerprint" style="font-size:10px; color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; margin-top:4px; word-break: break-all;"></div>
+
+          <div class="row" id="idButtons" style="margin-top:10px">
+            <button id="btnCreateId">New identity…</button>
+            <button id="btnImportId">Import…</button>
+          </div>
+          <div class="row" id="idButtons2" style="display:none">
+            <button id="btnExportId" title="Export .pdfsigner bundle (identity + signature image + optional GitHub config)">Export</button>
+            <button id="btnRenameId" title="Rename this identity">Rename</button>
+            <button id="btnChangeId" class="danger">Remove</button>
+          </div>
+
+          <details class="collapse" id="sigImgSubsection" style="margin-top:10px; display:none">
+            <summary>Signature image <span id="sigImgHeaderNote" style="opacity:.6"></span></summary>
+            <div style="margin-top:8px">
+              <div id="sigImgArea">
+                <div class="empty-sig" id="sigEmpty">No image for this identity</div>
+                <div class="sig-img-preview" id="sigPreview" style="display:none">
+                  <img id="sigImg" alt="signature">
+                </div>
+              </div>
+              <div class="row">
+                <button id="btnImportSig">Import from photo…</button>
+                <button id="btnClearSig" class="danger" style="display:none">Remove</button>
+              </div>
+              <button id="btnCopySig" style="display:none">Copy from another identity…</button>
+              <div class="hint">Photograph or scan on white paper — the background is removed automatically.</div>
             </div>
-          </div>
-          <div class="row">
-            <button id="btnImportSig">Import from photo…</button>
-            <button id="btnClearSig" class="danger" style="display:none">Remove</button>
-          </div>
-          <button id="btnCopySig" style="display:none">Copy from another identity…</button>
-          <div class="hint">Photograph or scan on white paper — the background is removed automatically.</div>
+          </details>
+
+          <details class="collapse" id="ghIdSubsection" style="margin-top:10px; display:none">
+            <summary>GitHub vault <span id="ghHeaderNote" style="opacity:.6"></span></summary>
+            <div style="margin-top:8px">
+              <div id="ghConfigSummary" style="font-size:12px; color:var(--muted); margin-bottom:6px;">Not configured yet.</div>
+              <button id="btnGhConfigure">Configure GitHub vault…</button>
+              <div class="hint">Optional. Signed PDFs are AES-encrypted and pushed to your GitHub repo; the QR embeds the raw URL so anyone with the QR can auto-fetch, decrypt and verify. Travels with the identity's export bundle.</div>
+            </div>
+          </details>
+
+          <details class="collapse" id="stampSection" style="margin-top:10px; display:none">
+            <summary>Integrity stamp defaults <span id="stampHeaderNote" style="opacity:.6"></span></summary>
+            <div style="margin-top:8px">
+              <label class="lock-row"><input type="checkbox" id="stampEnable"> Stamp every page with QR + verification code</label>
+              <div class="hint">On sign, a random AES-256 key encrypts the signed PDF into a <b>.vault</b> file. The QR carries the key and (if uploaded) the vault URL — anyone who scans the QR can fetch, decrypt and verify.</div>
+              <div id="stampOptions" style="display:none; margin-top:6px">
+                <label>Signer role <span style="color:var(--muted)">(optional)</span></label>
+                <input type="text" id="stampRole" placeholder="e.g. Notary, HR Manager, Reviewer">
+                <label>Vault hosting</label>
+                <div class="radio-group">
+                  <label><input type="radio" name="vaultHost" value="github" checked> Auto-upload to your GitHub repo</label>
+                  <label><input type="radio" name="vaultHost" value="local"> Local .vault file only</label>
+                </div>
+                <div id="ghVaultBlock" style="border:1px dashed var(--border); border-radius:6px; padding:8px; margin-top:6px; font-size:12px; color:var(--muted);">
+                  <span id="ghConfigSummary2">GitHub vault: not configured yet.</span>
+                </div>
+                <label class="lock-row"><input type="checkbox" id="vaultKeepLocal" checked> Also download a local .vault copy</label>
+              </div>
+            </div>
+          </details>
         </div>
       </details>
-
-      <details class="collapse" id="ghIdSubsection" style="margin-top:12px; display:none">
-        <summary>GitHub vault (for this identity) <span id="ghHeaderNote" style="opacity:.6"></span></summary>
-        <div style="margin-top:8px">
-          <div id="ghConfigSummary" style="font-size:12px; color:var(--muted); margin-bottom:6px;">Not configured yet.</div>
-          <button id="btnGhConfigure">Configure GitHub vault…</button>
-          <div class="hint">Optional. Signed PDFs are AES-encrypted and pushed to your GitHub repo; the QR embeds the raw URL so anyone with the QR can auto-fetch, decrypt and verify. Travels with the identity's export bundle.</div>
-        </div>
-      </details>
-
-      <div class="row" id="idButtons" style="margin-top:12px">
-        <button id="btnCreateId">New identity…</button>
-        <button id="btnImportId">Import…</button>
-      </div>
-      <div class="row" id="idButtons2" style="display:none">
-        <button id="btnExportId" title="Export .pdfsigner bundle (identity + signature image + optional GitHub config)">Export</button>
-        <button id="btnRenameId" title="Rename this identity">Rename</button>
-        <button id="btnChangeId" class="danger">Remove</button>
-      </div>
     </div>
 
-    <div class="section">
-      <h2>Document</h2>
-      <button id="btnOpenPdf">Open PDF…</button>
-      <button id="btnVerify">Verify signed PDF…</button>
-      <button id="btnVerifyVault">Verify from vault QR…</button>
-    </div>
-
-    <div class="section" id="signSection" style="opacity:.5; pointer-events:none">
-      <h2>Placements</h2>
+    <details class="section-details" id="signSection" style="opacity:.5; pointer-events:none" open>
+      <summary><h2>Placements</h2></summary>
       <div class="placement-tools" id="placementTools">
         <button id="btnPlaceSig" class="active">✍ Signature</button>
         <button id="btnPlaceText">T Text</button>
@@ -602,61 +637,39 @@
 
       <div class="placement-list" id="placementList"></div>
 
-      <label>Appearance</label>
-      <div class="radio-group">
-        <label><input type="radio" name="appearance" value="text" checked> Text (name · date · reason · location)</label>
-        <label><input type="radio" name="appearance" value="image"> Image only (your signature PNG)</label>
-        <label><input type="radio" name="appearance" value="both"> Image + text</label>
-      </div>
-
-      <label>Name font</label>
-      <select id="nameFont" style="width:100%; padding:6px 8px; border-radius:6px; background: var(--bg); color: var(--text); border:1px solid var(--border); font: inherit;">
-        <option value="serif-italic">Serif italic (Times-Italic) — default</option>
-        <option value="sans">Sans-serif (Helvetica)</option>
-        <option value="sans-bold">Sans-serif bold (Helvetica-Bold)</option>
-        <option value="serif">Serif (Times-Roman)</option>
-        <option value="serif-bold">Serif bold (Times-Bold)</option>
-        <option value="mono">Monospace (Courier)</option>
-      </select>
-
-      <label>Reason</label>
-      <input type="text" id="reason" value="I approve this document">
-      <label>Location <span style="color:var(--muted)">(optional)</span></label>
-      <input type="text" id="location" placeholder="City, Country">
-      <label>Sign as of <span style="color:var(--muted)">(blank = now — set to backdate the signature)</span></label>
-      <input type="datetime-local" id="signDate" step="1">
-
-      <label>After signing</label>
-      <div class="radio-group">
-        <label><input type="radio" name="lockmode" value="locked" checked> Lock document (no further changes)</label>
-        <label><input type="radio" name="lockmode" value="void"> Allow changes (any edit voids the signature)</label>
-      </div>
-
-      <button id="btnSign" class="primary" disabled>Sign &amp; Download</button>
-    </div>
-
-    <div class="section" id="stampSection" style="opacity:.5; pointer-events:none">
-      <h2>Integrity stamp + vault</h2>
-      <label class="lock-row"><input type="checkbox" id="stampEnable"> Stamp every page with QR + verification code</label>
-      <div class="hint">Every signing generates a random AES-256 key. The signed PDF is encrypted into a <b>.vault</b> file; the QR carries the key and (if uploaded) the vault URL. Anyone who scans the QR can fetch the vault, decrypt back to the exact signed PDF and verify it — no server logic of yours involved.</div>
-      <details class="collapse" id="stampOptions" style="display:none">
-        <summary>Stamp options</summary>
+      <details class="collapse" style="margin-top:10px" open>
+        <summary>Signature appearance</summary>
         <div style="margin-top:8px">
-          <label>Signer role <span style="color:var(--muted)">(optional — shown on side strip)</span></label>
-          <input type="text" id="stampRole" placeholder="e.g. Notary, HR Manager, Reviewer">
-          <div class="hint">One stamp box is added on every page when this is turned on. Drag to move, rotate to put it on the side, or add more with the ▤ Stamp tool. Remove all boxes to skip stamping on that page.</div>
-          <label>Vault hosting</label>
           <div class="radio-group">
-            <label><input type="radio" name="vaultHost" value="github" checked> Auto-upload to a GitHub repo you own (durable, free, in your control)</label>
-            <label><input type="radio" name="vaultHost" value="local"> Local .vault file only (I'll host it myself)</label>
+            <label><input type="radio" name="appearance" value="text" checked> Text (name · date · reason · location)</label>
+            <label><input type="radio" name="appearance" value="image"> Image only (your signature PNG)</label>
+            <label><input type="radio" name="appearance" value="both"> Image + text</label>
           </div>
-          <div id="ghVaultBlock" style="border:1px dashed var(--border); border-radius:6px; padding:8px; margin-top:6px; font-size:12px; color:var(--muted);">
-            <span id="ghConfigSummary2">GitHub vault: not configured yet — set it up in the Settings section below.</span>
+          <label>Name font</label>
+          <select id="nameFont" style="width:100%; padding:6px 8px; border-radius:6px; background: var(--bg); color: var(--text); border:1px solid var(--border); font: inherit;">
+            <option value="serif-italic">Serif italic (Times-Italic) — default</option>
+            <option value="sans">Sans-serif (Helvetica)</option>
+            <option value="sans-bold">Sans-serif bold (Helvetica-Bold)</option>
+            <option value="serif">Serif (Times-Roman)</option>
+            <option value="serif-bold">Serif bold (Times-Bold)</option>
+            <option value="mono">Monospace (Courier)</option>
+          </select>
+          <label>Reason</label>
+          <input type="text" id="reason" value="I approve this document">
+          <label>Location <span style="color:var(--muted)">(optional)</span></label>
+          <input type="text" id="location" placeholder="City, Country">
+          <label>Sign as of <span style="color:var(--muted)">(blank = now — set to backdate)</span></label>
+          <input type="datetime-local" id="signDate" step="1">
+          <label>After signing</label>
+          <div class="radio-group">
+            <label><input type="radio" name="lockmode" value="locked" checked> Lock document (no further changes)</label>
+            <label><input type="radio" name="lockmode" value="void"> Allow changes (any edit voids the signature)</label>
           </div>
-          <label class="lock-row"><input type="checkbox" id="vaultKeepLocal" checked> Always download a local .vault copy as backup</label>
         </div>
       </details>
-    </div>
+
+      <button id="btnSign" class="primary" disabled>Sign &amp; Download</button>
+    </details>
   </aside>
 
   <main>
@@ -666,16 +679,22 @@
       <button id="btnZoomIn">＋</button>
       <button id="btnFitWidth">Fit width</button>
       <div class="doc-name" id="docName"></div>
+      <button id="btnCloseDoc" title="Close this document and go back to the start screen">Close</button>
     </div>
     <div id="verifyBanner" style="display:none"></div>
     <div class="scroll-area" id="scrollArea">
       <div class="empty" id="emptyState">
-        <div style="font-size:36px">📄</div>
-        <h3>Open a PDF to get started</h3>
-        <div class="drop" id="dropZone">
-          Drop a PDF here or click <b id="dropClick" style="cursor:pointer; color:var(--accent)">Open PDF…</b>
+        <div style="font-size:40px; margin-bottom: 4px;">📄</div>
+        <h3>Open, sign or verify a PDF</h3>
+        <p style="margin: 6px 0 20px; color: var(--muted);">Everything runs in your browser. Nothing is uploaded.</p>
+        <div class="empty-actions">
+          <button id="btnOpenPdf" class="primary big">Open PDF…</button>
+          <button id="btnVerify" class="big">Verify signed PDF…</button>
+          <button id="btnVerifyVault" class="big">Verify from vault QR…</button>
         </div>
-        <p>Everything runs in your browser. Nothing is uploaded.</p>
+        <div class="drop" id="dropZone" style="margin-top: 22px;">
+          …or drop a PDF anywhere on this area
+        </div>
       </div>
       <div class="page-list" id="pageList"></div>
     </div>
@@ -1113,6 +1132,8 @@ function renderIdentity() {
   // Fingerprint is only available after unlock — show it opportunistically if we've unlocked before.
   if (has && identity.unlocked?.cert) $('idFingerprint').textContent = 'SHA-1: ' + certFingerprint(identity.unlocked.cert);
   $('idButtons2').style.display = has ? 'flex' : 'none';
+  const settingsNote = $('idSettingsNote');
+  if (settingsNote) settingsNote.textContent = has ? '· ' + identity.label : '';
   // Populate selector
   const sel = $('idSelector');
   sel.innerHTML = '';
@@ -1546,7 +1567,20 @@ $('btnCopySig').onclick = async () => {
 let intersectionObs = null;
 
 $('btnOpenPdf').onclick = () => pickFile('application/pdf,.pdf').then(f => f && openPdf(f));
-$('dropClick').onclick   = () => pickFile('application/pdf,.pdf').then(f => f && openPdf(f));
+$('btnCloseDoc').onclick = () => closeDoc();
+
+function closeDoc() {
+  doc.file = null; doc.bytes = null; doc.pdfjs = null; doc.numPages = 0;
+  doc.placements = []; doc.pageMeta = []; doc.formFields = {}; doc.selectedPlacementId = null;
+  $('pageList').innerHTML = '';
+  $('placementList').innerHTML = '';
+  $('toolbar').style.display = 'none';
+  $('emptyState').style.display = '';
+  $('verifyBanner').style.display = 'none';
+  $('signSection').style.opacity = .5;
+  $('signSection').style.pointerEvents = 'none';
+  updateSignButton();
+}
 $('scrollArea').addEventListener('dragover', e => { e.preventDefault(); });
 $('scrollArea').addEventListener('drop', async e => {
   e.preventDefault();
@@ -1569,8 +1603,6 @@ async function openPdf(file) {
   $('docName').textContent = file.name;
   $('signSection').style.opacity = 1;
   $('signSection').style.pointerEvents = 'auto';
-  $('stampSection').style.opacity = 1;
-  $('stampSection').style.pointerEvents = 'auto';
   let verifyResults = [];
   try { verifyResults = verifyPdfSignatures(doc.bytes); }
   catch (e) { console.warn('verify error', e); verifyResults = [{ error: e.message, byteRange: [0,0,0,0] }]; }
@@ -2087,8 +2119,10 @@ $('stampEnable').addEventListener('change', () => {
   const on = $('stampEnable').checked;
   const stampOpts = $('stampOptions');
   stampOpts.style.display = on ? '' : 'none';
-  if (on) { stampOpts.open = true; autoSeedStampsIfNone(); }
+  if (on) { if ('open' in stampOpts) stampOpts.open = true; autoSeedStampsIfNone(); }
   else removeAllStamps();
+  const note = $('stampHeaderNote');
+  if (note) note.textContent = on ? '· enabled' : '· off';
   updateSignButton();
 });
 
@@ -2622,8 +2656,13 @@ function updateGhSummary() {
     : (hasId ? 'GitHub vault: not configured for the active identity — set it up in the Identity section above.'
              : 'GitHub vault: pick or create an identity first.');
   const sub = $('ghIdSubsection'); if (sub) sub.style.display = hasId ? '' : 'none';
+  const stampSub = $('stampSection'); if (stampSub) stampSub.style.display = hasId ? '' : 'none';
   const note = $('ghHeaderNote');
   if (note) note.textContent = c ? '· ' + c.owner + '/' + c.repo : '· not configured';
+  const stampNote = $('stampHeaderNote');
+  if (stampNote) stampNote.textContent = $('stampEnable') && $('stampEnable').checked ? '· enabled' : '· off';
+  const idNote = $('idHeaderNote');
+  if (idNote) idNote.textContent = hasId ? '' : 'pick or create ⇩';
 }
 
 // Called after switching identity — sync mirror from the identity's own config.
