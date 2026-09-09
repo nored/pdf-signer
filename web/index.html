@@ -2959,8 +2959,13 @@ function drawIntegrityStamp(page, pageIndex, totalPages, fonts, opts) {
       thickness: 0.4, color: rgb(0.55, 0.55, 0.55),
     });
     const textLeft  = qrX + qrSize + 8;
-    const rightBoxW = Math.min(96, stripW * 0.22);
-    const textRight = stripX + stripW - rightBoxW - 6;
+    // Size the right column from the actual text width so long dates
+    // (YYYY-MM-DD HH:MM:SS UTC) never get cropped by the QR expansion.
+    const rSizeProbe = Math.max(6, Math.min(9, stripH * 0.19));
+    const dateWidth  = fonts.helv.widthOfTextAtSize(dateStr, rSizeProbe);
+    const pageWidth  = fonts.helvBold.widthOfTextAtSize('Page ' + totalPages + ' of ' + totalPages, rSizeProbe);
+    const rightBoxW  = Math.min(stripW * 0.35, Math.max(dateWidth, pageWidth) + 10);
+    const textRight  = stripX + stripW - rightBoxW - 6;
     page.drawLine({ start: { x: textLeft - 4, y: stripY + 2 }, end: { x: textLeft - 4, y: stripY + stripH }, thickness: 0.4, color: rgb(0.55, 0.55, 0.55) });
     page.drawLine({ start: { x: textRight,    y: stripY + 2 }, end: { x: textRight,    y: stripY + stripH }, thickness: 0.4, color: rgb(0.55, 0.55, 0.55) });
 
