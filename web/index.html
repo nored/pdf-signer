@@ -111,7 +111,33 @@
   }
   input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
   textarea { min-height: 46px; resize: vertical; }
-  main { display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+  main { display: flex; flex-direction: column; background: var(--bg); overflow: hidden; position: relative; }
+  .floating-tools {
+    position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
+    z-index: 20;
+    display: flex; align-items: center; gap: 4px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.12), 0 1px 3px rgba(0,0,0,.06);
+    font-size: 13px;
+  }
+  .floating-tools button {
+    width: auto; margin: 0; padding: 6px 12px;
+    border-radius: 999px; border: 1px solid transparent; background: transparent;
+    color: var(--text); font-size: 13px; cursor: pointer;
+    transition: background .1s, border-color .1s;
+  }
+  .floating-tools button:hover { background: var(--panel-2); }
+  .floating-tools button.active { background: var(--accent); color: white; }
+  .floating-tools .sep {
+    width: 1px; height: 20px; background: var(--border);
+    margin: 0 4px;
+  }
+  .floating-tools .rotate-group { display: none; align-items: center; gap: 4px; }
+  .floating-tools.has-stamp-selected .rotate-group { display: flex; }
+  .floating-tools .stamp-info { color: var(--muted); font-size: 12px; padding: 0 4px; }
   .toolbar {
     display: flex; align-items: center; gap: 10px;
     padding: 8px 14px;
@@ -626,18 +652,7 @@
 
     <details class="section-details" id="signSection" style="opacity:.5; pointer-events:none" open>
       <summary><h2>Placements</h2></summary>
-      <div class="placement-tools" id="placementTools">
-        <button id="btnPlaceSig" class="active">✍ Signature</button>
-        <button id="btnPlaceText">T Text</button>
-        <button id="btnPlaceStamp">▤ Stamp</button>
-      </div>
-      <div class="hint" id="toolHint">Pick a tool, click a page to drop it. Drag to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo. Multiple signature boxes share one crypto signature; multiple stamp boxes all draw the same QR/CSV.</div>
-      <div id="stampRotateRow" style="display:none; margin-top:6px; font-size:12px;">
-        <span style="color:var(--muted)">Selected stamp:</span>
-        <button id="btnRotateStamp" class="small" style="width:auto; margin:0 0 0 6px; padding:3px 8px;">Rotate 90°</button>
-        <span id="stampOrientationLabel" style="color:var(--muted); margin-left:6px;"></span>
-      </div>
-
+      <div class="hint" id="toolHint">Pick a tool from the floating bar above the page, click to drop it. Drag to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo.</div>
       <div class="placement-list" id="placementList"></div>
 
       <details class="collapse" style="margin-top:10px" open>
@@ -683,6 +698,16 @@
       <button id="btnFitWidth">Fit width</button>
       <div class="doc-name" id="docName"></div>
       <button id="btnCloseDoc" title="Close this document and go back to the start screen">Close</button>
+    </div>
+    <div class="floating-tools" id="floatingTools" style="display:none">
+      <button id="btnPlaceSig" class="active" title="Place a signature">✍ Signature</button>
+      <button id="btnPlaceText" title="Place a text field">T Text</button>
+      <button id="btnPlaceStamp" title="Place a verification stamp">▤ Stamp</button>
+      <span class="sep"></span>
+      <div class="rotate-group">
+        <span class="stamp-info" id="stampOrientationLabel"></span>
+        <button id="btnRotateStamp" title="Rotate the selected stamp 90°">↻ Rotate</button>
+      </div>
     </div>
     <div id="verifyBanner" style="display:none"></div>
     <div class="scroll-area" id="scrollArea">
@@ -1589,6 +1614,7 @@ function closeDoc() {
   $('pageList').innerHTML = '';
   $('placementList').innerHTML = '';
   $('toolbar').style.display = 'none';
+  $('floatingTools').style.display = 'none';
   $('emptyState').style.display = '';
   $('verifyBanner').style.display = 'none';
   $('signSection').style.opacity = .5;
@@ -1614,6 +1640,7 @@ async function openPdf(file) {
   $('placementList').innerHTML = '';
   $('emptyState').style.display = 'none';
   $('toolbar').style.display = 'flex';
+  $('floatingTools').style.display = 'flex';
   $('docName').textContent = file.name;
   $('signSection').style.opacity = 1;
   $('signSection').style.pointerEvents = 'auto';
@@ -2308,9 +2335,10 @@ function selectPlacement(id) {
 function updateStampRotateRow() {
   const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
   const isStamp = !!(p && p.type === 'stamp');
-  $('stampRotateRow').style.display = isStamp ? '' : 'none';
+  const ft = $('floatingTools');
+  if (ft) ft.classList.toggle('has-stamp-selected', isStamp);
   if (isStamp) {
-    $('stampOrientationLabel').textContent = 'currently ' + (p.orientation === 'vertical' ? 'vertical (side)' : 'horizontal (bottom)');
+    $('stampOrientationLabel').textContent = p.orientation === 'vertical' ? 'vertical' : 'horizontal';
   }
 }
 
