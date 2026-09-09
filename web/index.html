@@ -2354,9 +2354,12 @@ $('btnRotateStamp').onclick = () => {
   const newW = p.hPdf, newH = p.wPdf;
   p.wPdf = newW;
   p.hPdf = newH;
-  // If the swap sends the box past the right edge or top of the page,
-  // slide it back onto the page.
+  // Cap the new dimensions to the page so a rotated full-width horizontal
+  // stamp does not become taller than the page (common on landscape PDFs).
   const [_,__,pageW, pageH] = doc.pageMeta[p.pageIndex].viewport.viewBox;
+  const margin = 8;
+  if (p.wPdf > pageW - margin) p.wPdf = pageW - margin;
+  if (p.hPdf > pageH - margin) p.hPdf = pageH - margin;
   if (p.xPdf + p.wPdf > pageW) p.xPdf = Math.max(0, pageW - p.wPdf);
   if (p.yPdf + p.hPdf > pageH) p.yPdf = Math.max(0, pageH - p.hPdf);
   positionPlacementFromPdf(p);
