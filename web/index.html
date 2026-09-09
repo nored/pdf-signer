@@ -469,6 +469,28 @@
     margin-top: 22px; font-size: 12px; color: var(--muted); text-align: center;
   }
   .verifier-footer a { color: var(--accent); text-decoration: none; }
+  .verifier-preview {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .verifier-preview h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); margin: 0 0 10px; font-weight: 600;
+  }
+  .verifier-preview .pages {
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    max-height: 70vh; overflow: auto;
+    background: var(--panel-2); padding: 12px; border-radius: 8px;
+  }
+  .verifier-preview canvas {
+    display: block; max-width: 100%; height: auto;
+    box-shadow: 0 1px 4px rgba(0,0,0,.15), 0 1px 1px rgba(0,0,0,.08);
+    background: white;
+  }
+  .verifier-preview .page-label {
+    font-size: 11px; color: var(--muted);
+  }
 </style>
 </head>
 <body>
@@ -3434,6 +3456,38 @@ function autoDetectVerifierUrl() {
   return CANONICAL_VERIFIER_URL;
 }
 
+async function renderVerifierPreview(root, plaintextU8) {
+  const card = root.querySelector('.verifier-card');
+  if (!card) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'verifier-preview';
+  wrap.innerHTML = '<h3>Decrypted document</h3><div class="pages"><div style="color:var(--muted); padding:20px;">Rendering…</div></div>';
+  card.appendChild(wrap);
+  const pagesEl = wrap.querySelector('.pages');
+  try {
+    const pdf = await pdfjsLib.getDocument({ data: plaintextU8.slice() }).promise;
+    pagesEl.innerHTML = '';
+    const targetWidth = Math.min(card.clientWidth - 24, 640);
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const vp1 = page.getViewport({ scale: 1 });
+      const scale = targetWidth / vp1.width;
+      const vp = page.getViewport({ scale });
+      const label = document.createElement('div');
+      label.className = 'page-label';
+      label.textContent = 'Page ' + i + ' of ' + pdf.numPages;
+      pagesEl.appendChild(label);
+      const canvas = document.createElement('canvas');
+      canvas.width = vp.width;
+      canvas.height = vp.height;
+      pagesEl.appendChild(canvas);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    }
+  } catch (e) {
+    pagesEl.innerHTML = '<div style="color:var(--danger); padding:20px;">Could not render the decrypted PDF: ' + (e && e.message || e) + '</div>';
+  }
+}
+
 async function runAutoVerifyFromHash() {
   const m = (location.hash || '').match(/^#v=([A-Za-z0-9_\-]+)$/);
   if (!m) return false;
@@ -3557,6 +3611,7 @@ async function runAutoVerifyFromHash() {
           body.innerHTML = verifyResultsHtml(results);
           await modal({ title: 'Signature verification — raw', body, confirmText: 'Close', cancelText: '' });
         };
+        renderVerifierPreview(r, plaintext);
       },
     });
   } catch (e) {
