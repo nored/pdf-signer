@@ -593,6 +593,8 @@
       <input type="text" id="reason" value="I approve this document">
       <label>Location <span style="color:var(--muted)">(optional)</span></label>
       <input type="text" id="location" placeholder="City, Country">
+      <label>Sign as of <span style="color:var(--muted)">(blank = now — set to backdate the signature)</span></label>
+      <input type="datetime-local" id="signDate" step="1">
 
       <label>After signing</label>
       <div class="radio-group">
@@ -2941,7 +2943,7 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   }
 }
 
-async function makeSignedPdf({bytes, placements, lock, meta, reason, location, appearance, cert, key, sigPngU8, stamp, formFields}) {
+async function makeSignedPdf({bytes, placements, lock, meta, reason, location, appearance, cert, key, sigPngU8, stamp, formFields, signingTime}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
@@ -2959,7 +2961,7 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
   };
   const sigImgObj = sigPngU8 ? await pdfDoc.embedPng(sigPngU8) : null;
 
-  const now = new Date();
+  const now = signingTime instanceof Date ? signingTime : new Date();
   const dateStr = now.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
   const context = pdfDoc.context;
 
@@ -3217,6 +3219,17 @@ $('btnSign').onclick = async () => {
     const lock = document.querySelector('input[name="lockmode"]:checked').value === 'locked';
     const stampEnabled = $('stampEnable').checked;
 
+    // Custom signing time (backdate). Blank = now.
+    const rawDate = ($('signDate').value || '').trim();
+    let signingTime;
+    if (rawDate) {
+      const t = new Date(rawDate);
+      if (isNaN(t.getTime())) { toast('Sign-as-of date is not a valid datetime', 'err'); return; }
+      signingTime = t;
+    } else {
+      signingTime = new Date();
+    }
+
     // Vault key + QR payload must exist BEFORE drawing the stamp, because the
     // QR is drawn into the PDF that later gets encrypted with this same key.
     let vault = null;
@@ -3229,7 +3242,7 @@ $('btnSign').onclick = async () => {
       const key = new Uint8Array(32);
       crypto.getRandomValues(key);
       const csv = deriveCsv(key);
-      const now = new Date();
+      const now = signingTime;
       const dateStr = now.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
       const filename = csv + '.vault';
       const url = host === 'github' ? ghRawUrl(ghVault.config, filename) : '';
@@ -3254,6 +3267,7 @@ $('btnSign').onclick = async () => {
       cert: unlocked.cert,
       key: unlocked.key,
       sigPngU8: sigImage.pngU8,
+      signingTime,
       stamp: stampEnabled ? {
         enabled: true,
         role: ($('stampRole').value || '').trim(),
