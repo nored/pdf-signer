@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/forge/1.3.1/forge.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <style>
   :root {
     --bg: #f6f6f7;
@@ -167,6 +168,39 @@
     -webkit-box-orient: vertical;
     word-break: break-word;
   }
+  .placement .preview .name.font-sans        { font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; font-style: normal; }
+  .placement .preview .name.font-sans-bold   { font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; font-style: normal; font-weight: 700; }
+  .placement .preview .name.font-serif       { font-family: "Times New Roman", Times, serif; font-style: normal; }
+  .placement .preview .name.font-serif-bold  { font-family: "Times New Roman", Times, serif; font-style: normal; font-weight: 700; }
+  .placement .preview .name.font-mono        { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-style: normal; }
+  .placement .preview .name.font-serif-italic { font-family: Georgia, "Times New Roman", serif; font-style: italic; }
+  .placement.type-text {
+    border-color: #b57920;
+    background: rgba(217,154,43,.06);
+  }
+  .placement.type-text.selected { background: rgba(217,154,43,.14); border-color: #b57920; }
+  .placement.type-text .close { background: #b57920; }
+  .placement.type-text .text-input {
+    position: absolute; inset: 2px;
+    background: transparent;
+    border: 0;
+    outline: none;
+    resize: none;
+    padding: 2px 4px;
+    color: #17181a;
+    font: inherit;
+    line-height: 1.2;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .placement.type-text .text-input:empty::before {
+    content: attr(data-placeholder);
+    color: #b57920;
+    opacity: .55;
+    pointer-events: none;
+  }
+  .placement-item .swatch.text { background: #d99a2b; }
   .placement .preview .meta {
     font-size: 11cqh;
     line-height: 1.25;
@@ -360,6 +394,81 @@
   details > summary { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }
   .lock-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 13px; }
   .lock-row input { width: auto; }
+
+  /* Clean, focused verifier landing (shown when the URL carries #v=…) */
+  .verifier-root {
+    position: fixed; inset: 0; z-index: 300;
+    background: var(--bg); color: var(--text);
+    overflow: auto;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 32px 20px 60px;
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .verifier-brand {
+    font-size: 13px; color: var(--muted); letter-spacing: .1em; text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .verifier-title {
+    font-size: 22px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em;
+  }
+  .verifier-sub {
+    color: var(--muted); font-size: 13px; margin-bottom: 24px;
+  }
+  .verifier-card {
+    width: 100%; max-width: 640px;
+    background: var(--panel);
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px;
+    box-shadow: var(--shadow);
+  }
+  .verifier-status {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 20px;
+    border-radius: 10px;
+    margin-bottom: 18px;
+    font-weight: 600;
+  }
+  .verifier-status .glyph {
+    width: 46px; height: 46px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-size: 26px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .verifier-status .text {
+    display: flex; flex-direction: column;
+  }
+  .verifier-status .label { font-size: 20px; letter-spacing: -0.01em; }
+  .verifier-status .detail { font-size: 13px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+  .verifier-status.pending  { background: var(--panel-2); }
+  .verifier-status.pending  .glyph { background: var(--muted); }
+  .verifier-status.valid    { background: rgba(31,122,58,.10); }
+  .verifier-status.valid    .glyph { background: var(--good); }
+  .verifier-status.valid    .label { color: var(--good); }
+  .verifier-status.modified { background: rgba(217,154,43,.12); }
+  .verifier-status.modified .glyph { background: #d99a2b; }
+  .verifier-status.modified .label { color: #b57920; }
+  .verifier-status.broken   { background: rgba(193,54,31,.10); }
+  .verifier-status.broken   .glyph { background: var(--danger); }
+  .verifier-status.broken   .label { color: var(--danger); }
+  .verifier-fields {
+    display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px;
+    font-size: 13px;
+    padding: 12px 4px;
+    border-top: 1px solid var(--border);
+  }
+  .verifier-fields dt { color: var(--muted); }
+  .verifier-fields dd { margin: 0; word-break: break-all; }
+  .verifier-fields code { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 12px; }
+  .verifier-cta {
+    display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap;
+  }
+  .verifier-cta button {
+    width: auto; margin: 0; padding: 9px 16px; font-size: 14px;
+  }
+  .verifier-footer {
+    margin-top: 22px; font-size: 12px; color: var(--muted); text-align: center;
+  }
+  .verifier-footer a { color: var(--accent); text-decoration: none; }
 </style>
 </head>
 <body>
@@ -400,12 +509,19 @@
         <div class="hint">Photograph or scan on white paper — the background is removed automatically.</div>
       </div>
 
+      <div id="ghIdSubsection" style="margin-top:12px; display:none">
+        <div style="font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; margin-bottom:6px;">GitHub vault (for this identity)</div>
+        <div id="ghConfigSummary" style="font-size:12px; color:var(--muted); margin-bottom:6px;">Not configured yet.</div>
+        <button id="btnGhConfigure">Configure GitHub vault…</button>
+        <div class="hint">Optional. Signed PDFs are AES-encrypted and pushed to your GitHub repo; the QR embeds the raw URL so anyone with the QR can auto-fetch, decrypt and verify. Travels with the identity's export bundle.</div>
+      </div>
+
       <div class="row" id="idButtons" style="margin-top:12px">
         <button id="btnCreateId">New identity…</button>
         <button id="btnImportId">Import…</button>
       </div>
       <div class="row" id="idButtons2" style="display:none">
-        <button id="btnExportId" title="Export .pdfsigner bundle (identity + signature image)">Export</button>
+        <button id="btnExportId" title="Export .pdfsigner bundle (identity + signature image + optional GitHub config)">Export</button>
         <button id="btnRenameId" title="Rename this identity">Rename</button>
         <button id="btnChangeId" class="danger">Remove</button>
       </div>
@@ -415,14 +531,22 @@
       <h2>Document</h2>
       <button id="btnOpenPdf">Open PDF…</button>
       <button id="btnVerify">Verify signed PDF…</button>
+      <button id="btnVerifyVault">Verify from vault QR…</button>
     </div>
 
     <div class="section" id="signSection" style="opacity:.5; pointer-events:none">
-      <h2>Signature</h2>
+      <h2>Placements</h2>
       <div class="placement-tools" id="placementTools">
-        <button id="btnPlaceSig" class="active">✍ Place signature</button>
+        <button id="btnPlaceSig" class="active">✍ Signature</button>
+        <button id="btnPlaceText">T Text</button>
+        <button id="btnPlaceStamp">▤ Stamp</button>
       </div>
-      <div class="hint" id="toolHint">Click a page to place a signature. Drag to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo. Multiple placements share one crypto signature.</div>
+      <div class="hint" id="toolHint">Pick a tool, click a page to drop it. Drag to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo. Multiple signature boxes share one crypto signature; multiple stamp boxes all draw the same QR/CSV.</div>
+      <div id="stampRotateRow" style="display:none; margin-top:6px; font-size:12px;">
+        <span style="color:var(--muted)">Selected stamp:</span>
+        <button id="btnRotateStamp" class="small" style="width:auto; margin:0 0 0 6px; padding:3px 8px;">Rotate 90°</button>
+        <span id="stampOrientationLabel" style="color:var(--muted); margin-left:6px;"></span>
+      </div>
 
       <div class="placement-list" id="placementList"></div>
 
@@ -432,6 +556,16 @@
         <label><input type="radio" name="appearance" value="image"> Image only (your signature PNG)</label>
         <label><input type="radio" name="appearance" value="both"> Image + text</label>
       </div>
+
+      <label>Name font</label>
+      <select id="nameFont" style="width:100%; padding:6px 8px; border-radius:6px; background: var(--bg); color: var(--text); border:1px solid var(--border); font: inherit;">
+        <option value="serif-italic">Serif italic (Times-Italic) — default</option>
+        <option value="sans">Sans-serif (Helvetica)</option>
+        <option value="sans-bold">Sans-serif bold (Helvetica-Bold)</option>
+        <option value="serif">Serif (Times-Roman)</option>
+        <option value="serif-bold">Serif bold (Times-Bold)</option>
+        <option value="mono">Monospace (Courier)</option>
+      </select>
 
       <label>Reason</label>
       <input type="text" id="reason" value="I approve this document">
@@ -445,6 +579,26 @@
       </div>
 
       <button id="btnSign" class="primary" disabled>Sign &amp; Download</button>
+    </div>
+
+    <div class="section" id="stampSection" style="opacity:.5; pointer-events:none">
+      <h2>Integrity stamp + vault</h2>
+      <label class="lock-row"><input type="checkbox" id="stampEnable"> Stamp every page with QR + verification code</label>
+      <div class="hint">Every signing generates a random AES-256 key. The signed PDF is encrypted into a <b>.vault</b> file; the QR carries the key and (if uploaded) the vault URL. Anyone who scans the QR can fetch the vault, decrypt back to the exact signed PDF and verify it — no server logic of yours involved.</div>
+      <div id="stampOptions" style="display:none">
+        <label>Signer role <span style="color:var(--muted)">(optional — shown on side strip)</span></label>
+        <input type="text" id="stampRole" placeholder="e.g. Notary, HR Manager, Reviewer">
+        <div class="hint">One stamp box is added on every page when this is turned on. Drag to move, rotate to put it on the side, or add more with the ▤ Stamp tool. Remove all boxes to skip stamping on that page.</div>
+        <label>Vault hosting</label>
+        <div class="radio-group">
+          <label><input type="radio" name="vaultHost" value="github" checked> Auto-upload to a GitHub repo you own (durable, free, in your control)</label>
+          <label><input type="radio" name="vaultHost" value="local"> Local .vault file only (I'll host it myself)</label>
+        </div>
+        <div id="ghVaultBlock" style="border:1px dashed var(--border); border-radius:6px; padding:8px; margin-top:6px; font-size:12px; color:var(--muted);">
+          <span id="ghConfigSummary2">GitHub vault: not configured yet — set it up in the Settings section below.</span>
+        </div>
+        <label class="lock-row"><input type="checkbox" id="vaultKeepLocal" checked> Always download a local .vault copy as backup</label>
+      </div>
     </div>
   </aside>
 
@@ -723,6 +877,9 @@ function snapshotPlacements() {
     id: p.id, pageIndex: p.pageIndex,
     xPdf: p.xPdf, yPdf: p.yPdf, wPdf: p.wPdf, hPdf: p.hPdf, type: p.type,
     appearance: p.appearance || 'text',
+    nameFont: p.nameFont || 'serif-italic',
+    text: p.text || '',
+    orientation: p.orientation || 'horizontal',
   }));
 }
 function pushUndo() {
@@ -773,7 +930,12 @@ function certFingerprint(cert) {
 async function saveIdentitiesToDb() {
   const obj = {};
   for (const [id, r] of identities.entries()) {
-    obj[id] = { id, label: r.label, p12: r.p12U8, meta: r.meta, sigImagePng: r.sigImagePngU8 || null };
+    obj[id] = {
+      id, label: r.label, p12: r.p12U8, meta: r.meta,
+      sigImagePng: r.sigImagePngU8 || null,
+      ghVault: r.ghVault || null,
+      settings: r.settings || null,
+    };
   }
   await idbPut('identities', obj);
   await idbPut('active', identity.id || null);
@@ -788,6 +950,8 @@ async function loadIdentitiesFromDb() {
         p12U8: new Uint8Array(r.p12),
         meta: r.meta,
         sigImagePngU8: r.sigImagePng ? new Uint8Array(r.sigImagePng) : null,
+        ghVault: r.ghVault || null,
+        settings: r.settings || null,
       });
     }
   } else {
@@ -836,13 +1000,22 @@ function setActiveIdentity(id, save=true) {
   if (save) idbPut('active', id || null);
   renderIdentity();
   renderSigImage();
+  ghSyncFromActiveIdentity();
+  loadSettingsForActiveIdentity();
   refreshAllPreviews();
   updateSignButton();
 }
 
-async function upsertIdentity({label, p12U8, meta, sigImagePngU8, makeActive=true}) {
+async function upsertIdentity({label, p12U8, meta, sigImagePngU8, ghVault, settings, makeActive=true}) {
   const id = newId();
-  const rec = { id, label: label || meta.name || 'Identity', p12U8, meta, sigImagePngU8: sigImagePngU8 || null };
+  const rec = {
+    id,
+    label: label || meta.name || 'Identity',
+    p12U8, meta,
+    sigImagePngU8: sigImagePngU8 || null,
+    ghVault: ghVault || null,
+    settings: settings || null,
+  };
   identities.set(id, rec);
   await saveIdentitiesToDb();
   if (makeActive) setActiveIdentity(id);
@@ -1051,6 +1224,16 @@ $('btnImportId').onclick = async () => {
     if (b.label) bundledLabel = b.label;
   }
 
+  let bundledGh = null;
+  let bundledSettings = null;
+  if (looksJson) {
+    try {
+      const b = JSON.parse(new TextDecoder().decode(buf));
+      if (b.ghVault && typeof b.ghVault === 'object') bundledGh = b.ghVault;
+      if (b.settings && typeof b.settings === 'object') bundledSettings = b.settings;
+    } catch (_) {}
+  }
+
   const r = await askPasswordAndUnlockP12(p12U8);
   if (!r) return;
   const label = bundledLabel || r.unlocked.meta.name || 'Imported identity';
@@ -1059,24 +1242,49 @@ $('btnImportId').onclick = async () => {
     p12U8,
     meta: r.unlocked.meta,
     sigImagePngU8: bundledSigImage,
+    ghVault: bundledGh,
+    settings: bundledSettings,
     makeActive: true,
   });
   identity.unlocked = r.unlocked;
   identity.password = r.password;
   renderIdentity();
-  toast(bundledSigImage ? 'Identity and signature image imported' : 'Identity imported', 'ok');
+  ghSyncFromActiveIdentity();
+  loadSettingsForActiveIdentity();
+  let msg = 'Identity imported';
+  const bits = [];
+  if (bundledSigImage) bits.push('signature image');
+  if (bundledGh)       bits.push('GitHub vault ' + (bundledGh.token ? 'with token' : 'without token — add it via Configure GitHub vault'));
+  if (bundledSettings) bits.push('settings');
+  if (bits.length) msg += ' with ' + bits.join(', ');
+  toast(msg, 'ok');
 };
 
-$('btnExportId').onclick = () => {
+$('btnExportId').onclick = async () => {
   if (!identity.p12U8) return;
+  const rec = identities.get(identity.id);
+  const hasGh = !!(rec && rec.ghVault);
+  const body = document.createElement('div');
+  body.innerHTML = `
+    <p class="hint">Bundle contains the identity's key + certificate, the signature image, saved UI settings, and (optionally) the GitHub vault config for this identity.</p>
+    <label class="lock-row"><input type="checkbox" id="incGh" ${hasGh ? 'checked' : 'disabled'}> Include GitHub vault config ${hasGh ? '' : '(none configured)'}</label>
+    <label class="lock-row"><input type="checkbox" id="incTok"> Include the GitHub token (sensitive — anyone with this bundle can push to the repo)</label>
+  `;
+  const r = await modal({ title: 'Export identity bundle', body, confirmText: 'Export' });
+  if (!r) return;
   const bundle = {
     format: 'pdf-signer identity bundle',
-    version: 1,
+    version: 2,
     label: identity.label,
     meta: { name: identity.meta.name, email: identity.meta.email },
     p12_base64: btoa(u8ToBinStr(identity.p12U8)),
     signatureImage_base64: sigImage.pngU8 ? btoa(u8ToBinStr(sigImage.pngU8)) : null,
+    settings: (rec && rec.settings) || collectSettings(),
   };
+  if (r.incGh && hasGh) {
+    bundle.ghVault = { ...rec.ghVault };
+    if (!r.incTok) delete bundle.ghVault.token;
+  }
   const json = new TextEncoder().encode(JSON.stringify(bundle, null, 2));
   download(safeFilename(identity.label || identity.meta.name) + '.pdfsigner.json', json, 'application/json');
 };
@@ -1294,6 +1502,7 @@ async function openPdf(file) {
   doc.numPages = doc.pdfjs.numPages;
   doc.placements = [];
   doc.pageMeta = [];
+  doc.formFields = {};
   doc.selectedPlacementId = null;
   $('placementList').innerHTML = '';
   $('emptyState').style.display = 'none';
@@ -1301,6 +1510,8 @@ async function openPdf(file) {
   $('docName').textContent = file.name;
   $('signSection').style.opacity = 1;
   $('signSection').style.pointerEvents = 'auto';
+  $('stampSection').style.opacity = 1;
+  $('stampSection').style.pointerEvents = 'auto';
   let verifyResults = [];
   try { verifyResults = verifyPdfSignatures(doc.bytes); }
   catch (e) { console.warn('verify error', e); verifyResults = [{ error: e.message, byteRange: [0,0,0,0] }]; }
@@ -1519,20 +1730,26 @@ function updateZoomLabel() { $('zoomLabel').textContent = Math.round(doc.scale /
 /* ═══════════════════════════════════════════════════════════════════════
    Placements: create, drag, resize, delete, list
    ═══════════════════════════════════════════════════════════════════════ */
-$('btnPlaceSig').onclick = () => setTool(currentTool === 'sig' ? null : 'sig');
+$('btnPlaceSig').onclick   = () => setTool(currentTool === 'sig'   ? null : 'sig');
+$('btnPlaceText').onclick  = () => setTool(currentTool === 'text'  ? null : 'text');
+$('btnPlaceStamp').onclick = () => setTool(currentTool === 'stamp' ? null : 'stamp');
 function setTool(t) {
   currentTool = t;
-  $('btnPlaceSig').classList.toggle('active', t === 'sig');
+  $('btnPlaceSig').classList.toggle('active',   t === 'sig');
+  $('btnPlaceText').classList.toggle('active',  t === 'text');
+  $('btnPlaceStamp').classList.toggle('active', t === 'stamp');
   const wraps = document.querySelectorAll('.page-wrap');
   wraps.forEach(w => w.classList.toggle('no-place', t === null));
-  $('toolHint').textContent = t === 'sig'
-    ? 'Click a page to place the signature. Drag to move, corner to resize, × or Delete to remove.'
-    : 'Click ✍ Place signature above to add a signature. Drag existing boxes to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo. Multiple placements share one crypto signature.';
+  $('toolHint').textContent =
+      t === 'sig'   ? 'Click a page to place the signature. Drag to move, corner to resize, × or Delete to remove.'
+    : t === 'text'  ? 'Click a page to drop a text field. Click inside to type, drag the border to move, corner to resize.'
+    : t === 'stamp' ? 'Click a page to drop the integrity stamp box. Only ONE stamp position is used — its coords are reused on every page at sign time.'
+    :                 'Pick ✍ Signature, A Text field or ▤ Stamp box, then click a page. Drag boxes to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo.';
 }
 
 function onPageClick(e) {
   if (e.target.closest('.placement')) return;
-  if (currentTool !== 'sig') {
+  if (currentTool !== 'sig' && currentTool !== 'text' && currentTool !== 'stamp') {
     if (doc.selectedPlacementId != null) {
       doc.selectedPlacementId = null;
       refreshSelectedPlacement();
@@ -1547,7 +1764,10 @@ function onPageClick(e) {
   const cx = e.clientX - rect.left;
   const cy = e.clientY - rect.top;
   const [xPdf, yPdf] = meta.viewport.convertToPdfPoint(cx, cy);
-  const wPdf = 220, hPdf = 72;
+  const isText  = currentTool === 'text';
+  const isStamp = currentTool === 'stamp';
+  const wPdf = isStamp ? Math.min(500, meta.viewport.viewBox[2] - 20) : (isText ? 180 : 220);
+  const hPdf = isStamp ? 44                                            : (isText ?  22 :  72);
   pushUndo();
   const p = {
     id: placementIdSeq++,
@@ -1555,13 +1775,23 @@ function onPageClick(e) {
     xPdf: xPdf - wPdf / 2,
     yPdf: yPdf - hPdf / 2,
     wPdf, hPdf,
-    type: 'digital',
-    appearance: currentAppearance(),
+    type: isStamp ? 'stamp' : (isText ? 'text' : 'digital'),
+    appearance: (isText || isStamp) ? undefined : currentAppearance(),
+    nameFont:   (isText || isStamp) ? undefined : ($('nameFont')?.value || 'serif-italic'),
+    text: isText ? '' : undefined,
+    orientation: isStamp ? 'horizontal' : undefined,
   };
   doc.placements.push(p);
   attachPlacementToPage(p);
   renderPlacementList();
   selectPlacement(p.id);
+  if (isText) {
+    setTimeout(() => p.el?.querySelector('.text-input')?.focus(), 20);
+  }
+  if (isStamp) {
+    // Turn on stamping automatically once the user positions one.
+    if (!$('stampEnable').checked) { $('stampEnable').checked = true; $('stampOptions').style.display = ''; saveSettingsSoon(); }
+  }
   setTool(null);
   updateSignButton();
 }
@@ -1590,17 +1820,41 @@ function attachPlacementToPage(p) {
   el.className = 'placement type-' + p.type;
   el.dataset.id = p.id;
 
-  // Preview content (live)
-  const preview = document.createElement('div');
-  preview.className = 'preview';
-  preview.innerHTML = `
-    <div class="img-slot"></div>
-    <div class="text-slot">
-      <div class="name"></div>
-      <div class="meta"></div>
-    </div>
-  `;
-  el.appendChild(preview);
+  if (p.type === 'text') {
+    const input = document.createElement('div');
+    input.className = 'text-input';
+    input.contentEditable = 'true';
+    input.spellcheck = false;
+    input.dataset.placeholder = 'Type here…';
+    input.textContent = p.text || '';
+    input.addEventListener('input', () => { p.text = input.innerText; });
+    input.addEventListener('mousedown', ev => ev.stopPropagation()); // don't start a drag on typing
+    el.appendChild(input);
+  } else if (p.type === 'stamp') {
+    const preview = document.createElement('div');
+    preview.style.cssText = 'position:absolute; inset:0; display:flex; align-items:center; gap:6px; padding:4px; font-size:11px; color:#8a5a10; pointer-events:none;';
+    preview.innerHTML = `
+      <div style="width:36px;height:36px;background:repeating-linear-gradient(45deg,#8a5a10 0 3px,transparent 3px 6px); border:1px solid #8a5a10; flex-shrink:0;"></div>
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:600;">Integrity stamp</div>
+        <div style="opacity:.75; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          QR + CSV + timestamp · repeated on every page at this position
+        </div>
+      </div>`;
+    el.appendChild(preview);
+  } else {
+    // Preview content (live) — signature placement
+    const preview = document.createElement('div');
+    preview.className = 'preview';
+    preview.innerHTML = `
+      <div class="img-slot"></div>
+      <div class="text-slot">
+        <div class="name"></div>
+        <div class="meta"></div>
+      </div>
+    `;
+    el.appendChild(preview);
+  }
 
   const close = document.createElement('div');
   close.className = 'close';
@@ -1638,7 +1892,9 @@ function currentAppearance() {
 
 function renderPlacementPreview(p) {
   if (!p.el) return;
+  if (p.type === 'text' || p.type === 'stamp') return; // own DOM, no live-render needed
   const preview = p.el.querySelector('.preview');
+  if (!preview) return;
   const imgSlot = preview.querySelector('.img-slot');
   const nameEl = preview.querySelector('.name');
   const metaEl = preview.querySelector('.meta');
@@ -1665,6 +1921,7 @@ function renderPlacementPreview(p) {
     const reason = ($('reason')?.value || '').trim();
     const location = ($('location')?.value || '').trim();
     nameEl.textContent = name;
+    nameEl.className = 'name font-' + (p.nameFont || 'serif-italic');
     let meta = 'Date: ' + date;
     if (reason)   meta += '\nReason: ' + reason;
     if (location) meta += '\nLocation: ' + location;
@@ -1688,11 +1945,65 @@ document.querySelectorAll('input[name="appearance"]').forEach(r => {
     const v = r.value;
     if (doc.selectedPlacementId != null) {
       const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
-      if (p) { p.appearance = v; renderPlacementPreview(p); }
+      if (p && p.type !== 'text') { p.appearance = v; renderPlacementPreview(p); }
     }
     // If nothing selected, the radio value simply becomes the default for the next new placement.
     updateSignButton();
   });
+});
+$('stampEnable').addEventListener('change', () => {
+  const on = $('stampEnable').checked;
+  $('stampOptions').style.display = on ? '' : 'none';
+  if (on) autoSeedStampsIfNone();
+  else removeAllStamps();
+  updateSignButton();
+});
+
+function defaultStampBox(pageMeta, orientation='horizontal') {
+  const [_,__,pageW, pageH] = pageMeta.viewport.viewBox;
+  if (orientation === 'vertical') {
+    return { xPdf: 4, yPdf: 40, wPdf: 22, hPdf: pageH - 80 };
+  }
+  return { xPdf: 0, yPdf: 0, wPdf: pageW, hPdf: 42 };
+}
+function autoSeedStampsIfNone() {
+  if (!doc.pdfjs) return;
+  if (doc.placements.some(p => p.type === 'stamp')) return;
+  pushUndo();
+  for (const meta of doc.pageMeta) {
+    const box = defaultStampBox(meta, 'horizontal');
+    const p = {
+      id: placementIdSeq++,
+      pageIndex: meta.index,
+      ...box,
+      type: 'stamp',
+      orientation: 'horizontal',
+    };
+    doc.placements.push(p);
+    attachPlacementToPage(p);
+  }
+  renderPlacementList();
+}
+function removeAllStamps() {
+  const anyStamp = doc.placements.some(p => p.type === 'stamp');
+  if (!anyStamp) return;
+  pushUndo();
+  for (let i = doc.placements.length - 1; i >= 0; i--) {
+    if (doc.placements[i].type !== 'stamp') continue;
+    const p = doc.placements[i];
+    if (p.el?.parentNode) p.el.parentNode.removeChild(p.el);
+    if (doc.selectedPlacementId === p.id) doc.selectedPlacementId = null;
+    doc.placements.splice(i, 1);
+  }
+  renderPlacementList();
+  updateStampRotateRow();
+}
+$('nameFont').addEventListener('change', () => {
+  const v = $('nameFont').value;
+  if (doc.selectedPlacementId != null) {
+    const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
+    if (p && p.type !== 'text') { p.nameFont = v; renderPlacementPreview(p); }
+  }
 });
 
 function positionPlacementFromPdf(p) {
@@ -1805,11 +2116,40 @@ function selectPlacement(id) {
   refreshSelectedPlacement();
   renderPlacementList();
   const p = doc.placements.find(pp => pp.id === id);
-  if (p) {
+  if (p && p.type === 'digital') {
     const r = document.querySelector(`input[name="appearance"][value="${p.appearance || 'text'}"]`);
     if (r) r.checked = true;
+    if (p.nameFont) $('nameFont').value = p.nameFont;
+  }
+  updateStampRotateRow();
+}
+
+function updateStampRotateRow() {
+  const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
+  const isStamp = !!(p && p.type === 'stamp');
+  $('stampRotateRow').style.display = isStamp ? '' : 'none';
+  if (isStamp) {
+    $('stampOrientationLabel').textContent = 'currently ' + (p.orientation === 'vertical' ? 'vertical (side)' : 'horizontal (bottom)');
   }
 }
+
+$('btnRotateStamp').onclick = () => {
+  const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
+  if (!p || p.type !== 'stamp') return;
+  pushUndo();
+  const wasHorizontal = (p.orientation || 'horizontal') === 'horizontal';
+  p.orientation = wasHorizontal ? 'vertical' : 'horizontal';
+  // Swap width/height so the box visually rotates around the drag anchor.
+  const cx = p.xPdf + p.wPdf / 2;
+  const cy = p.yPdf + p.hPdf / 2;
+  const newW = p.hPdf, newH = p.wPdf;
+  p.xPdf = cx - newW / 2;
+  p.yPdf = cy - newH / 2;
+  p.wPdf = newW;
+  p.hPdf = newH;
+  positionPlacementFromPdf(p);
+  updateStampRotateRow();
+};
 function refreshSelectedPlacement() {
   for (const p of doc.placements) {
     p.el?.classList.toggle('selected', p.id === doc.selectedPlacementId);
@@ -1821,9 +2161,14 @@ function renderPlacementList() {
   for (const p of doc.placements) {
     const row = document.createElement('div');
     row.className = 'placement-item' + (p.id === doc.selectedPlacementId ? ' selected' : '');
+    const swatchClass = p.type === 'text' ? 'text' : (p.type === 'stamp' ? 'text' : 'digital');
+    const kind = p.type === 'text' ? 'Text field' : (p.type === 'stamp' ? 'Stamp position' : 'Signature');
+    const preview = p.type === 'text' && p.text
+      ? ' — “' + (p.text.length > 22 ? p.text.slice(0, 22) + '…' : p.text) + '”'
+      : '';
     row.innerHTML = `
-      <span class="swatch digital"></span>
-      <span>Signature · p.${p.pageIndex + 1}</span>
+      <span class="swatch ${swatchClass}"></span>
+      <span>${kind} · p.${p.pageIndex + 1}${preview}</span>
       <span class="rm" title="Remove">✕</span>
     `;
     row.onclick = e => {
@@ -1838,8 +2183,9 @@ function renderPlacementList() {
 }
 
 function updateSignButton() {
-  const has = doc.pdfjs && doc.placements.length > 0 && identity.meta;
-  const needsImage = doc.placements.some(p => (p.appearance === 'image' || p.appearance === 'both')) && !sigImage.pngU8;
+  const hasSig = doc.placements.some(p => p.type !== 'text');
+  const has = doc.pdfjs && hasSig && identity.meta;
+  const needsImage = doc.placements.some(p => p.type !== 'text' && (p.appearance === 'image' || p.appearance === 'both')) && !sigImage.pngU8;
   $('btnSign').disabled = !has || needsImage;
   $('btnSign').textContent = 'Sign & Download';
 }
@@ -1887,12 +2233,26 @@ function drawImageFit(page, img, x, y, w, h) {
   });
 }
 
+function pickNameFont(fonts, key) {
+  switch (key) {
+    case 'sans':          return fonts.helv;
+    case 'sans-bold':     return fonts.helvBold;
+    case 'serif':         return fonts.times;
+    case 'serif-bold':    return fonts.timesBold;
+    case 'mono':          return fonts.courier;
+    case 'serif-italic':
+    default:              return fonts.timesItalic;
+  }
+}
+
 function drawDigitalAppearance(page, p, opts) {
   const { PDFLib } = window;
   const { rgb } = PDFLib;
-  const { font, fontBold, fontItalic, sigImgObj, meta, reason, location, dateStr, appearance } = opts;
+  const { fonts, sigImgObj, meta, reason, location, dateStr, appearance } = opts;
   const useImage = (appearance === 'image' || appearance === 'both') && sigImgObj;
   const useText  = (appearance === 'text'  || appearance === 'both') || !useImage;
+  const nameFont = pickNameFont(fonts, p.nameFont || 'serif-italic');
+  const bodyFont = fonts.helv;
   const x1 = p.xPdf, y1 = p.yPdf, w = p.wPdf, h = p.hPdf;
   const x2 = x1 + w, y2 = y1 + h;
   const pad = 6;
@@ -1909,7 +2269,6 @@ function drawDigitalAppearance(page, p, opts) {
     return;
   }
 
-  // Adobe-style: name at the top (larger, italic), then date / reason / location below.
   const nameSize = Math.min(13, Math.max(9, Math.floor(h * 0.22)));
   const bodySize = Math.min(8, Math.max(6, Math.floor(h * 0.11)));
   const gap = 2;
@@ -1926,36 +2285,642 @@ function drawDigitalAppearance(page, p, opts) {
     }
   };
 
-  drawStack(meta.name, nameSize, fontItalic, rgb(0, 0, 0));
+  drawStack(meta.name, nameSize, nameFont, rgb(0, 0, 0));
   cursorY -= 2;
-  drawStack('Date: ' + dateStr, bodySize, font, rgb(0.32, 0.32, 0.32));
-  if (reason)   drawStack('Reason: ' + reason, bodySize, font, rgb(0.32, 0.32, 0.32));
-  if (location) drawStack('Location: ' + location, bodySize, font, rgb(0.32, 0.32, 0.32));
+  drawStack('Date: ' + dateStr, bodySize, bodyFont, rgb(0.32, 0.32, 0.32));
+  if (reason)   drawStack('Reason: ' + reason, bodySize, bodyFont, rgb(0.32, 0.32, 0.32));
+  if (location) drawStack('Location: ' + location, bodySize, bodyFont, rgb(0.32, 0.32, 0.32));
 }
 
-async function makeSignedPdf({bytes, placements, lock, meta, reason, location, appearance, cert, key, sigPngU8}) {
+function drawTextField(page, p, fonts) {
+  const { rgb } = window.PDFLib;
+  if (!p.text) return;
+  const size = Math.min(14, Math.max(7, Math.floor(p.hPdf * 0.55)));
+  const pad = 3;
+  const lines = wrapTextLines(p.text, fonts.helv, size, p.wPdf - 2 * pad);
+  const lineH = size * 1.15;
+  let y = p.yPdf + p.hPdf - pad - size;
+  for (const line of lines) {
+    if (y < p.yPdf + pad) break;
+    page.drawText(line, { x: p.xPdf + pad, y, size, font: fonts.helv, color: rgb(0, 0, 0) });
+    y -= lineH;
+  }
+}
+
+/* ─── integrity stamp + encrypted vault ───
+   Every signing generates a random AES-256-GCM vault key. The printable CSV
+   is derived from that key (SHA-256, first 32 hex). The QR carries the key
+   so anyone who has both the .vault ciphertext and the QR can decrypt back
+   to the exact signed PDF and verify it. No server needed — the .vault is a
+   free-standing artifact you host or share however you like. */
+function deriveCsv(keyBytes) {
+  const md = forge.md.sha256.create();
+  md.update(u8ToBinStr(keyBytes));
+  return md.digest().toHex().slice(0, 32).toUpperCase();
+}
+
+function b64urlEnc(u8) {
+  return btoa(u8ToBinStr(u8)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDec(s) {
+  const padded = s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4);
+  return binStrToU8(atob(padded));
+}
+async function aesGcmEncrypt(keyU8, plaintextU8) {
+  const key = await crypto.subtle.importKey('raw', keyU8, { name: 'AES-GCM' }, false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintextU8));
+  // Framing: 4-byte magic "PSV1" | 12-byte IV | ciphertext (includes GCM tag).
+  const out = new Uint8Array(4 + 12 + ct.length);
+  out.set([0x50, 0x53, 0x56, 0x31], 0);
+  out.set(iv, 4);
+  out.set(ct, 16);
+  return out;
+}
+async function aesGcmDecrypt(keyU8, blobU8) {
+  if (blobU8.length < 16 + 16) throw new Error('vault file too short');
+  if (!(blobU8[0] === 0x50 && blobU8[1] === 0x53 && blobU8[2] === 0x56 && blobU8[3] === 0x31)) {
+    throw new Error('not a pdf-signer vault file (missing PSV1 magic)');
+  }
+  const iv = blobU8.subarray(4, 16);
+  const ct = blobU8.subarray(16);
+  const key = await crypto.subtle.importKey('raw', keyU8, { name: 'AES-GCM' }, false, ['decrypt']);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  return new Uint8Array(pt);
+}
+// Compact single-URL QR payload → base64url of JSON.
+function encodeVaultPayload({ key, signer, dateStr, csv, url }) {
+  const obj = { u: url || '', k: b64urlEnc(key), s: signer || '', t: dateStr || '', c: csv || '' };
+  return b64urlEnc(new TextEncoder().encode(JSON.stringify(obj)));
+}
+function decodeVaultPayload(b64u) {
+  const json = new TextDecoder().decode(b64urlDec(b64u));
+  const o = JSON.parse(json);
+  return {
+    url: o.u || '',
+    signer: o.s || '',
+    dateStr: o.t || '',
+    csv: o.c || '',
+    keyBytes: b64urlDec(o.k),
+  };
+}
+function buildVaultQr({ key, signer, dateStr, csv, url, verifierUrl }) {
+  const payload = encodeVaultPayload({ key, signer, dateStr, csv, url });
+  if (verifierUrl) {
+    const base = verifierUrl.replace(/#.*$/, '');
+    return base + (base.endsWith('/') ? '' : '') + '#v=' + payload;
+  }
+  // Fallback: no verifier configured — still a scannable text receipt.
+  return [
+    'pdfsigner-vault v1',
+    url ? 'url=' + url : null,
+    'key=' + b64urlEnc(key),
+    'signer=' + (signer || ''),
+    'signed=' + (dateStr || ''),
+    'csv=' + (csv || ''),
+  ].filter(Boolean).join('\n');
+}
+function parseVaultQr(text) {
+  const t = String(text || '').trim();
+  // URL form: <verifier>#v=<base64url>
+  const m = t.match(/#v=([A-Za-z0-9_\-]+)$/);
+  if (m) {
+    return decodeVaultPayload(m[1]);
+  }
+  // Legacy multi-line text form.
+  const lines = t.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if (!lines.length || !/^pdfsigner-vault\s+v1$/i.test(lines[0])) {
+    throw new Error('QR is not a pdf-signer vault receipt');
+  }
+  const out = {};
+  for (const line of lines.slice(1)) {
+    const eq = line.indexOf('=');
+    if (eq < 0) continue;
+    out[line.slice(0, eq).trim().toLowerCase()] = line.slice(eq + 1);
+  }
+  if (!out.key) throw new Error('QR is missing key= field');
+  out.keyBytes = b64urlDec(out.key);
+  if (out.keyBytes.length !== 32) throw new Error('QR key is not 32 bytes');
+  return { url: out.url || '', signer: out.signer || '', dateStr: out.signed || '', csv: out.csv || '', keyBytes: out.keyBytes };
+}
+
+/* ─── Persisted settings ─── */
+const SETTINGS_KEYS = [
+  { id: 'reason',         type: 'value' },
+  { id: 'location',       type: 'value' },
+  { id: 'nameFont',       type: 'value' },
+  { id: 'stampEnable',    type: 'checked' },
+  { id: 'stampRole',      type: 'value' },
+  { id: 'vaultKeepLocal', type: 'checked' },
+];
+const RADIO_KEYS = ['appearance', 'lockmode', 'vaultHost'];
+
+function collectSettings() {
+  const out = {};
+  for (const s of SETTINGS_KEYS) {
+    const el = $(s.id);
+    if (!el) continue;
+    out[s.id] = s.type === 'checked' ? !!el.checked : el.value;
+  }
+  for (const name of RADIO_KEYS) {
+    const checked = document.querySelector(`input[name="${name}"]:checked`);
+    if (checked) out['radio:' + name] = checked.value;
+  }
+  return out;
+}
+function applySettings(obj) {
+  if (!obj) return;
+  for (const s of SETTINGS_KEYS) {
+    if (!(s.id in obj)) continue;
+    const el = $(s.id);
+    if (!el) continue;
+    if (s.type === 'checked') el.checked = !!obj[s.id];
+    else el.value = obj[s.id];
+  }
+  for (const name of RADIO_KEYS) {
+    const key = 'radio:' + name;
+    if (!(key in obj)) continue;
+    const val = obj[key];
+    const el = document.querySelector(`input[name="${name}"][value="${val}"]`);
+    if (el) el.checked = true;
+  }
+  // Reflect derived UI state
+  $('stampOptions').style.display = $('stampEnable').checked ? '' : 'none';
+  const vh = document.querySelector('input[name="vaultHost"]:checked');
+  $('ghVaultBlock').style.display = (vh && vh.value === 'github') ? '' : 'none';
+}
+let settingsSaveTimer = null;
+async function saveSettingsSoon() {
+  if (!identity.id) return; // settings live with the identity
+  if (settingsSaveTimer) return;
+  settingsSaveTimer = setTimeout(async () => {
+    settingsSaveTimer = null;
+    try { await updateActiveIdentity({ settings: collectSettings() }); }
+    catch (e) { console.warn('settings save failed', e); }
+  }, 200);
+}
+function loadSettingsForActiveIdentity() {
+  const rec = identity.id ? identities.get(identity.id) : null;
+  applySettings(rec && rec.settings ? rec.settings : {});
+}
+function wireSettingsAutoSave() {
+  for (const s of SETTINGS_KEYS) {
+    const el = $(s.id);
+    if (!el) continue;
+    el.addEventListener(s.type === 'checked' ? 'change' : 'input', saveSettingsSoon);
+  }
+  for (const name of RADIO_KEYS) {
+    document.querySelectorAll(`input[name="${name}"]`).forEach(r => r.addEventListener('change', saveSettingsSoon));
+  }
+}
+
+/* ─── GitHub vault host (per-identity) ─── */
+const ghVault = { config: null }; // mirror of the active identity's ghVault {token, owner, repo, branch, pathPrefix}
+
+function updateGhSummary() {
+  const c = ghVault.config;
+  const hasId = !!identity.id;
+  const short = c
+    ? `${c.owner}/${c.repo} @ ${c.branch}, path “${c.pathPrefix}”`
+    : (hasId ? 'Not configured yet for this identity.' : 'Pick or create an identity first.');
+  const a = $('ghConfigSummary');  if (a) a.textContent = short;
+  const b = $('ghConfigSummary2'); if (b) b.textContent = c
+    ? `GitHub vault: ${short}`
+    : (hasId ? 'GitHub vault: not configured for the active identity — set it up in the Identity section above.'
+             : 'GitHub vault: pick or create an identity first.');
+  const sub = $('ghIdSubsection'); if (sub) sub.style.display = hasId ? '' : 'none';
+}
+
+// Called after switching identity — sync mirror from the identity's own config.
+function ghSyncFromActiveIdentity() {
+  const rec = identity.id ? identities.get(identity.id) : null;
+  ghVault.config = (rec && rec.ghVault) ? { ...rec.ghVault } : null;
+  updateGhSummary();
+}
+
+// Persist a new config to the active identity's record.
+async function ghSaveConfig(c) {
+  if (!identity.id) throw new Error('Pick or create an identity first');
+  ghVault.config = c;
+  await updateActiveIdentity({ ghVault: c });
+  updateGhSummary();
+}
+
+// Legacy global config → migrate to active identity once, then drop.
+async function ghMigrateGlobalIfAny() {
+  const legacy = await idbGet('ghVaultConfig');
+  if (!legacy) return;
+  if (identity.id) {
+    const rec = identities.get(identity.id);
+    if (rec && !rec.ghVault) {
+      rec.ghVault = legacy;
+      await saveIdentitiesToDb();
+      toast('Legacy GitHub config attached to identity “' + rec.label + '”', 'ok');
+    }
+  }
+  await idbDel('ghVaultConfig');
+}
+
+function ghRawUrl(c, filename) {
+  return `https://raw.githubusercontent.com/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.branch)}/${c.pathPrefix.replace(/^\/+|\/+$/g, '')}/${encodeURIComponent(filename)}`;
+}
+async function ghApi(c, path, init={}) {
+  const url = 'https://api.github.com' + path;
+  const headers = new Headers(init.headers || {});
+  headers.set('Authorization', 'Bearer ' + c.token);
+  headers.set('Accept', 'application/vnd.github+json');
+  headers.set('X-GitHub-Api-Version', '2022-11-28');
+  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  const res = await fetch(url, { ...init, headers });
+  const txt = await res.text();
+  let json = null; try { json = txt ? JSON.parse(txt) : null; } catch (_) {}
+  if (!res.ok) {
+    const msg = (json && json.message) ? json.message : ('HTTP ' + res.status);
+    throw new Error('GitHub API: ' + msg);
+  }
+  return json;
+}
+async function ghTestConfig(c) {
+  await ghApi(c, `/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}`);
+  return true;
+}
+async function ghPutFile(c, filename, dataU8, commitMsg, opts={}) {
+  // Default path is under the vault path prefix. Override with opts.pathOverride
+  // (used for publishing the verifier to docs/index.html).
+  const p = opts.pathOverride
+    ? opts.pathOverride.replace(/^\/+|\/+$/g, '')
+    : (c.pathPrefix.replace(/^\/+|\/+$/g, '') + '/' + filename);
+  let sha;
+  try {
+    const cur = await ghApi(c, `/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/contents/${p}?ref=${encodeURIComponent(c.branch)}`);
+    if (cur && cur.sha) sha = cur.sha;
+  } catch (_) { /* 404: doesn't exist yet */ }
+  const body = { message: commitMsg, content: btoa(u8ToBinStr(dataU8)), branch: c.branch };
+  if (sha) body.sha = sha;
+  await ghApi(c, `/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/contents/${p}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return opts.pathOverride
+    ? `https://raw.githubusercontent.com/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.branch)}/${p}`
+    : ghRawUrl(c, filename);
+}
+
+async function ghWhoami(token) {
+  const res = await fetch('https://api.github.com/user', {
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.message || ('HTTP ' + res.status));
+  return json; // { login, type: "User", ... }
+}
+
+async function ghRepoExists(c) {
+  const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}`, {
+    headers: { Authorization: 'Bearer ' + c.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+  if (res.status === 404) return false;
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' when checking repo');
+  return true;
+}
+
+async function ghGetPages(c) {
+  const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/pages`, {
+    headers: { Authorization: 'Bearer ' + c.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+  if (res.status === 404) return null;
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.message || ('HTTP ' + res.status));
+  return json; // { html_url, source: {branch, path}, ... }
+}
+async function ghEnablePages(c) {
+  const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/pages`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + c.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: { branch: c.branch, path: '/docs' } }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.message || ('HTTP ' + res.status));
+  return json;
+}
+async function ghPublishTool(c) {
+  // Grab our own HTML — works when the tool is served over HTTP; falls back
+  // to a serialized clone of the live DOM (which is close enough).
+  let html;
+  try {
+    const res = await fetch(location.href, { cache: 'no-store' });
+    if (res.ok) html = await res.text();
+  } catch (_) {}
+  if (!html) html = '<!doctype html>\n' + document.documentElement.outerHTML;
+  const bytes = new TextEncoder().encode(html);
+  return await ghPutFile(c, 'index.html', bytes, 'pdf-signer verifier page');
+}
+
+async function ghCreateRepo(c, isOrg, isPrivate) {
+  const url = isOrg
+    ? `https://api.github.com/orgs/${encodeURIComponent(c.owner)}/repos`
+    : `https://api.github.com/user/repos`;
+  const body = {
+    name: c.repo,
+    private: !!isPrivate,
+    auto_init: true, // creates an initial commit so the branch exists
+    description: 'pdf-signer encrypted vault (auto-created by the PDF Signer tool)',
+  };
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + c.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.message || ('HTTP ' + res.status));
+  return json;
+}
+
+$('btnGhConfigure').onclick = async () => {
+  if (!identity.id) return toast('Pick or create an identity first — the GitHub config lives with the identity', 'err');
+  const c = ghVault.config || { owner: '', repo: 'pdf-signer-vault', branch: 'main', pathPrefix: 'vault', token: '' };
+  const body = document.createElement('div');
+  body.innerHTML = `
+    <div style="background: var(--panel-2); border-radius:6px; padding:10px; margin-bottom:10px; font-size:12.5px; line-height:1.55;">
+      <b>Step 1 — create the repo</b> at <a href="https://github.com/new" target="_blank" rel="noopener" style="color:var(--accent)">github.com/new</a>. Private is fine (vaults are encrypted anyway). Tick <i>Add a README</i> so the branch actually exists.<br><br>
+      <b>Step 2 — create a fine-grained token</b> at <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener" style="color:var(--accent)">github.com/settings/personal-access-tokens/new</a>:
+      <ul style="margin:4px 0 4px 18px; padding:0">
+        <li><b>Token name:</b> anything (e.g. <i>pdf-signer</i>). <b>Expiration:</b> your choice.</li>
+        <li><b>Resource owner:</b> your username (or an org). Must match the <i>Owner</i> field below.</li>
+        <li><b>Repository access:</b> <b>Only select repositories</b> → pick the repo you just made.</li>
+        <li><b>Repository permissions:</b> open the dropdown and set <b>Contents → Read and write</b>. That's the only one you need. <b>Metadata</b> auto-adds as <i>Read</i> — leave it.</li>
+      </ul>
+      Click <b>Generate token</b>, copy the <code>github_pat_…</code> string, and paste it below.
+      <div style="opacity:.7; margin-top:6px">Optional: to skip creating the repo yourself, grant <b>Administration → Read and write</b> and pick <b>All repositories</b> in step 2 — the tool will then create the repo for you when you hit Save.</div>
+    </div>
+
+    <label>GitHub username or organisation (owner of the repo)</label>
+    <input type="text" id="ghOwner" value="${(c.owner || '').replace(/"/g,'&quot;')}" placeholder="your-username">
+
+    <label>Repo name <span style="color:var(--muted)">(will be created if it doesn't exist)</span></label>
+    <input type="text" id="ghRepo" value="${(c.repo || 'pdf-signer-vault').replace(/"/g,'&quot;')}" placeholder="pdf-signer-vault">
+
+    <label>Personal access token</label>
+    <input type="password" id="ghToken" value="${(c.token || '').replace(/"/g,'&quot;')}" placeholder="github_pat_...">
+
+    <details style="margin-top:10px">
+      <summary>Advanced (branch, path, privacy, verifier URL)</summary>
+      <label>Branch</label>
+      <input type="text" id="ghBranch" value="${(c.branch || 'main').replace(/"/g,'&quot;')}" placeholder="main">
+      <label>Path prefix inside repo</label>
+      <input type="text" id="ghPath" value="${(c.pathPrefix || 'vault').replace(/"/g,'&quot;')}" placeholder="vault">
+      <label>Verifier URL <span style="color:var(--muted)">(what the QR points to — defaults to the well-known upstream verifier)</span></label>
+      <input type="text" id="ghVerifier" value="${(c.verifierUrl || '').replace(/"/g,'&quot;')}" placeholder="${CANONICAL_VERIFIER_URL}">
+      <label class="lock-row" style="margin-top:8px"><input type="checkbox" id="ghPrivate" checked> If the repo is created, make it private (recommended — vaults are encrypted, but privacy adds a second layer)</label>
+    </details>
+
+    <div class="hint" style="margin-top:8px">The token stays in your browser's IndexedDB and is only sent to <code>api.github.com</code>. It is exported with the identity bundle only if you tick the "include token" box on export.</div>
+  `;
+  const r = await modal({ title: 'Configure GitHub vault', body, confirmText: 'Test & save' });
+  if (!r) return;
+  const next = {
+    owner: (r.ghOwner || '').trim(),
+    repo:  (r.ghRepo  || 'pdf-signer-vault').trim(),
+    branch: (r.ghBranch || 'main').trim() || 'main',
+    pathPrefix: ((r.ghPath || 'vault').trim() || 'vault').replace(/^\/+|\/+$/g, ''),
+    token: (r.ghToken || '').trim(),
+    verifierUrl: (r.ghVerifier || '').trim() || undefined,
+  };
+  if (!next.owner || !next.repo || !next.token) return toast('Owner, repo and token are required', 'err');
+
+  try {
+    // 1. Confirm the token works.
+    const who = await ghWhoami(next.token);
+    const isOwnerMe = who.login && who.login.toLowerCase() === next.owner.toLowerCase();
+    // 2. Check the repo. If missing, offer to create it.
+    let exists = await ghRepoExists(next);
+    if (!exists) {
+      const askCreate = await modal({
+        title: 'Repo doesn\'t exist — create it now?',
+        body: `The token works (signed in as <b>${who.login}</b>), but <code>${next.owner}/${next.repo}</code> was not found. Create it now with an initial commit on <code>${next.branch}</code>? ${r.ghPrivate ? 'It will be <b>private</b>.' : 'It will be <b>public</b>.'}`,
+        confirmText: 'Create repo',
+      });
+      if (!askCreate) return;
+      try {
+        await ghCreateRepo(next, /*isOrg*/ !isOwnerMe, /*isPrivate*/ !!r.ghPrivate);
+        toast('Created repo ' + next.owner + '/' + next.repo, 'ok');
+        exists = true;
+      } catch (e) {
+        // Token might lack "administration: write" (fine-grained) or the org scope. Explain.
+        return toast('Repo creation failed: ' + e.message + ' — create it manually at github.com/new, then click Configure again.', 'err');
+      }
+    }
+    await ghSaveConfig(next);
+    toast('GitHub vault ready → ' + next.owner + '/' + next.repo, 'ok');
+  } catch (e) {
+    toast('GitHub check failed: ' + e.message, 'err');
+  }
+};
+
+function drawQrCode(page, payload, x, y, size) {
+  // qrcode-generator: qrcode(typeNumber=0 auto, errorCorrection='M')
+  const qr = qrcode(0, 'M');
+  qr.addData(payload);
+  qr.make();
+  const count = qr.getModuleCount();
+  const cell = size / count;
+  const { rgb } = window.PDFLib;
+  // White backdrop so the QR remains scannable if the page has dark content underneath.
+  page.drawRectangle({ x, y, width: size, height: size, color: rgb(1, 1, 1) });
+  for (let r = 0; r < count; r++) {
+    for (let c = 0; c < count; c++) {
+      if (!qr.isDark(r, c)) continue;
+      page.drawRectangle({
+        x: x + c * cell,
+        y: y + (count - 1 - r) * cell,
+        width: cell + 0.15,   // tiny overlap so gaps don't appear when the viewer rounds
+        height: cell + 0.15,
+        color: rgb(0, 0, 0),
+      });
+    }
+  }
+}
+
+function drawIntegrityStamp(page, pageIndex, totalPages, fonts, opts) {
+  const { rgb, degrees } = window.PDFLib;
+  const { csv, signer, role, dateStr, qrPayload, pos, orientation } = opts;
+  const { width, height } = page.getSize();
+
+  const stripX = pos ? pos.x : 0;
+  const stripY = pos ? pos.y : 0;
+  const stripW = pos ? pos.w : width;
+  const stripH = pos ? pos.h : 42;
+  if (orientation === 'vertical') {
+    return drawStampVertical(page, pageIndex, totalPages, fonts, {
+      csv, signer, role, dateStr, qrPayload,
+      x: stripX, y: stripY, w: stripW, h: stripH,
+    });
+  }
+  const stripPad = 4;
+  const qrSize  = Math.min(stripH - 2 * stripPad, stripW / 3);
+  const qrX = stripX + stripPad;
+  const qrY = stripY + stripPad;
+  const total = totalPages;
+  const i = pageIndex;
+
+    // Frame lines around the strip (top edge + column separators)
+    page.drawLine({
+      start: { x: stripX, y: stripY + stripH + 0.5 },
+      end:   { x: stripX + stripW, y: stripY + stripH + 0.5 },
+      thickness: 0.4, color: rgb(0.55, 0.55, 0.55),
+    });
+    const textLeft  = qrX + qrSize + 8;
+    const rightBoxW = Math.min(96, stripW * 0.22);
+    const textRight = stripX + stripW - rightBoxW - 6;
+    page.drawLine({ start: { x: textLeft - 4, y: stripY + 2 }, end: { x: textLeft - 4, y: stripY + stripH }, thickness: 0.4, color: rgb(0.55, 0.55, 0.55) });
+    page.drawLine({ start: { x: textRight,    y: stripY + 2 }, end: { x: textRight,    y: stripY + stripH }, thickness: 0.4, color: rgb(0.55, 0.55, 0.55) });
+
+    drawQrCode(page, qrPayload, qrX, qrY, qrSize);
+
+    // Middle text: signer + CSV
+    const line1 = 'Digitally signed by: ' + signer;
+    const line2 = 'Verification code (CSV): ' + csv;
+    const midSize = Math.max(6, Math.min(9, stripH * 0.19));
+    page.drawText(line1, { x: textLeft, y: stripY + stripH - stripPad - midSize, size: midSize, font: fonts.helv,     color: rgb(0.1, 0.1, 0.1) });
+    page.drawText(line2, { x: textLeft, y: stripY + stripH - stripPad - midSize * 2 - 4, size: midSize, font: fonts.helvBold, color: rgb(0.1, 0.1, 0.1) });
+
+    // Right block: date + page numbers (the Granada-style "Page X of Y")
+    const rSize = Math.max(6, Math.min(9, stripH * 0.19));
+    const rX = textRight + 6;
+    page.drawText(dateStr, {
+      x: rX, y: stripY + stripH - stripPad - rSize,
+      size: rSize, font: fonts.helv, color: rgb(0.1, 0.1, 0.1),
+    });
+    const pageLabel = 'Page ' + (i + 1) + ' of ' + total;
+    page.drawText(pageLabel, {
+      x: rX, y: stripY + stripH - stripPad - rSize * 2 - 4,
+      size: rSize, font: fonts.helvBold, color: rgb(0.1, 0.1, 0.1),
+    });
+
+}
+
+function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
+  const { rgb, degrees } = window.PDFLib;
+  const { csv, signer, role, dateStr, qrPayload, x, y, w, h } = opts;
+  const pad = 4;
+  const qrSize = Math.min(w - 2 * pad, h / 3);
+
+  // Framing rule along the "long" side.
+  page.drawLine({
+    start: { x: x + w + 0.5, y: y },
+    end:   { x: x + w + 0.5, y: y + h },
+    thickness: 0.4, color: rgb(0.55, 0.55, 0.55),
+  });
+  // QR at the bottom of the vertical strip.
+  const qrX = x + (w - qrSize) / 2;
+  const qrY = y + pad;
+  drawQrCode(page, qrPayload, qrX, qrY, qrSize);
+
+  // Text drawn rotated 90° CCW so it reads bottom-to-top up the strip.
+  // Anchor: place the text baseline at x + w - pad, starting just above the QR.
+  const size = Math.max(6, Math.min(9, w * 0.34));
+  const textBaselineX = x + w - pad;
+  const textStartY = qrY + qrSize + pad;
+  const lineGap = size + 2;
+
+  const lines = [
+    { text: 'Signer: ' + signer,          font: fonts.helvBold, color: rgb(0.1, 0.1, 0.1) },
+    { text: 'Code: '   + csv,             font: fonts.helvBold, color: rgb(0.1, 0.1, 0.1) },
+    { text: dateStr,                      font: fonts.helv,     color: rgb(0.1, 0.1, 0.1) },
+    { text: 'Page ' + (pageIndex + 1) + ' of ' + totalPages, font: fonts.helv, color: rgb(0.1, 0.1, 0.1) },
+  ];
+  if (role) lines.splice(1, 0, { text: 'Role: ' + role, font: fonts.helv, color: rgb(0.3, 0.3, 0.3) });
+
+  let cursorX = textBaselineX;
+  const maxTextLen = h - (qrSize + 2 * pad);
+  for (const ln of lines) {
+    if (cursorX - lineGap < x + pad) break; // ran out of vertical room
+    // For rotate:90 in pdf-lib, (x, y) is the anchor of the pre-rotated text baseline.
+    page.drawText(ln.text, {
+      x: cursorX, y: textStartY,
+      size, font: ln.font, color: ln.color,
+      rotate: degrees(90),
+      maxWidth: maxTextLen,
+    });
+    cursorX -= lineGap;
+  }
+}
+
+async function makeSignedPdf({bytes, placements, lock, meta, reason, location, appearance, cert, key, sigPngU8, stamp}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
   } = window.PDFLib;
 
   const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: false });
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const fontItalic = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+  const fonts = {
+    helv:        await pdfDoc.embedFont(StandardFonts.Helvetica),
+    helvBold:    await pdfDoc.embedFont(StandardFonts.HelveticaBold),
+    helvOblique: await pdfDoc.embedFont(StandardFonts.HelveticaOblique),
+    times:       await pdfDoc.embedFont(StandardFonts.TimesRoman),
+    timesBold:   await pdfDoc.embedFont(StandardFonts.TimesRomanBold),
+    timesItalic: await pdfDoc.embedFont(StandardFonts.TimesRomanItalic),
+    courier:     await pdfDoc.embedFont(StandardFonts.Courier),
+  };
   const sigImgObj = sigPngU8 ? await pdfDoc.embedPng(sigPngU8) : null;
 
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
   const context = pdfDoc.context;
 
-  // 1. Draw visible appearance for each placement on its page.
-  for (const p of placements) {
+  // Split placements: text fields are stamped without a signature widget,
+  // digital signatures share one crypto payload but each get their own widget.
+  const sigPlacements   = placements.filter(p => p.type === 'digital');
+  const textPlacements  = placements.filter(p => p.type === 'text');
+  const stampPlacement  = placements.find(p => p.type === 'stamp') || null;
+
+  // If the source PDF has interactive form widgets and the user placed text
+  // over one, the widget (an annotation) renders on top of anything we draw
+  // on the page. Flatten the existing form so widgets become page content
+  // and our text sits above them.
+  if (textPlacements.length > 0) {
+    try {
+      const form = pdfDoc.getForm();
+      // Any pre-filled values are baked in; empty widgets disappear.
+      form.flatten();
+    } catch (e) { console.warn('form flatten skipped:', e && e.message); }
+  }
+
+  // 1. Draw visible appearance for signature placements.
+  for (const p of sigPlacements) {
     const page = pdfDoc.getPage(p.pageIndex);
     drawDigitalAppearance(page, p, {
-      font, fontBold, fontItalic, sigImgObj, meta, reason, location, dateStr,
+      fonts, sigImgObj, meta, reason, location, dateStr,
       appearance: p.appearance || appearance || 'text',
     });
+  }
+  // 2. Draw filled-in text fields.
+  for (const p of textPlacements) {
+    drawTextField(pdfDoc.getPage(p.pageIndex), p, fonts);
+  }
+  // 3. Optional integrity stamp — one draw per stamp placement.
+  if (stamp && stamp.enabled) {
+    const stamps = placements.filter(p => p.type === 'stamp');
+    const total = pdfDoc.getPageCount();
+    if (stamps.length === 0) {
+      // Fallback: full-width bottom band on every page.
+      for (let i = 0; i < total; i++) {
+        drawIntegrityStamp(pdfDoc.getPage(i), i, total, fonts, {
+          csv: stamp.csv, signer: stamp.signer || meta.name, role: stamp.role || '',
+          dateStr: stamp.dateStr || dateStr, qrPayload: stamp.qrPayload,
+          orientation: 'horizontal',
+        });
+      }
+    } else {
+      for (const sp of stamps) {
+        drawIntegrityStamp(pdfDoc.getPage(sp.pageIndex), sp.pageIndex, total, fonts, {
+          csv: stamp.csv, signer: stamp.signer || meta.name, role: stamp.role || '',
+          dateStr: stamp.dateStr || dateStr, qrPayload: stamp.qrPayload,
+          orientation: sp.orientation || 'horizontal',
+          pos: { x: sp.xPdf, y: sp.yPdf, w: sp.wPdf, h: sp.hPdf },
+        });
+      }
+    }
   }
 
   // 2. Signature dict (crypto payload).
@@ -1997,7 +2962,7 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
   const sigFieldRef = context.register(sigField);
 
   const annotsKey = PDFName.of('Annots');
-  for (const p of placements) {
+  for (const p of sigPlacements) {
     const page = pdfDoc.getPage(p.pageIndex);
     const widget = context.obj({
       Type: PDFName.of('Annot'),
@@ -2095,6 +3060,33 @@ $('btnSign').onclick = async () => {
 
     const appearance = document.querySelector('input[name="appearance"]:checked').value;
     const lock = document.querySelector('input[name="lockmode"]:checked').value === 'locked';
+    const stampEnabled = $('stampEnable').checked;
+
+    // Vault key + QR payload must exist BEFORE drawing the stamp, because the
+    // QR is drawn into the PDF that later gets encrypted with this same key.
+    let vault = null;
+    if (stampEnabled) {
+      const host = document.querySelector('input[name="vaultHost"]:checked').value;
+      if (host === 'github' && !ghVault.config) {
+        toast('Configure GitHub vault first (or switch to local .vault)', 'err');
+        return;
+      }
+      const key = new Uint8Array(32);
+      crypto.getRandomValues(key);
+      const csv = deriveCsv(key);
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+      const filename = csv + '.vault';
+      const url = host === 'github' ? ghRawUrl(ghVault.config, filename) : '';
+      const signer = unlocked.meta.name;
+      // Prefer explicit verifierUrl from GH config; otherwise where the tool is
+      // currently served (works out of the box on GH Pages).
+      const verifierUrl = (ghVault.config && ghVault.config.verifierUrl) || autoDetectVerifierUrl();
+      vault = {
+        host, key, csv, filename, url, signer, dateStr, verifierUrl,
+        qrPayload: buildVaultQr({ key, signer, dateStr, csv, url, verifierUrl }),
+      };
+    }
 
     const signed = await makeSignedPdf({
       bytes: doc.bytes,
@@ -2107,8 +3099,37 @@ $('btnSign').onclick = async () => {
       cert: unlocked.cert,
       key: unlocked.key,
       sigPngU8: sigImage.pngU8,
+      stamp: stampEnabled ? {
+        enabled: true,
+        role: ($('stampRole').value || '').trim(),
+        drawSide: $('stampSide').checked,
+        qrPayload: vault.qrPayload,
+        csv: vault.csv,
+        signer: vault.signer,
+        dateStr: vault.dateStr,
+      } : { enabled: false },
     });
-    const outName = doc.file.name.replace(/\.pdf$/i, '') + '-signed.pdf';
+    const outBase = doc.file.name.replace(/\.pdf$/i, '');
+    const outName = outBase + '-signed.pdf';
+
+    if (vault) {
+      $('btnSign').textContent = 'Encrypting vault…';
+      const cipher = await aesGcmEncrypt(vault.key, signed);
+      if (vault.host === 'github') {
+        $('btnSign').textContent = 'Uploading to GitHub…';
+        try {
+          await ghPutFile(ghVault.config, vault.filename, cipher, 'pdf-signer vault ' + vault.csv);
+          toast('Vault uploaded → ' + vault.url, 'ok');
+        } catch (e) {
+          toast('GitHub upload failed: ' + e.message + ' — saved local copy instead', 'err');
+          download(outBase + '.vault', cipher, 'application/octet-stream');
+        }
+      }
+      if (vault.host === 'local' || $('vaultKeepLocal').checked) {
+        download(outBase + '.vault', cipher, 'application/octet-stream');
+      }
+    }
+
     download(outName, signed, 'application/pdf');
     toast('Done: ' + outName, 'ok');
     $('btnSign').textContent = 'Sign & Download';
@@ -2207,6 +3228,7 @@ function verifyPdfSignatures(bytes) {
 
       const cn = cert.subject.getField('CN');
       const em = cert.subject.getField('E') || cert.subject.getField('emailAddress');
+      const certFp = certFingerprint(cert);
       results.push({
         cn: cn ? cn.value : '(unknown)',
         email: em ? em.value : '',
@@ -2216,6 +3238,7 @@ function verifyPdfSignatures(bytes) {
         totalCovered,
         docLength: bytes.length,
         cryptoValid: digestMatch && rsaOk,
+        certFp,
       });
     } catch (e) {
       results.push({ error: e.message, byteRange: br });
@@ -2311,6 +3334,210 @@ $('btnVerify').onclick = async () => {
   await modal({ title: 'Signature verification', body, confirmText: 'OK', cancelText: '' });
 };
 
+// Well-known verifier URL. This project (github.com/nored/pdf-signer) publishes
+// the same index.html on GitHub Pages so anyone scanning a QR from any clone
+// lands on a page that already knows how to verify — no local install needed.
+// The URL matches the repo layout: web/index.html served from Pages source
+// "main / (root)" → https://nored.github.io/pdf-signer/web/
+// If you fork, either change this to your own Pages URL, or set the
+// "verifierUrl" field in the GitHub vault config (per-identity override).
+const CANONICAL_VERIFIER_URL = 'https://nored.github.io/pdf-signer/web/';
+
+function autoDetectVerifierUrl() {
+  const cfg = ghVault.config && ghVault.config.verifierUrl;
+  if (cfg) return cfg;
+  return CANONICAL_VERIFIER_URL;
+}
+
+async function runAutoVerifyFromHash() {
+  const m = (location.hash || '').match(/^#v=([A-Za-z0-9_\-]+)$/);
+  if (!m) return false;
+
+  // Take over the page — a scanner should see a clean verifier, not the signer UI.
+  document.querySelector('.app').style.display = 'none';
+  const root = document.createElement('div');
+  root.className = 'verifier-root';
+  document.body.appendChild(root);
+  const esc = s => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function render(state, opts={}) {
+    const glyph = state === 'valid' ? '✓' : state === 'modified' ? '⚠' : state === 'broken' ? '✕' : '…';
+    const label = opts.label || (state === 'valid' ? 'Verified' : state === 'modified' ? 'Modified after signing' : state === 'broken' ? 'Invalid' : 'Verifying…');
+    const detail = opts.detail || '';
+    const fieldsHtml = opts.fields ? '<dl class="verifier-fields">' + Object.entries(opts.fields).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v || '<span style="color:var(--muted)">(none)</span>'}</dd>`).join('') + '</dl>' : '';
+    const ctaHtml = opts.cta || '';
+    root.innerHTML = `
+      <div class="verifier-brand">pdf-signer verifier</div>
+      <h1 class="verifier-title">Signed document check</h1>
+      <div class="verifier-sub">This page decrypts an encrypted vault carried in the QR you scanned, then verifies the cryptographic PDF signature inside it — entirely in your browser. Nothing is uploaded.</div>
+      <div class="verifier-card">
+        <div class="verifier-status ${state}">
+          <div class="glyph">${glyph}</div>
+          <div class="text">
+            <span class="label">${esc(label)}</span>
+            ${detail ? `<span class="detail">${detail}</span>` : ''}
+          </div>
+        </div>
+        ${fieldsHtml}
+        <div class="verifier-cta">${ctaHtml}</div>
+      </div>
+      <div class="verifier-footer">
+        Powered by <a href="https://github.com/nored/pdf-signer" target="_blank" rel="noopener">pdf-signer</a> ·
+        <a href="#" id="backToTool">Open the full pdf-signer tool</a>
+      </div>
+    `;
+    const back = root.querySelector('#backToTool');
+    if (back) back.onclick = ev => {
+      ev.preventDefault();
+      history.replaceState(null, '', location.pathname + location.search);
+      root.remove();
+      document.querySelector('.app').style.display = '';
+    };
+    // Wire any dynamic buttons the caller injected.
+    if (opts.wire) opts.wire(root);
+  }
+
+  let parsed;
+  try { parsed = decodeVaultPayload(m[1]); }
+  catch (e) {
+    render('broken', {
+      label: 'Bad QR payload',
+      detail: 'The scanned QR is not a pdf-signer vault receipt: ' + e.message,
+    });
+    return true;
+  }
+
+  const initialFields = {
+    'Signer (per QR)':  esc(parsed.signer),
+    'Signed at':        esc(parsed.dateStr),
+    'CSV in QR':        parsed.csv ? `<code>${esc(parsed.csv)}</code>` : '',
+    'Vault URL':        parsed.url ? `<code>${esc(parsed.url)}</code>` : '<span style="color:var(--muted)">(none — pick the local .vault file)</span>',
+  };
+  render('pending', { detail: parsed.url ? 'Fetching the encrypted vault…' : 'Waiting for local .vault file…', fields: initialFields });
+
+  try {
+    let cipherU8 = null;
+    if (parsed.url) {
+      const res = await fetch(parsed.url);
+      if (!res.ok) throw new Error('Vault fetch: HTTP ' + res.status);
+      cipherU8 = new Uint8Array(await res.arrayBuffer());
+    } else {
+      const f = await pickFile('.vault,application/octet-stream,*');
+      if (!f) {
+        render('pending', { label: 'Cancelled', detail: 'No .vault file selected.', fields: initialFields,
+          cta: `<button id="btnPick" class="primary">Pick .vault file</button>`,
+          wire: r => { r.querySelector('#btnPick').onclick = () => runAutoVerifyFromHash(); } });
+        return true;
+      }
+      cipherU8 = new Uint8Array(await f.arrayBuffer());
+    }
+
+    render('pending', { detail: 'Decrypting and checking the signature…', fields: initialFields });
+
+    const plaintext = await aesGcmDecrypt(parsed.keyBytes, cipherU8);
+    const results = verifyPdfSignatures(plaintext);
+    const csvOk   = parsed.csv && parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes);
+    const state = results.length && results.every(r => r.cryptoValid && r.totalCovered) ? 'valid'
+                : results.length && results.every(r => r.cryptoValid) ? 'modified'
+                : 'broken';
+    const first = results[0] || {};
+    const detail = state === 'valid'    ? 'Signature is cryptographically valid and covers the entire document.'
+                 : state === 'modified' ? 'Signature is valid, but bytes were added after signing. Whoever forwarded the file may have appended content.'
+                 : first.error          ? 'Signature could not be verified: ' + first.error
+                                        : 'The signed byte range does not match the cryptographic digest. Contents have been altered.';
+
+    const csvRow = parsed.csv
+      ? (csvOk ? '<span style="color:var(--good)">matches</span> the AES key in the QR'
+              : '<span style="color:var(--danger)">does NOT match</span> — the QR was tampered with')
+      : '<span style="color:var(--muted)">(no CSV in QR)</span>';
+
+    render(state, {
+      detail,
+      fields: {
+        'Result':          `<b style="color:${state === 'valid' ? 'var(--good)' : state === 'modified' ? '#b57920' : 'var(--danger)'};">${state.toUpperCase()}</b>`,
+        'Signer (in cert)': first.cn ? `<b>${esc(first.cn)}</b>${first.email ? ' &lt;' + esc(first.email) + '&gt;' : ''}` : '',
+        'Signed at':        first.signingTime ? esc(fmtSigningTime(first.signingTime)) : '',
+        'Cert SHA-1':       first.certFp ? `<code>${esc(first.certFp)}</code>` : '',
+        'CSV cross-check':  csvRow,
+        'Document size':    plaintext.length + ' bytes',
+      },
+      cta: `
+        <button id="btnDownload" class="primary">Download decrypted PDF</button>
+        <button id="btnDetails">See raw verification details</button>
+      `,
+      wire: r => {
+        r.querySelector('#btnDownload').onclick = () => download('vault-' + (parsed.csv || 'decrypted') + '.pdf', plaintext, 'application/pdf');
+        r.querySelector('#btnDetails').onclick = async () => {
+          const body = document.createElement('div');
+          body.innerHTML = verifyResultsHtml(results);
+          await modal({ title: 'Signature verification — raw', body, confirmText: 'Close', cancelText: '' });
+        };
+      },
+    });
+  } catch (e) {
+    render('broken', {
+      label: 'Verification failed',
+      detail: e.message,
+      fields: initialFields,
+    });
+  }
+  return true;
+}
+
+$('btnVerifyVault').onclick = async () => {
+  const body = document.createElement('div');
+  body.innerHTML = `
+    <p class="hint">Paste the QR content (multi-line, exactly as a scanner reads it). If the QR carries a <b>url=</b> field, the tool will fetch the vault; otherwise you'll be asked for the local .vault file.</p>
+    <textarea id="qrText" rows="6" placeholder="pdfsigner-vault v1&#10;url=https://raw.githubusercontent.com/…/ABCD…vault&#10;key=…&#10;signer=…&#10;signed=…&#10;csv=…" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px"></textarea>
+  `;
+  const r = await modal({ title: 'Verify from vault QR', body, confirmText: 'Continue' });
+  if (!r) return;
+  let parsed;
+  try { parsed = parseVaultQr(r.qrText); }
+  catch (e) { return toast(e.message, 'err'); }
+
+  let cipherU8 = null;
+  if (parsed.url) {
+    try {
+      const res = await fetch(parsed.url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      cipherU8 = new Uint8Array(await res.arrayBuffer());
+    } catch (e) {
+      const ok = await modal({
+        title: 'Fetch failed',
+        body: `Could not fetch ${parsed.url} (${e.message}). Pick the local .vault file instead?`,
+        confirmText: 'Pick local file',
+      });
+      if (!ok) return;
+    }
+  }
+  if (!cipherU8) {
+    const f = await pickFile('.vault,application/octet-stream,*');
+    if (!f) return;
+    cipherU8 = new Uint8Array(await f.arrayBuffer());
+  }
+
+  let plaintext;
+  try { plaintext = await aesGcmDecrypt(parsed.keyBytes, cipherU8); }
+  catch (e) { return toast('Decryption failed: ' + e.message + ' (wrong key or corrupted vault)', 'err'); }
+
+  const results = verifyPdfSignatures(plaintext);
+  const resBody = document.createElement('div');
+  const csvCheck = parsed.csv
+    ? `<p style="margin:8px 0"><b>Vault CSV in QR:</b> <code>${parsed.csv}</code> · <b>Recomputed from key:</b> <code>${deriveCsv(parsed.keyBytes)}</code> — ${
+        parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes) ? '<span style="color:var(--good)">match</span>' : '<span style="color:var(--danger)">MISMATCH</span>'
+      }</p>` : '';
+  resBody.innerHTML = `<p style="margin-bottom:8px"><b>Decrypted PDF</b> · ${plaintext.length} bytes · signer per QR: <b>${(parsed.signer || '(none)').replace(/</g,'&lt;')}</b></p>${csvCheck}` + verifyResultsHtml(results);
+  const dl = document.createElement('button');
+  dl.className = 'small';
+  dl.style.width = 'auto';
+  dl.style.marginRight = '6px';
+  dl.textContent = 'Download decrypted PDF';
+  dl.onclick = ev => { ev.preventDefault(); download('vault-' + (parsed.csv || 'decrypted') + '.pdf', plaintext, 'application/pdf'); };
+  resBody.appendChild(dl);
+  await modal({ title: 'Vault verification', body: resBody, confirmText: 'OK', cancelText: '' });
+};
+
 // Also expose showVerifyModal via clicking the top banner.
 $('verifyBanner').addEventListener('click', e => {
   if (e.target.closest('.close')) return;
@@ -2371,9 +3598,23 @@ try {
     const had = await loadIdentitiesFromDb();
     if (had && identity.meta) toast(`Loaded identity: ${identity.label}`);
   } catch (e) { console.warn('idb load failed', e); }
+  try { await ghMigrateGlobalIfAny(); } catch (e) { console.warn('gh migrate failed', e); }
+  wireSettingsAutoSave();
+  ghSyncFromActiveIdentity();
+  loadSettingsForActiveIdentity();
   renderIdentity();
   renderSigImage();
+  // If we arrived via a QR-scan URL (#v=…), skip the normal UI flow and jump
+  // straight to verification.
+  try { await runAutoVerifyFromHash(); } catch (e) { console.warn('auto-verify failed', e); }
 })();
+
+document.querySelectorAll('input[name="vaultHost"]').forEach(r => {
+  r.addEventListener('change', () => {
+    const v = document.querySelector('input[name="vaultHost"]:checked').value;
+    $('ghVaultBlock').style.display = v === 'github' ? '' : 'none';
+  });
+});
 </script>
 </body>
 </html>
