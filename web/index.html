@@ -3608,6 +3608,37 @@ function autoDetectVerifierUrl() {
   return CANONICAL_VERIFIER_URL;
 }
 
+async function sha256Hex(u8) {
+  const buf = await crypto.subtle.digest('SHA-256', u8);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function compareVerifierWithLocal(root, vaultPlaintext) {
+  const f = await pickFile('application/pdf,.pdf');
+  if (!f) return;
+  const local = new Uint8Array(await f.arrayBuffer());
+  const [vaultHash, localHash] = await Promise.all([sha256Hex(vaultPlaintext), sha256Hex(local)]);
+  const match = vaultHash === localHash;
+  const body = document.createElement('div');
+  body.innerHTML = `
+    <div style="text-align:center; padding:14px 0;">
+      <div style="font-size:26px; font-weight:700; color:${match ? 'var(--good)' : 'var(--danger)'};">
+        ${match ? '✓ MATCH' : '✕ DOES NOT MATCH'}
+      </div>
+      <div style="color:var(--muted); font-size:13px; margin-top:8px;">
+        ${match
+          ? 'Byte-for-byte identical to what was cryptographically signed. Whatever this file contains, the signer put their signature on it.'
+          : '<b style="color:var(--danger)">This file is not what was signed.</b> Someone modified it after signing. The QR / vault attest to the file inside the vault, not to this one. Do not treat this file as signed.'}
+      </div>
+    </div>
+    <dl class="verifier-fields">
+      <dt>Local file</dt><dd><code>${f.name.replace(/</g,'&lt;')}</code><br><code style="font-size:11px">${localHash}</code></dd>
+      <dt>Signed (vault)</dt><dd><code style="font-size:11px">${vaultHash}</code></dd>
+    </dl>
+  `;
+  await modal({ title: 'Local PDF vs. signed document', body, confirmText: 'Close', cancelText: '' });
+}
+
 async function renderVerifierPreview(root, plaintextU8) {
   const card = root.querySelector('.verifier-card');
   if (!card) { console.warn('verifier preview: no .verifier-card'); return; }
@@ -3766,7 +3797,8 @@ async function runAutoVerifyFromHash() {
         'Document size':    plaintext.length + ' bytes',
       },
       cta: `
-        <button id="btnDownload" class="primary">Download decrypted PDF</button>
+        <button id="btnCompareLocal" class="primary">Check a local PDF matches this</button>
+        <button id="btnDownload">Download decrypted PDF</button>
         <button id="btnDetails">See raw verification details</button>
       `,
       wire: r => {
@@ -3776,7 +3808,15 @@ async function runAutoVerifyFromHash() {
           body.innerHTML = verifyResultsHtml(results);
           await modal({ title: 'Signature verification — raw', body, confirmText: 'Close', cancelText: '' });
         };
+        r.querySelector('#btnCompareLocal').onclick = () => compareVerifierWithLocal(r, plaintext);
         renderVerifierPreview(r, plaintext);
+        // Prominent notice about the vault vs. local-file gap.
+        const card = r.querySelector('.verifier-card');
+        const notice = document.createElement('div');
+        notice.style.cssText = 'margin-top:14px; padding:12px 14px; border:1px solid var(--border); border-left: 3px solid var(--accent); background: rgba(47,111,235,.06); border-radius:6px; font-size:13px; line-height:1.5;';
+        notice.innerHTML = '<b>This is the file that was signed.</b> If someone handed you a PDF file (not just a printout), click <b>Check a local PDF matches this</b> to make sure it is the same document — a copy that was altered after signing will NOT match, no matter what the printout claims.';
+        const cta = card.querySelector('.verifier-cta');
+        if (cta) cta.after(notice); else card.appendChild(notice);
       },
     });
   } catch (e) {
