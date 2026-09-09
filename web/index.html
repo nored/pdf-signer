@@ -2979,8 +2979,39 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
   const fieldsToFill = formFields ? Object.values(formFields).filter(f => f.value != null && f.value !== '') : [];
   const shouldFlatten = fieldsToFill.length > 0 || textPlacements.length > 0;
   if (shouldFlatten) {
-    try { pdfDoc.getForm().flatten(); }
-    catch (e) { console.warn('form flatten skipped:', e && e.message); }
+    // pdf-lib's form.flatten() didn't reliably remove widget annotations on
+    // all PDFs — Firefox kept rendering the empty widget on top of the text
+    // we drew below. Guarantee removal in two passes:
+    //  1. removeField for every declared field (drops widgets + form entry)
+    //  2. sweep each page's /Annots array for any lingering /Widget subtype
+    try {
+      const form = pdfDoc.getForm();
+      for (const f of form.getFields()) {
+        try { form.removeField(f); } catch (e) { /* keep going */ }
+      }
+    } catch (e) { console.warn('form.removeField sweep failed:', e && e.message); }
+
+    try {
+      const { PDFName } = window.PDFLib;
+      const annotsKey  = PDFName.of('Annots');
+      const subtypeKey = PDFName.of('Subtype');
+      const widgetKey  = PDFName.of('Widget');
+      for (const page of pdfDoc.getPages()) {
+        let annots = page.node.get(annotsKey);
+        if (!annots) continue;
+        annots = pdfDoc.context.lookup(annots);
+        if (!annots || typeof annots.asArray !== 'function') continue;
+        const arr = annots.asArray();
+        for (let i = arr.length - 1; i >= 0; i--) {
+          const looked = pdfDoc.context.lookup(arr[i]);
+          if (!looked || typeof looked.get !== 'function') continue;
+          const subtype = looked.get(subtypeKey);
+          if (subtype && subtype === widgetKey) annots.remove(i);
+          else if (subtype && typeof subtype.decodeText === 'function' && subtype.decodeText() === 'Widget') annots.remove(i);
+          else if (subtype && String(subtype) === String(widgetKey)) annots.remove(i);
+        }
+      }
+    } catch (e) { console.warn('widget annot sweep failed:', e && e.message); }
   }
   if (fieldsToFill.length > 0) {
     const { rgb } = window.PDFLib;
