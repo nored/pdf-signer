@@ -2948,8 +2948,11 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
   const stampPlacement  = placements.find(p => p.type === 'stamp') || null;
 
   // Fill any interactive PDF form fields the user typed into (via the
-  // editable overlays), then flatten so the values become page content and
-  // any remaining widgets can't render on top of our own text/signature.
+  // editable overlays), then regenerate appearance streams (pdf-lib's
+  // setText only updates the value, not the visible appearance — so
+  // flattening without updateFieldAppearances bakes in an empty box),
+  // then flatten so the values become page content and any remaining
+  // widgets can't render on top of our own text/signature.
   const fieldsToFill = formFields ? Object.values(formFields).filter(f => f.value != null && f.value !== '') : [];
   const shouldFlatten = fieldsToFill.length > 0 || textPlacements.length > 0;
   if (fieldsToFill.length > 0) {
@@ -2959,6 +2962,8 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
         try { form.getTextField(f.name).setText(String(f.value)); }
         catch (e) { console.warn('form fill failed for', f.name, e && e.message); }
       }
+      try { form.updateFieldAppearances(fonts.helv); }
+      catch (e) { console.warn('updateFieldAppearances failed:', e && e.message); }
     } catch (e) { console.warn('form fill skipped:', e && e.message); }
   }
   if (shouldFlatten) {
