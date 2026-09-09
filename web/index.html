@@ -1644,6 +1644,7 @@ async function openPdf(file) {
   $('docName').textContent = file.name;
   $('signSection').style.opacity = 1;
   $('signSection').style.pointerEvents = 'auto';
+  setTool('sig');
   let verifyResults = [];
   try { verifyResults = verifyPdfSignatures(doc.bytes); }
   catch (e) { console.warn('verify error', e); verifyResults = [{ error: e.message, byteRange: [0,0,0,0] }]; }
