@@ -2349,14 +2349,16 @@ $('btnRotateStamp').onclick = () => {
   pushUndo();
   const wasHorizontal = (p.orientation || 'horizontal') === 'horizontal';
   p.orientation = wasHorizontal ? 'vertical' : 'horizontal';
-  // Swap width/height so the box visually rotates around the drag anchor.
-  const cx = p.xPdf + p.wPdf / 2;
-  const cy = p.yPdf + p.hPdf / 2;
+  // Swap the box dimensions but keep the bottom-left corner where it is.
+  // (Centering the rotation could push a bottom-edge stamp off the page.)
   const newW = p.hPdf, newH = p.wPdf;
-  p.xPdf = cx - newW / 2;
-  p.yPdf = cy - newH / 2;
   p.wPdf = newW;
   p.hPdf = newH;
+  // If the swap sends the box past the right edge or top of the page,
+  // slide it back onto the page.
+  const [_,__,pageW, pageH] = doc.pageMeta[p.pageIndex].viewport.viewBox;
+  if (p.xPdf + p.wPdf > pageW) p.xPdf = Math.max(0, pageW - p.wPdf);
+  if (p.yPdf + p.hPdf > pageH) p.yPdf = Math.max(0, pageH - p.hPdf);
   positionPlacementFromPdf(p);
   updateStampRotateRow();
 };
