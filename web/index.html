@@ -3810,22 +3810,24 @@ async function runAutoVerifyFromHash() {
           await modal({ title: 'Signature verification — raw', body, confirmText: 'Close', cancelText: '' });
         };
         renderVerifierPreview(r, plaintext);
-        // Emphasize that the vault copy IS the document. UGR does the same:
+        // Emphasize the vault copy IS the document. UGR does the same:
         // their server-hosted PDF is the authoritative one; no local compare.
-        const card = r.querySelector('.verifier-card');
-        const notice = document.createElement('div');
-        notice.style.cssText = 'margin-top:14px; padding:12px 14px; border-left: 3px solid var(--good); background: rgba(31,122,58,.08); border-radius: 0 6px 6px 0; font-size:13px; line-height:1.55; color: var(--text);';
-        notice.innerHTML = '<b>The document shown above is the signed original.</b> Any other copy — a printout, a scanned page, a PDF someone emailed you — is a derivative. Trust only what this page shows.';
-        const cta = card.querySelector('.verifier-cta');
-        if (cta) cta.after(notice); else card.appendChild(notice);
-        // Escape hatch for the paranoid: a small link that opens the byte-
-        // comparison flow. Clarifies it only works on a DIGITAL copy — a
-        // scanned printout will always mismatch on bytes.
-        const link = document.createElement('div');
-        link.style.cssText = 'margin-top:10px; font-size:12px; color:var(--muted); text-align:center;';
-        link.innerHTML = 'Received a digital copy as well? <a href="#" id="btnCompareLocal" style="color:var(--accent); text-decoration:none;">Byte-compare it with this original</a> (won\'t work for scanned pages).';
-        notice.after(link);
-        r.querySelector('#btnCompareLocal').onclick = ev => { ev.preventDefault(); compareVerifierWithLocal(r, plaintext); };
+        // Inject the notice inside the preview panel so "this document"
+        // has a clear referent — the rendered pages right below it.
+        const previewPanel = r.querySelector('.verifier-preview');
+        if (previewPanel) {
+          const notice = document.createElement('div');
+          notice.style.cssText = 'padding:12px 14px; margin-bottom:10px; border-left: 3px solid var(--good); background: rgba(31,122,58,.08); border-radius: 0 6px 6px 0; font-size:13px; line-height:1.55; color: var(--text);';
+          notice.innerHTML = '<b>This is the signed original.</b> Any other copy — a printout, a scanned page, a PDF someone emailed you — is a derivative. Trust only what this page shows.';
+          const link = document.createElement('div');
+          link.style.cssText = 'margin-top:8px; font-size:12px; color:var(--muted);';
+          link.innerHTML = 'Received a digital copy as well? <a href="#" id="btnCompareLocal" style="color:var(--accent); text-decoration:none;">Byte-compare it with this original</a> (won\'t work for scanned pages).';
+          notice.appendChild(link);
+          // Slot in right after the "Decrypted document" heading, before the pages.
+          const h3 = previewPanel.querySelector('h3');
+          if (h3) h3.after(notice); else previewPanel.prepend(notice);
+          previewPanel.querySelector('#btnCompareLocal').onclick = ev => { ev.preventDefault(); compareVerifierWithLocal(r, plaintext); };
+        }
       },
     });
   } catch (e) {
