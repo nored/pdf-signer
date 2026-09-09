@@ -2141,9 +2141,9 @@ $('stampEnable').addEventListener('change', () => {
 function defaultStampBox(pageMeta, orientation='horizontal') {
   const [_,__,pageW, pageH] = pageMeta.viewport.viewBox;
   if (orientation === 'vertical') {
-    return { xPdf: 4, yPdf: 40, wPdf: 22, hPdf: pageH - 80 };
+    return { xPdf: 4, yPdf: 40, wPdf: 32, hPdf: pageH - 80 };
   }
-  return { xPdf: 0, yPdf: 0, wPdf: pageW, hPdf: 42 };
+  return { xPdf: 0, yPdf: 0, wPdf: pageW, hPdf: 58 };
 }
 function autoSeedStampsIfNone() {
   if (!doc.pdfjs) return;
@@ -2935,7 +2935,7 @@ function drawIntegrityStamp(page, pageIndex, totalPages, fonts, opts) {
   const stripX = pos ? pos.x : 0;
   const stripY = pos ? pos.y : 0;
   const stripW = pos ? pos.w : width;
-  const stripH = pos ? pos.h : 42;
+  const stripH = pos ? pos.h : 58;
   if (orientation === 'vertical') {
     return drawStampVertical(page, pageIndex, totalPages, fonts, {
       csv, signer, role, dateStr, qrPayload,
@@ -2943,7 +2943,8 @@ function drawIntegrityStamp(page, pageIndex, totalPages, fonts, opts) {
     });
   }
   const stripPad = 4;
-  const qrSize  = Math.min(stripH - 2 * stripPad, stripW / 3);
+  // Fill the strip height with the QR so it stays scannable without zoom.
+  const qrSize  = Math.max(24, Math.min(stripH - 2 * stripPad, stripW * 0.45));
   const qrX = stripX + stripPad;
   const qrY = stripY + stripPad;
   const total = totalPages;
@@ -2989,7 +2990,7 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   const { rgb, degrees } = window.PDFLib;
   const { csv, signer, role, dateStr, qrPayload, x, y, w, h } = opts;
   const pad = 4;
-  const qrSize = Math.min(w - 2 * pad, h / 3);
+  const qrSize = Math.max(24, Math.min(w - 2 * pad, h / 2));
 
   // Framing rule along the "long" side.
   page.drawLine({
