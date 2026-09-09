@@ -700,7 +700,7 @@
       <button id="btnCloseDoc" title="Close this document and go back to the start screen">Close</button>
     </div>
     <div class="floating-tools" id="floatingTools" style="display:none">
-      <button id="btnPlaceSig" class="active" title="Place a signature">✍ Signature</button>
+      <button id="btnPlaceSig" title="Place a signature">✍ Signature</button>
       <button id="btnPlaceText" title="Place a text field">T Text</button>
       <button id="btnPlaceStamp" title="Place a verification stamp">▤ Stamp</button>
       <span class="sep"></span>
@@ -1644,7 +1644,7 @@ async function openPdf(file) {
   $('docName').textContent = file.name;
   $('signSection').style.opacity = 1;
   $('signSection').style.pointerEvents = 'auto';
-  setTool('sig');
+  setTool(null);
   let verifyResults = [];
   try { verifyResults = verifyPdfSignatures(doc.bytes); }
   catch (e) { console.warn('verify error', e); verifyResults = [{ error: e.message, byteRange: [0,0,0,0] }]; }
