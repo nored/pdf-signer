@@ -817,6 +817,17 @@ function modal({title, body, confirmText='OK', cancelText='Cancel', danger=false
     btns.appendChild(ok);
     box.appendChild(btns);
     root.appendChild(box);
+    // Submit on Enter from any input; cancel on Escape.
+    // Textareas keep normal Enter behaviour (newline).
+    box.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter' && ev.target.tagName === 'INPUT' && ev.target.type !== 'button') {
+        ev.preventDefault();
+        ok.click();
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        if (cancelText) cancel.click();
+      }
+    });
     setTimeout(() => box.querySelector('input')?.focus(), 30);
   });
 }
