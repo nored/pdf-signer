@@ -1528,7 +1528,67 @@ async function openPdf(file) {
   renderVerifyBanner(verifyResults, hasSigField && !hasSigPayload && verifyResults.length === 0);
   await buildPageList();
   await addSignatureStatusOverlays(verifyResults, hasSigPayload, hasSigField && !hasSigPayload);
+  await renderFormFieldOverlays();
+  if ($('stampEnable').checked) autoSeedStampsIfNone();
   updateSignButton();
+}
+
+// Render editable overlays over each interactive text form widget on every
+// page. Typed values are persisted in doc.formFields and written back into
+// the PDF at sign time (see makeSignedPdf).
+async function renderFormFieldOverlays() {
+  for (const meta of doc.pageMeta) {
+    let anns = [];
+    try { anns = await meta.page.getAnnotations(); } catch (_) { continue; }
+    for (const a of anns) {
+      if (a.annotationType !== 20) continue;              // WIDGET
+      const ft = (a.fieldType || '').toLowerCase();
+      if (ft !== 'tx') continue;                          // text only for now
+      if (a.readOnly) continue;
+      if (!a.rect || a.rect.length < 4) continue;
+
+      const name = a.fieldName || ('unnamed-' + meta.index + '-' + (a.id || Math.random().toString(36).slice(2, 8)));
+      const initialVal = (doc.formFields[name] && doc.formFields[name].value != null)
+        ? doc.formFields[name].value
+        : (a.fieldValue || '');
+      doc.formFields[name] = { name, pageIndex: meta.index, rect: a.rect, value: initialVal, multiLine: !!a.multiLine };
+
+      const [x1, y1, x2, y2] = a.rect;
+      const [cx1, cy1] = meta.viewport.convertToViewportPoint(x1, y2);
+      const [cx2, cy2] = meta.viewport.convertToViewportPoint(x2, y1);
+      const left = Math.min(cx1, cx2), top = Math.min(cy1, cy2);
+      const w = Math.abs(cx2 - cx1), h = Math.abs(cy2 - cy1);
+
+      const el = document.createElement(a.multiLine ? 'textarea' : 'input');
+      if (!a.multiLine) el.type = 'text';
+      el.value = initialVal;
+      el.title = 'PDF form field: ' + name;
+      const fontSize = Math.max(9, Math.min(a.multiLine ? 12 : Math.round(h * 0.6), 16));
+      el.style.cssText = [
+        'position:absolute',
+        'left:' + left + 'px',
+        'top:' + top + 'px',
+        'width:' + w + 'px',
+        'height:' + h + 'px',
+        'padding:0 3px',
+        'margin:0',
+        'border:1.5px dashed rgba(47,111,235,.55)',
+        'background: rgba(47,111,235,.06)',
+        'color:#000',
+        'font: ' + fontSize + 'px -apple-system, "Segoe UI", Roboto, sans-serif',
+        'line-height:' + (a.multiLine ? '1.2' : (h + 'px')),
+        'z-index:4',
+        'box-sizing:border-box',
+        'resize:none',
+        'outline:none',
+      ].join(';');
+      el.addEventListener('input', () => { doc.formFields[name].value = el.value; });
+      // Don't propagate clicks that would otherwise create a placement.
+      el.addEventListener('mousedown', ev => ev.stopPropagation());
+      el.addEventListener('click', ev => ev.stopPropagation());
+      meta.wrapEl.appendChild(el);
+    }
+  }
 }
 
 // Non-invasive hint: mark empty signature form fields with a small dashed
@@ -1711,6 +1771,19 @@ async function rerenderAtScale() {
   // Preserve placements' PDF coords; rebuild page list, then re-mount placements.
   await buildPageList();
   for (const p of doc.placements) attachPlacementToPage(p);
+  // Re-render form field overlays too — buildPageList nuked them.
+  const preserved = doc.formFields;
+  doc.formFields = {};
+  await renderFormFieldOverlays();
+  // Carry typed values back onto the freshly-rendered inputs.
+  for (const [name, prev] of Object.entries(preserved)) {
+    if (doc.formFields[name] && prev.value != null && prev.value !== '') {
+      doc.formFields[name].value = prev.value;
+      const meta = doc.pageMeta[doc.formFields[name].pageIndex];
+      const inputs = meta && meta.wrapEl.querySelectorAll('input, textarea');
+      if (inputs) for (const inp of inputs) if (inp.title === 'PDF form field: ' + name) inp.value = prev.value;
+    }
+  }
   refreshSelectedPlacement();
 }
 
@@ -2846,7 +2919,7 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   }
 }
 
-async function makeSignedPdf({bytes, placements, lock, meta, reason, location, appearance, cert, key, sigPngU8, stamp}) {
+async function makeSignedPdf({bytes, placements, lock, meta, reason, location, appearance, cert, key, sigPngU8, stamp, formFields}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
@@ -2874,16 +2947,23 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
   const textPlacements  = placements.filter(p => p.type === 'text');
   const stampPlacement  = placements.find(p => p.type === 'stamp') || null;
 
-  // If the source PDF has interactive form widgets and the user placed text
-  // over one, the widget (an annotation) renders on top of anything we draw
-  // on the page. Flatten the existing form so widgets become page content
-  // and our text sits above them.
-  if (textPlacements.length > 0) {
+  // Fill any interactive PDF form fields the user typed into (via the
+  // editable overlays), then flatten so the values become page content and
+  // any remaining widgets can't render on top of our own text/signature.
+  const fieldsToFill = formFields ? Object.values(formFields).filter(f => f.value != null && f.value !== '') : [];
+  const shouldFlatten = fieldsToFill.length > 0 || textPlacements.length > 0;
+  if (fieldsToFill.length > 0) {
     try {
       const form = pdfDoc.getForm();
-      // Any pre-filled values are baked in; empty widgets disappear.
-      form.flatten();
-    } catch (e) { console.warn('form flatten skipped:', e && e.message); }
+      for (const f of fieldsToFill) {
+        try { form.getTextField(f.name).setText(String(f.value)); }
+        catch (e) { console.warn('form fill failed for', f.name, e && e.message); }
+      }
+    } catch (e) { console.warn('form fill skipped:', e && e.message); }
+  }
+  if (shouldFlatten) {
+    try { pdfDoc.getForm().flatten(); }
+    catch (e) { console.warn('form flatten skipped:', e && e.message); }
   }
 
   // 1. Draw visible appearance for signature placements.
@@ -3102,12 +3182,12 @@ $('btnSign').onclick = async () => {
       stamp: stampEnabled ? {
         enabled: true,
         role: ($('stampRole').value || '').trim(),
-        drawSide: $('stampSide').checked,
         qrPayload: vault.qrPayload,
         csv: vault.csv,
         signer: vault.signer,
         dateStr: vault.dateStr,
       } : { enabled: false },
+      formFields: doc.formFields,
     });
     const outBase = doc.file.name.replace(/\.pdf$/i, '');
     const outName = outBase + '-signed.pdf';
