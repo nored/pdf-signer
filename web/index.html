@@ -3529,7 +3529,7 @@ function renderVerifyBanner(results, isUnsignedField=false) {
   } else {
     state = overallVerifyState(results);
     label = state === 'valid'    ? { badge: '✓ Valid', text: 'signed, unchanged since signing' }
-          : state === 'modified' ? { badge: '⚠ Modified', text: 'signed, but bytes exist outside the signed range (added after signing)' }
+          : state === 'modified' ? { badge: '⚠ Voided', text: 'the document was modified after signing — the signature no longer covers the whole file and should NOT be treated as valid' }
           :                        { badge: '✕ Broken', text: 'signature does NOT match the document — the signed bytes have been altered' };
   }
   banner.className = 'verify-banner ' + state;
@@ -3566,7 +3566,7 @@ function verifyResultsHtml(results, isUnsignedField=false) {
                 : !r.totalCovered ? 'modified'
                 : 'valid';
     const title = state === 'valid'    ? '✓ Signature is valid'
-                : state === 'modified' ? '⚠ Signature valid, but the document was modified after signing'
+                : state === 'modified' ? '⚠ Signature is VOIDED — document was modified after signing'
                 : state === 'unsigned' ? '? Empty signature field'
                 :                        '✕ Signature is INVALID — document altered';
     const details = r.error
@@ -3666,7 +3666,7 @@ async function runAutoVerifyFromHash() {
 
   function render(state, opts={}) {
     const glyph = state === 'valid' ? '✓' : state === 'modified' ? '⚠' : state === 'broken' ? '✕' : '…';
-    const label = opts.label || (state === 'valid' ? 'Verified' : state === 'modified' ? 'Modified after signing' : state === 'broken' ? 'Invalid' : 'Verifying…');
+    const label = opts.label || (state === 'valid' ? 'Verified' : state === 'modified' ? 'Voided — modified after signing' : state === 'broken' ? 'Invalid' : 'Verifying…');
     const detail = opts.detail || '';
     const fieldsHtml = opts.fields ? '<dl class="verifier-fields">' + Object.entries(opts.fields).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v || '<span style="color:var(--muted)">(none)</span>'}</dd>`).join('') + '</dl>' : '';
     const ctaHtml = opts.cta || '';
@@ -3746,7 +3746,7 @@ async function runAutoVerifyFromHash() {
                 : 'broken';
     const first = results[0] || {};
     const detail = state === 'valid'    ? 'Signature is cryptographically valid and covers the entire document.'
-                 : state === 'modified' ? 'Signature is valid, but bytes were added after signing. Whoever forwarded the file may have appended content.'
+                 : state === 'modified' ? 'The signed byte range is intact but bytes were added afterwards. The signature no longer covers the whole file — treat this document as VOIDED, not as validly signed.'
                  : first.error          ? 'Signature could not be verified: ' + first.error
                                         : 'The signed byte range does not match the cryptographic digest. Contents have been altered.';
 
@@ -3758,7 +3758,7 @@ async function runAutoVerifyFromHash() {
     render(state, {
       detail,
       fields: {
-        'Result':          `<b style="color:${state === 'valid' ? 'var(--good)' : state === 'modified' ? '#b57920' : 'var(--danger)'};">${state.toUpperCase()}</b>`,
+        'Result':          `<b style="color:${state === 'valid' ? 'var(--good)' : state === 'modified' ? '#b57920' : 'var(--danger)'};">${state === 'modified' ? 'VOIDED' : state.toUpperCase()}</b>`,
         'Signer (in cert)': first.cn ? `<b>${esc(first.cn)}</b>${first.email ? ' &lt;' + esc(first.email) + '&gt;' : ''}` : '',
         'Signed at':        first.signingTime ? esc(fmtSigningTime(first.signingTime)) : '',
         'Cert SHA-1':       first.certFp ? `<code>${esc(first.certFp)}</code>` : '',
