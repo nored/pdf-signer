@@ -1679,11 +1679,17 @@ $('btnExportId').onclick = async () => {
       <label style="margin-top:8px">Confirm bundle password</label>
       <input type="password" id="bpw2" autocomplete="off" value="${prefill.replace(/"/g,'&quot;')}">
       <div id="bpwMatch" style="font-size:12px; margin-top:4px; min-height:16px;"></div>
+      <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border)">
+        <label class="lock-row"><input type="checkbox" id="incGh" ${hasGh ? 'checked' : 'disabled'}> Include GitHub vault config${hasGh ? '' : ' (none configured)'}</label>
+        <label class="lock-row"><input type="checkbox" id="incTok" ${hasGh ? 'checked' : 'disabled'}> Include the GitHub token</label>
+        <p class="hint" style="margin-top:4px">
+          Uncheck the vault to move the identity to another machine that will use a different vault. Uncheck just the token to share the vault path without the write credential (recipient will need to paste in their own token to push).
+        </p>
+      </div>
       <p class="hint" style="margin-top:6px">
         ${initialPrefill
-          ? 'Pre-filled with the identity password. Change it if you want a separate bundle password.'
+          ? 'Password pre-filled with the identity password. Change it if you want a separate bundle password.'
           : 'Pick any password. Anyone importing this bundle needs it.'}
-        GitHub vault included: <b>${hasGh ? 'yes (with token)' : 'no (none configured)'}</b>.
       </p>
     `;
     setTimeout(() => {
@@ -1691,6 +1697,8 @@ $('btnExportId').onclick = async () => {
       const inp2 = body.querySelector('#bpw2');
       const btn = body.querySelector('#bpwToggle');
       const status = body.querySelector('#bpwMatch');
+      const incGh = body.querySelector('#incGh');
+      const incTok = body.querySelector('#incTok');
       const check = () => {
         const a = inp1.value, b = inp2.value;
         if (a.length === 0 && b.length === 0) { status.textContent = ''; return; }
@@ -1705,6 +1713,12 @@ $('btnExportId').onclick = async () => {
         inp1.type = inp2.type = shown ? 'text' : 'password';
         btn.textContent = shown ? '🙈' : '👁';
       };
+      // Token option is only meaningful when the vault config is included.
+      if (incGh && incTok) {
+        const sync = () => { incTok.disabled = !incGh.checked; if (!incGh.checked) incTok.checked = false; };
+        incGh.addEventListener('change', sync);
+        sync();
+      }
       check();
     }, 0);
     const r = await modal({ title: 'Export identity bundle', body, confirmText: 'Export' });
@@ -1712,16 +1726,22 @@ $('btnExportId').onclick = async () => {
     const a = r.bpw || '', b = r.bpw2 || '';
     if (a.length < 6) { errorMsg = 'Bundle password must be at least 6 characters.'; prefill = a; continue; }
     if (a !== b)     { errorMsg = 'Passwords do not match.';                         prefill = a; continue; }
-    pw = a; break;
+    pw = a;
+    // Stash the include-flags so the bundle assembly below sees them.
+    identity.__lastExportOpts = { incGh: !!r.incGh, incTok: !!r.incTok };
+    break;
   }
 
+  const opts = identity.__lastExportOpts || { incGh: hasGh, incTok: hasGh };
+  delete identity.__lastExportOpts;
   const inner = {
     meta: { name: identity.meta.name, email: identity.meta.email },
     p12_base64: btoa(u8ToBinStr(identity.p12U8)),
     signatureImage_base64: sigImage.pngU8 ? btoa(u8ToBinStr(sigImage.pngU8)) : null,
     settings: (rec && rec.settings) || collectSettings(),
-    ghVault: hasGh ? { ...rec.ghVault } : null,
+    ghVault: (hasGh && opts.incGh) ? { ...rec.ghVault } : null,
   };
+  if (inner.ghVault && !opts.incTok) delete inner.ghVault.token;
   const innerU8 = new TextEncoder().encode(JSON.stringify(inner));
   const enc = await encryptBundle(innerU8, pw);
   const envelope = {
@@ -1737,7 +1757,10 @@ $('btnExportId').onclick = async () => {
   };
   const json = new TextEncoder().encode(JSON.stringify(envelope, null, 2));
   download(safeFilename(identity.label || identity.meta.name) + '.pdfsigner.json', json, 'application/json');
-  toast('Encrypted bundle exported' + (hasGh ? ' (GitHub token included)' : ''), 'ok');
+  const ghBit = inner.ghVault
+    ? (inner.ghVault.token ? ' with GitHub vault + token' : ' with GitHub vault (no token)')
+    : (hasGh ? ' (GitHub vault excluded)' : '');
+  toast('Encrypted bundle exported' + ghBit, 'ok');
 };
 $('btnRenameId').onclick = async () => {
   if (!identity.id) return;
