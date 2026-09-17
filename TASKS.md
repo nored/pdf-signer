@@ -1,0 +1,33 @@
+# PDF Signer — Tasks
+
+Priorities set 2026-09-17. The load-bearing use case is writing thesis review reports and signing them, sometimes as one of two supervisors. The app is used only via the web build hosted on GitHub Pages — Tauri and Electron wrappers are not in scope right now.
+
+## Trust & verification
+
+- [ ] **RFC 3161 timestamping.** Call a public TSA on sign; embed the token as an unauthenticated attribute in the CMS. Verifier reads it back and reports "signed before &lt;trusted time&gt;". Today `signingTime` is only the local clock. Notes:
+  - **Mutually exclusive with backdating.** The existing "Sign as of" field must keep working — the load-bearing use case is signing a review report whose substantive decision was made earlier. When "Sign as of" is set, disable timestamping and show a small notice: "Backdating overrides trusted timestamps."
+  - **CORS.** TSA calls from a browser origin need either a CORS-friendly TSA (freeTSA is best-effort) or a user-supplied proxy. Ship freeTSA as the default with a settings-level override URL so a user can point at their own proxy.
+- [ ] **Cert-chain validation on verify.** Bundle a small trust store of root PEMs (user-editable in settings). On verify, walk the chain and show a warning banner when the signature is cryptographically valid but the cert doesn't chain to a trusted root. Today verify stops at "bytes match".
+- [ ] **Bring-your-own signing cert.** Import a p12 whose cert was issued by a real CA (SRH / your organisation / an eIDAS token via PKCS#11 in a later pass). Today every identity is self-signed inside the app, which is fine for internal use and useless for external verification.
+
+## PDF coverage
+
+- [ ] **Xref-stream parsing.** `parsePdfForIncremental` refuses PDFs whose xref chain uses cross-reference streams. That's most PDFs produced by Adobe / Word 2013+ / InDesign / LaTeX. Add a decoder so multi-signer and surgical redaction work on those too.
+- [ ] **Rotated-page handling.** Verify redaction coordinates and text-layer alignment on pages with `/Rotate` 90/180/270. Landscape scans and Chinese/Japanese vertical text pages are currently untested.
+- [ ] **Encrypted PDF support.** Handle owner-password / AES-256 via pdf-lib's `ignoreEncryption` path plus a decrypt-on-open prompt when the file is password-protected.
+
+## Ergonomics
+
+- [ ] **Batch mode.** Drop N PDFs, apply the same placement + certify options, download N signed outputs.
+- [ ] **Sidebar page thumbnails.** Click-to-jump nav for long documents.
+- [ ] **Autosave placements per document hash.** Placements survive tab close / reload for the same PDF; stored in IndexedDB keyed by SHA-256 of the input bytes.
+
+## Reliability & testing
+
+- [ ] **Playwright E2E tests.** Cover the two-supervisor flow, redact-then-sign, encrypted bundle round-trip, form-field fill, zoom-then-place.
+- [ ] **Split the ~5000-line HTML into ES modules.** `signing.js`, `redaction.js`, `verify.js`, `bundle.js`, `ui.js` — each testable in isolation. The single-file `web/index.html` remains the deploy target (concatenated at build time).
+
+## Not currently in scope
+
+- Grading-specific workflow (templates for reviewer blocks, "sign 30 thesis reviews at once") — this is a general PDF signer.
+- Tauri and Electron packaging / code-signing / release automation — the user only uses the hosted web build.
