@@ -1663,6 +1663,9 @@ function renderIdentity() {
     const selfSigned = identity.unlocked.cert.subject.hash === identity.unlocked.cert.issuer.hash;
     if (chLen > 1) fp += ` · CA-issued (chain: ${chLen})`;
     else if (selfSigned) fp += ' · self-signed';
+    // Cert capabilities: what does this cert actually let us do?
+    const caps = certCapabilities(identity.unlocked.cert);
+    if (caps.length) fp += ' · can sign: ' + caps.join(', ');
     $('idFingerprint').textContent = fp;
   }
   $('idButtons2').style.display = has ? 'flex' : 'none';
@@ -2287,6 +2290,8 @@ async function openPdf(file) {
   let verifyResults = [];
   try { verifyResults = verifyPdfSignatures(doc.bytes); }
   catch (e) { console.warn('verify error', e); verifyResults = [{ error: e.message, byteRange: [0,0,0,0] }]; }
+  // Async pass: fetch any vault-published certs and mark trust.
+  try { await verifyVaultTrustAsync(verifyResults); } catch (e) { console.warn('vault trust fetch failed', e); }
 
   const rawText = dec.decode(doc.bytes);
   // Real signature evidence (payload actually present).
@@ -4356,6 +4361,49 @@ async function ghMigrateGlobalIfAny() {
 function ghRawUrl(c, filename) {
   return `https://raw.githubusercontent.com/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.branch)}/${c.pathPrefix.replace(/^\/+|\/+$/g, '')}/${encodeURIComponent(filename)}`;
 }
+
+// Introspect a parsed X.509 cert and report what it can be used for. Reads
+// keyUsage + extendedKeyUsage; returns a short list of human labels so the
+// identity panel can tell the user whether Adobe / S/MIME will accept it.
+function certCapabilities(cert) {
+  const out = [];
+  const ku = cert.getExtension && cert.getExtension('keyUsage');
+  const eku = cert.getExtension && cert.getExtension('extKeyUsage');
+  const canSign = !ku || ku.digitalSignature;   // keyUsage optional; default is any
+  if (!canSign) return ['(keyUsage does not permit signing)'];
+  if (!eku) { out.push('any'); return out; }
+  if (eku.emailProtection) out.push('email (S/MIME)');
+  // documentSigning OID: 1.3.6.1.5.5.7.3.36 (id-kp-documentSigning) or Adobe-specific 1.2.840.113583.1.1.5.
+  if (eku['1.3.6.1.5.5.7.3.36'] || eku.documentSigning || eku['1.2.840.113583.1.1.5']) out.push('PDF documents');
+  if (eku.clientAuth)      out.push('TLS client');
+  if (eku.serverAuth)      out.push('TLS server');
+  if (eku.codeSigning)     out.push('code');
+  if (out.length === 0)    out.push('(no matching purpose — Adobe may reject)');
+  return out;
+}
+
+// Auto-publish the identity's leaf cert to the GitHub vault so downstream
+// verifiers can fetch it and transitively trust it via the vault's HTTPS
+// chain. Idempotent — reuses a cached URL if already published for this
+// identity. Returns the raw URL, or null if the vault isn't configured.
+async function ensureCertPublishedToVault(unlocked) {
+  if (!ghVault.config) return null;
+  const rec = identities.get(identity.id);
+  if (!rec) return null;
+  if (rec.certVaultUrl) return rec.certVaultUrl;
+  const pem = forge.pki.certificateToPem(unlocked.cert);
+  // File name: cert fingerprint (SHA-1 hex, no colons) — stable per key pair.
+  const fp = certFingerprint(unlocked.cert).replace(/[^0-9a-f]/gi, '').toLowerCase();
+  const filename = 'certs/' + fp + '.pem';
+  const bytes = new TextEncoder().encode(pem);
+  await ghPutFile(ghVault.config, filename, bytes, 'pdf-signer publish cert ' + fp);
+  // ghRawUrl encodeURIComponent's the filename, which would break nested paths
+  // (encodes the "/" as %2F). Build the URL directly since we control the path.
+  const c = ghVault.config;
+  const url = `https://raw.githubusercontent.com/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.branch)}/${c.pathPrefix.replace(/^\/+|\/+$/g, '')}/${filename}`;
+  await updateActiveIdentity({ certVaultUrl: url });
+  return url;
+}
 async function ghApi(c, path, init={}) {
   const url = 'https://api.github.com' + path;
   const headers = new Headers(init.headers || {});
@@ -4684,7 +4732,7 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   }
 }
 
-async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated}) {
+async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated, certVaultUrl}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
@@ -4891,7 +4939,7 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   }
 
   // 2. Signature dict (crypto payload).
-  const sigDict = context.obj({
+  const sigDictShape = {
     Type: 'Sig',
     Filter: 'Adobe.PPKLite',
     SubFilter: 'adbe.pkcs7.detached',
@@ -4902,7 +4950,11 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
     Location: PDFString.of(location || ''),
     M: PDFString.fromDate(now),
     Name: PDFString.of(meta.name),
-  });
+  };
+  // Vault-hosted cert URL — verifiers auto-fetch this and can transitively
+  // trust the signer via the vault's HTTPS chain even for self-signed identities.
+  if (certVaultUrl) sigDictShape.PdfsignerCertUrl = PDFString.of(certVaultUrl);
+  const sigDict = context.obj(sigDictShape);
   const sigRef = context.register(sigDict);
 
   // certifyMode: 'lock' → DocMDP P=1 (no further changes)
@@ -5638,7 +5690,7 @@ function stdFontNameFor(key) {
   }
 }
 
-async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated }) {
+async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated, certVaultUrl }) {
   const { PDFDocument, PDFName, PDFArray, PDFRef, PDFNumber } = window.PDFLib;
   const parsed = parsePdfForIncremental(bytes);
   const now = signingTime instanceof Date ? signingTime : new Date();
@@ -5724,12 +5776,15 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   }
 
   // Sig dict + sig field bodies.
+  const certUrlLine = certVaultUrl ? `   /PdfsignerCertUrl (${escapePdfString(certVaultUrl)})\n` : '';
   objBodies.push({ num: sigDictNum, body:
     `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n` +
     `   /ByteRange [0 9999999999 9999999999 9999999999]\n` +
     `   /Contents <${'0'.repeat(SIG_PLACEHOLDER_LEN)}>\n` +
     `   /M (${pdfDate(now)})\n   /Name (${escapePdfString(meta.name)})\n` +
-    `   /Reason (${escapePdfString(reason || '')})\n   /Location (${escapePdfString(location || '')})\n>>\nendobj\n`
+    `   /Reason (${escapePdfString(reason || '')})\n   /Location (${escapePdfString(location || '')})\n` +
+    certUrlLine +
+    `>>\nendobj\n`
   });
   const kidsStr = widgetObjs.map(w => `${w.num} 0 R`).join(' ');
   const sigFieldName = `Signature-${now.getTime().toString(36)}`;
@@ -6015,6 +6070,15 @@ $('btnSign').onclick = async () => {
     const tsaEnabled = $('tsaEnable') && $('tsaEnable').checked && !backdated;
     const tsaUrl = tsaEnabled ? (($('tsaUrl') && $('tsaUrl').value.trim()) || null) : null;
 
+    // Auto-publish the identity's cert to the GH vault so verifiers can
+    // transitively trust it via the vault's HTTPS chain. Idempotent — first
+    // sign uploads, subsequent signs reuse the cached URL.
+    let certVaultUrl = null;
+    if (ghVault.config) {
+      try { certVaultUrl = await ensureCertPublishedToVault(unlocked); }
+      catch (e) { console.warn('cert vault publish failed:', e.message); toast('Cert vault publish failed: ' + e.message, 'err'); }
+    }
+
     // Vault key + QR payload must exist BEFORE drawing the stamp, because the
     // QR is drawn into the PDF that later gets encrypted with this same key.
     let vault = null;
@@ -6055,7 +6119,7 @@ $('btnSign').onclick = async () => {
         cert: unlocked.cert,
         key: unlocked.key,
         chain: unlocked.chain,
-        signingTime, tsaUrl, backdated,
+        signingTime, tsaUrl, backdated, certVaultUrl,
       });
     } else {
       signed = await makeSignedPdf({
@@ -6082,7 +6146,7 @@ $('btnSign').onclick = async () => {
         } : { enabled: false },
         formFields: doc.formFields,
         pdfjsDoc: doc.pdfjs,
-        tsaUrl, backdated,
+        tsaUrl, backdated, certVaultUrl,
       });
     }
     const outBase = doc.file.name.replace(/\.pdf$/i, '');
@@ -6145,6 +6209,12 @@ function verifyPdfSignatures(bytes) {
       if (d < bestDist) { bestDist = d; contentsHex = cm[1]; contentsAbsStart = winStart + cm.index; }
     }
     if (!contentsHex) continue;
+    // Also look for our /PdfsignerCertUrl (URL) entry in the same sig-dict
+    // neighborhood — verifier uses it to auto-fetch the vault-published cert.
+    let certVaultUrl = null;
+    const urlM = window.match(/\/PdfsignerCertUrl\s*\(([^)\\]*)\)/);
+    if (urlM) certVaultUrl = urlM[1];
+
     const hexStripped = contentsHex.replace(/(00)+$/, '');
     if (hexStripped.length < 20) { results.push({ error: 'Empty signature', br }); continue; }
 
@@ -6236,12 +6306,33 @@ function verifyPdfSignatures(bytes) {
         trusted: chainInfo.trusted,
         trustReason: chainInfo.reason,
         selfSigned: isSelfSigned,
+        certVaultUrl,           // present in the sig dict; verifier can auto-fetch
+        cert,                   // stash the parsed cert so a follow-up async pass can compare
       });
     } catch (e) {
       results.push({ error: e.message, byteRange: br });
     }
   }
   return results;
+}
+
+// Fetch every result's vault-published cert URL, compare to the CMS's leaf
+// cert (byte-for-byte), and stamp vaultTrusted / vaultTrustError on the
+// result. Mutates results in place; safe to call after verifyPdfSignatures.
+async function verifyVaultTrustAsync(results) {
+  for (const r of results) {
+    if (!r.certVaultUrl || !r.cert) continue;
+    try {
+      const res = await fetch(r.certVaultUrl, { cache: 'no-cache' });
+      if (!res.ok) { r.vaultTrusted = false; r.vaultTrustError = 'HTTP ' + res.status; continue; }
+      const pem = await res.text();
+      const fetched = forge.pki.certificateFromPem(pem);
+      const a = forge.asn1.toDer(forge.pki.certificateToAsn1(fetched)).getBytes();
+      const b = forge.asn1.toDer(forge.pki.certificateToAsn1(r.cert)).getBytes();
+      r.vaultTrusted = a === b;
+      if (!r.vaultTrusted) r.vaultTrustError = 'vault cert does not match signer';
+    } catch (e) { r.vaultTrusted = false; r.vaultTrustError = e.message; }
+  }
 }
 
 function overallVerifyState(results) {
@@ -6330,12 +6421,17 @@ function verifyResultsHtml(results, isUnsignedField=false) {
       : r.trusted
         ? `Certificate: <b style="color:var(--good, #1f7a3a)">chains to a trusted root</b><br>`
         : `Certificate: <b style="color:#b57920">chain not verified</b>${r.trustReason ? ' (' + r.trustReason + ')' : ''}<br>`;
+    const vaultLine = r.certVaultUrl
+      ? (r.vaultTrusted
+          ? `Vault-published cert: <b style="color:var(--good, #1f7a3a)">✓ matches</b> · <a href="${r.certVaultUrl}" target="_blank" style="color:var(--accent)">${r.certVaultUrl.replace(/^https?:\/\/[^/]+\//, '…/')}</a><br>`
+          : `Vault-published cert: <b style="color:var(--danger)">✕ ${r.vaultTrustError || 'mismatch'}</b> · <a href="${r.certVaultUrl}" target="_blank" style="color:var(--accent)">${r.certVaultUrl}</a><br>`)
+      : '';
     const details = r.error
       ? `<div class="meta">Error: ${r.error}</div>`
       : `<div class="meta">
            Signer: <b>${r.cn}</b>${r.email ? ' &lt;' + r.email + '&gt;' : ''}<br>
            Signed: ${fmtSigningTime(r.signingTime) || '(no time)'}<br>
-           ${tsaLine}${trustLine}Byte range: [${r.byteRange.join(', ')}] · document is ${r.docLength} bytes<br>
+           ${tsaLine}${trustLine}${vaultLine}Byte range: [${r.byteRange.join(', ')}] · document is ${r.docLength} bytes<br>
            SHA-256 digest match: ${r.digestMatch ? 'yes' : '<b style="color:var(--danger)">NO</b>'}<br>
            RSA signature verifies: ${r.rsaOk ? 'yes' : '<b style="color:var(--danger)">NO</b>'}<br>
            Signed range covers whole file: ${r.totalCovered ? 'yes' : '<b style="color:#b57920">no</b>'}
