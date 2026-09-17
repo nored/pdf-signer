@@ -1664,10 +1664,11 @@ $('btnExportId').onclick = async () => {
       The bundle is encrypted with a password (PBKDF2-SHA256 · 200k iterations → AES-256-GCM).
       Everything is included: the identity's key + certificate, signature image, saved UI settings, and (when configured) the GitHub vault config <b>with the token</b>. Without the password the file reveals nothing.
     </p>
-    <label>Bundle password</label>
-    <input type="password" id="bpw" autocomplete="new-password" value="${prefillPw.replace(/"/g,'&quot;')}">
-    <label>Confirm bundle password</label>
-    <input type="password" id="bpw2" autocomplete="new-password" value="${prefillPw.replace(/"/g,'&quot;')}">
+    <label>Bundle password <span style="color:var(--muted); font-weight:400">(click 👁 to reveal)</span></label>
+    <div style="display:flex; gap:6px; align-items:center;">
+      <input type="password" id="bpw" name="pdfsigner-bundle-pw" autocomplete="off" value="${prefillPw.replace(/"/g,'&quot;')}" style="flex:1;">
+      <button type="button" id="bpwToggle" title="Show password" style="width:auto; padding:6px 10px;">👁</button>
+    </div>
     <p class="hint" style="margin-top:6px">
       ${prefillPw
         ? 'Pre-filled with the identity password. Change it if you want a separate bundle password.'
@@ -1675,11 +1676,21 @@ $('btnExportId').onclick = async () => {
       GitHub vault included: <b>${hasGh ? 'yes (with token)' : 'no (none configured)'}</b>.
     </p>
   `;
+  // Toggle visibility so the user can eyeball the password they typed — no
+  // confirm field needed and no browser-autofill weirdness where the two
+  // fields ended up with different values.
+  setTimeout(() => {
+    const inp = body.querySelector('#bpw');
+    const btn = body.querySelector('#bpwToggle');
+    if (btn && inp) btn.onclick = () => {
+      inp.type = inp.type === 'password' ? 'text' : 'password';
+      btn.textContent = inp.type === 'password' ? '👁' : '🙈';
+    };
+  }, 0);
   const r = await modal({ title: 'Export identity bundle', body, confirmText: 'Export' });
   if (!r) return;
   const pw = r.bpw || '';
   if (pw.length < 6) return toast('Bundle password must be at least 6 characters', 'err');
-  if (pw !== r.bpw2) return toast('Passwords do not match', 'err');
 
   const inner = {
     meta: { name: identity.meta.name, email: identity.meta.email },
