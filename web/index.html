@@ -902,6 +902,7 @@
       <summary><h2>Placements</h2></summary>
       <div class="hint" id="toolHint">Pick a tool from the floating bar above the page, click to drop it. Drag to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo.</div>
       <div class="placement-list" id="placementList"></div>
+      <button id="btnClearPlacements" class="danger" style="width:auto; padding:6px 10px; font-size:12px; margin-top:6px; display:none" title="Remove every placement (signatures, text boxes, stamps, redactions) on all pages">Clear all placements</button>
 
       <details class="collapse" style="margin-top:10px" open>
         <summary>Signature appearance</summary>
@@ -3279,6 +3280,26 @@ function refreshAllPreviews() {
 }
 document.addEventListener('DOMContentLoaded', () => {}); // reserved
 
+if ($('btnClearPlacements')) $('btnClearPlacements').onclick = () => {
+  if (!doc.placements.length) return;
+  const n = doc.placements.length;
+  if (!confirm(`Remove all ${n} placement${n > 1 ? 's' : ''} on this document? This can be undone with Ctrl/⌘+Z.`)) return;
+  pushUndo();
+  // Detach every element, then blow away the array. Also clear the autosave
+  // record for this doc so a reload doesn't restore them.
+  for (const p of doc.placements) {
+    if (p.el?.parentNode) p.el.parentNode.removeChild(p.el);
+  }
+  doc.placements = [];
+  doc.selectedPlacementId = null;
+  textEditingPlacementId = null;
+  renderPlacementList();
+  updateStampRotateRow();
+  updateSignButton();
+  saveAutosavedPlacementsNow();
+  toast(`Cleared ${n} placement${n > 1 ? 's' : ''}`, 'ok');
+};
+
 if ($('btnTrustCurrentChain')) $('btnTrustCurrentChain').onclick = async () => {
   try {
     const unlocked = await ensureUnlocked();
@@ -3712,6 +3733,8 @@ function refreshSelectedPlacement() {
 function renderPlacementList() {
   const list = $('placementList');
   list.innerHTML = '';
+  const clearBtn = $('btnClearPlacements');
+  if (clearBtn) clearBtn.style.display = doc.placements.length ? '' : 'none';
   for (const p of doc.placements) {
     const row = document.createElement('div');
     row.className = 'placement-item' + (p.id === doc.selectedPlacementId ? ' selected' : '');
