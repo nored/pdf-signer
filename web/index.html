@@ -2375,12 +2375,15 @@ async function openPdf(file) {
   await buildPageList();
   await addSignatureStatusOverlays(verifyResults, hasSigPayload, hasSigField && !hasSigPayload);
   await renderFormFieldOverlays();
-  if ($('stampEnable').checked && !doc.alreadySigned) autoSeedStampsIfNone();
-  // Restore any placements the user had on this exact file before.
+  // Restore any placements the user had on this exact file before FIRST — so
+  // that the auto-seed check below sees them and doesn't compound. Order
+  // matters: autoSeedStampsIfNone bails when doc.placements already contains
+  // a stamp, and it can only bail correctly after autosave has replayed.
   if (!doc.alreadySigned && !doc.isEncrypted) {
     const restored = await loadAutosavedPlacements();
     if (restored > 0) toast(`Restored ${restored} placement${restored > 1 ? 's' : ''} from your previous session`, 'ok');
   }
+  if ($('stampEnable').checked && !doc.alreadySigned) autoSeedStampsIfNone();
   if (isThumbsOpen()) renderThumbnails();
   updateSignButton();
 }
