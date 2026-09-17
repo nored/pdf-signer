@@ -113,6 +113,37 @@
   input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
   textarea { min-height: 46px; resize: vertical; }
   main { display: flex; flex-direction: column; background: var(--bg); overflow: hidden; position: relative; }
+  .main-body { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+  .thumbs-panel {
+    width: 168px; flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--panel);
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  .thumbs-title {
+    padding: 8px 10px; font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .thumbs-list {
+    flex: 1 1 auto; overflow-y: auto; padding: 8px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .thumb {
+    background: white; border: 2px solid transparent; border-radius: 4px;
+    cursor: pointer; position: relative; box-shadow: 0 1px 3px rgba(0,0,0,.1);
+    transition: border-color .1s;
+  }
+  .thumb:hover { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .thumb.current { border-color: var(--accent); }
+  .thumb canvas { display: block; width: 100%; height: auto; border-radius: 2px; }
+  .thumb-num {
+    position: absolute; top: 2px; right: 4px;
+    background: rgba(0,0,0,.65); color: white;
+    padding: 1px 6px; border-radius: 8px; font-size: 10px;
+    pointer-events: none;
+  }
   .floating-tools {
     position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
     z-index: 20;
@@ -927,6 +958,7 @@
       <span id="zoomLabel" style="min-width:40px; text-align:center; color:var(--muted); font-size:12px">100%</span>
       <button id="btnZoomIn">＋</button>
       <button id="btnFitWidth">Fit width</button>
+      <button id="btnToggleThumbs" title="Show / hide page thumbnails">☰ Pages</button>
       <div class="doc-name" id="docName"></div>
       <button id="btnCloseDoc" title="Close this document and go back to the start screen">Close</button>
     </div>
@@ -982,21 +1014,27 @@
     <div id="encryptedBanner" style="display:none; padding:8px 14px; background:rgba(200,40,25,.12); color:var(--danger); border-bottom:1px solid var(--border); font-size:12.5px;">
       🔒 This PDF is password-protected. You can view and verify it, but signing or redacting encrypted PDFs isn't supported yet — save an unencrypted copy first (in Preview: File → Export as PDF, uncheck the encryption box; or in another tool).
     </div>
-    <div class="scroll-area" id="scrollArea">
-      <div class="empty" id="emptyState">
-        <div style="font-size:40px; margin-bottom: 4px;">📄</div>
-        <h3>Open, sign or verify a PDF</h3>
-        <p style="margin: 6px 0 20px; color: var(--muted);">Everything runs in your browser. Nothing is uploaded.</p>
-        <div class="empty-actions">
-          <button id="btnOpenPdf" class="primary big">Open PDF…</button>
-          <button id="btnVerify" class="big">Verify signed PDF…</button>
-          <button id="btnVerifyVault" class="big">Verify from vault QR…</button>
+    <div class="main-body" id="mainBody">
+      <div class="scroll-area" id="scrollArea">
+        <div class="empty" id="emptyState">
+          <div style="font-size:40px; margin-bottom: 4px;">📄</div>
+          <h3>Open, sign or verify a PDF</h3>
+          <p style="margin: 6px 0 20px; color: var(--muted);">Everything runs in your browser. Nothing is uploaded.</p>
+          <div class="empty-actions">
+            <button id="btnOpenPdf" class="primary big">Open PDF…</button>
+            <button id="btnVerify" class="big">Verify signed PDF…</button>
+            <button id="btnVerifyVault" class="big">Verify from vault QR…</button>
+          </div>
+          <div class="drop" id="dropZone" style="margin-top: 22px;">
+            …or drop a PDF anywhere on this area
+          </div>
         </div>
-        <div class="drop" id="dropZone" style="margin-top: 22px;">
-          …or drop a PDF anywhere on this area
-        </div>
+        <div class="page-list" id="pageList"></div>
       </div>
-      <div class="page-list" id="pageList"></div>
+      <aside class="thumbs-panel" id="thumbsPanel" style="display:none">
+        <div class="thumbs-title">Pages</div>
+        <div class="thumbs-list" id="thumbsList"></div>
+      </aside>
     </div>
   </main>
 </div>
@@ -2159,6 +2197,9 @@ function closeDoc() {
   doc.pdfPassword = null;
   doc.hash = null;
   textEditingPlacementId = null;
+  const thumbs = $('thumbsList');
+  if (thumbs) { thumbs.innerHTML = ''; delete thumbs.dataset.forHash; }
+  if (thumbsIntersectionObs) { thumbsIntersectionObs.disconnect(); thumbsIntersectionObs = null; }
   reflectAlreadySignedInUi();
   reflectEncryptedInUi();
   $('pageList').innerHTML = '';
@@ -2260,6 +2301,7 @@ async function openPdf(file) {
     const restored = await loadAutosavedPlacements();
     if (restored > 0) toast(`Restored ${restored} placement${restored > 1 ? 's' : ''} from your previous session`, 'ok');
   }
+  if (isThumbsOpen()) renderThumbnails();
   updateSignButton();
 }
 
@@ -2717,6 +2759,87 @@ function updateZoomLabel() {
   const pct = Math.round(doc.scale * 100);
   $('zoomLabel').textContent = (doc.fitWidth ? 'Fit · ' : '') + pct + '%';
   $('btnFitWidth').classList.toggle('active', !!doc.fitWidth);
+}
+
+/* ─── Page-thumbnail sidebar ─────────────────────────────────────────
+   Optional right-hand panel with a click-to-jump list of page thumbs.
+   Persists open/closed across sessions. Currently-visible page gets
+   an accent-color border via an IntersectionObserver on page-wraps. */
+let thumbsIntersectionObs = null;
+function isThumbsOpen() { try { return localStorage.getItem('thumbsOpen') === '1'; } catch (_) { return false; } }
+function setThumbsOpen(open) {
+  try { localStorage.setItem('thumbsOpen', open ? '1' : '0'); } catch (_) {}
+  const panel = $('thumbsPanel');
+  if (panel) panel.style.display = open ? 'flex' : 'none';
+  const btn = $('btnToggleThumbs');
+  if (btn) btn.classList.toggle('active', open);
+  if (open && doc.pdfjs) renderThumbnails();
+}
+if ($('btnToggleThumbs')) $('btnToggleThumbs').onclick = () => setThumbsOpen(!isThumbsOpen());
+// Restore persisted state on startup.
+if (isThumbsOpen()) setThumbsOpen(true);
+
+async function renderThumbnails() {
+  const list = $('thumbsList');
+  if (!list) return;
+  if (list.dataset.forHash === doc.hash && list.childElementCount === doc.numPages) return; // already rendered for this doc
+  list.dataset.forHash = doc.hash || '';
+  list.innerHTML = '';
+  if (thumbsIntersectionObs) thumbsIntersectionObs.disconnect();
+  const thumbEls = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const el = document.createElement('div');
+    el.className = 'thumb';
+    el.dataset.pageIndex = i - 1;
+    el.onclick = () => {
+      const meta = doc.pageMeta[i - 1];
+      if (meta && meta.wrapEl) meta.wrapEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    const num = document.createElement('div');
+    num.className = 'thumb-num'; num.textContent = i;
+    el.appendChild(num);
+    list.appendChild(el);
+    thumbEls.push(el);
+  }
+  // Lazy-render each thumb the first time it enters the panel viewport.
+  const io = new IntersectionObserver(async (entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      const el = e.target;
+      if (el.dataset.rendered) continue;
+      el.dataset.rendered = '1';
+      const pageIndex = parseInt(el.dataset.pageIndex, 10);
+      try {
+        const page = await doc.pdfjs.getPage(pageIndex + 1);
+        const vp1 = page.getViewport({ scale: 1 });
+        const targetW = 140;
+        const scale = (targetW * (window.devicePixelRatio || 1)) / vp1.width;
+        const vp = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(vp.width);
+        canvas.height = Math.round(vp.height);
+        canvas.style.width = targetW + 'px';
+        canvas.style.height = 'auto';
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        el.insertBefore(canvas, el.firstChild);
+      } catch (err) { console.warn('thumb render fail', pageIndex, err); }
+    }
+  }, { root: list, rootMargin: '400px 0px' });
+  for (const el of thumbEls) io.observe(el);
+
+  // Track current page via the main scroll area, so the thumb highlights.
+  if (thumbsIntersectionObs) thumbsIntersectionObs.disconnect();
+  thumbsIntersectionObs = new IntersectionObserver((entries) => {
+    // Pick the entry with the largest visible ratio.
+    let best = null;
+    for (const e of entries) if (e.isIntersecting && (!best || e.intersectionRatio > best.intersectionRatio)) best = e;
+    if (!best) return;
+    const idx = parseInt(best.target.dataset.pageIndex, 10);
+    for (const t of thumbEls) t.classList.toggle('current', parseInt(t.dataset.pageIndex, 10) === idx);
+    const activeThumb = thumbEls[idx];
+    if (activeThumb) activeThumb.scrollIntoView({ block: 'nearest' });
+  }, { root: $('scrollArea'), threshold: [0.15, 0.5, 0.85] });
+  for (const meta of doc.pageMeta) thumbsIntersectionObs.observe(meta.wrapEl);
 }
 
 // Ctrl/Cmd + wheel over the PDF area = zoom in/out around the pointer.
