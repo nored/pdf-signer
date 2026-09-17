@@ -864,9 +864,9 @@
             <summary>Trusted roots <span id="trustRootsCount" style="opacity:.6"></span></summary>
             <div style="margin-top:8px">
               <p class="hint" style="margin-bottom:6px">
-                Root CA certificates the verifier trusts when checking cert chains. Signatures whose signer cert doesn't chain to one of these show a warning banner. Add your organisation's CA, your own root, or leave empty to skip chain checking. Stored locally in your browser.
+                Roots the verifier trusts when checking cert chains. <b>Automatically populated</b>: creating an identity self-trusts its own cert, importing a p12 with a chain trusts the chain's root, and clicking "Trust current identity's root" below trusts whatever's active. Manual PEM paste is only needed for third-party CAs (a colleague's cert, an experimental root).
               </p>
-              <div id="trustRootsList" style="font-size:12px; color:var(--muted); margin-bottom:6px;">No trusted roots configured.</div>
+              <div id="trustRootsList" style="font-size:12px; color:var(--muted); margin-bottom:6px;">No trusted roots configured yet — create or import an identity to auto-populate.</div>
               <div style="display:flex; gap:6px; flex-wrap:wrap;">
                 <button id="btnAddTrustRoot" style="width:auto; flex:1 1 auto;">Add root (PEM)…</button>
                 <button id="btnTrustCurrentChain" style="width:auto; flex:1 1 auto;" title="Trust the root at the top of the currently-loaded identity's chain">Trust current identity's root</button>
@@ -1295,13 +1295,15 @@ async function addTrustRoot(pem) {
   return { added: true };
 }
 
-// Auto-add any self-signed root at the top of an imported p12 chain. Silently
-// no-ops if the chain is just a leaf, if the top isn't self-signed, or if we
-// already trust that root.
+// Auto-add the trust anchor for an identity's cert chain. Two shapes:
+// - CA-issued (chain of ≥ 2): promote the self-signed root at the top.
+// - Self-signed (chain of 1 or leaf.issuer == leaf.subject): promote the
+//   leaf itself. Verifiers then see the user's own signatures as
+//   "chains to a trusted root" instead of the "self-signed" warning.
 async function autoTrustRootFromChain(chain) {
-  if (!Array.isArray(chain) || chain.length < 2) return null;
+  if (!Array.isArray(chain) || chain.length === 0) return null;
   const top = chain[chain.length - 1];
-  if (top.subject.hash !== top.issuer.hash) return null;   // top isn't a self-signed root
+  if (top.subject.hash !== top.issuer.hash) return null;   // top isn't self-signed
   const pem = forge.pki.certificateToPem(top);
   const r = await addTrustRoot(pem);
   return r.added ? top : null;
@@ -1812,6 +1814,13 @@ $('btnCreateId').onclick = async () => {
     identity.unlocked = unlockP12(p12Der, r.pw);
     identity.password = r.pw;
     renderIdentity();
+    // Auto-trust the identity's own cert so verifiers see the user's future
+    // signatures as "chains to a trusted root" instead of "self-signed
+    // — trust depends on how you got this signer's cert".
+    try {
+      const added = await autoTrustRootFromChain(identity.unlocked.chain || [identity.unlocked.cert]);
+      if (added) renderTrustRoots();
+    } catch (e) { console.warn('auto-trust self failed', e); }
     // If the user picked a signature file in the same dialog, run it through
     // the background-removal modal now and save on the newly-active identity.
     if (r.sigFile) {
