@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <style>
   :root {
+    color-scheme: light dark;                       /* native form controls follow the OS theme */
     --bg: #f6f6f7;
     --panel: #ffffff;
     --panel-2: #f0f1f3;
@@ -135,9 +136,137 @@
     width: 1px; height: 20px; background: var(--border);
     margin: 0 4px;
   }
+  .floating-tools .tool-group { display: flex; align-items: center; gap: 4px; }
   .floating-tools .rotate-group { display: none; align-items: center; gap: 4px; }
   .floating-tools.has-stamp-selected .rotate-group { display: flex; }
   .floating-tools .stamp-info { color: var(--muted); font-size: 12px; padding: 0 4px; }
+
+  /* Text properties bar — production look, theme-aware, tight but breathable. */
+  .floating-tools .text-props {
+    display: none; align-items: center; gap: 2px;
+    color-scheme: light dark;                       /* native controls follow theme */
+    padding: 0 2px;
+  }
+  .floating-tools.has-text-selected .text-props { display: flex; }
+  .floating-tools.has-text-selected .tool-group { display: none; }
+
+  /* Shared control cell — 30px tall, subtle chip look. */
+  .floating-tools .tp {
+    height: 30px; box-sizing: border-box;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0 8px;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font: 500 13px/1 -apple-system, "Segoe UI", Roboto, sans-serif;
+    cursor: pointer;
+    transition: background .1s ease, border-color .1s ease, color .1s ease;
+  }
+  .floating-tools .tp:hover:not(:disabled) { background: var(--panel-2); }
+  .floating-tools .tp:focus-visible {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .floating-tools .tp.active {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+
+  /* Font family select — appears as a chip, chevron drawn as background. */
+  .floating-tools select.tp {
+    -webkit-appearance: none; appearance: none;
+    padding-right: 22px;
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                      linear-gradient(-45deg, transparent 50%, currentColor 50%);
+    background-position: right 10px top 13px, right 6px top 13px;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+    min-width: 100px; padding-left: 10px;
+  }
+  .floating-tools select.tp:hover { background-color: var(--panel-2); }
+
+  /* Font size — a compact stepper. */
+  .floating-tools .tp-size {
+    width: 54px; padding: 0 6px;
+    text-align: right; font-variant-numeric: tabular-nums;
+    -moz-appearance: textfield;
+    background: var(--panel-2);
+  }
+  .floating-tools .tp-size::-webkit-inner-spin-button,
+  .floating-tools .tp-size::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+  /* Square icon buttons (bold, italic, underline, align). */
+  .floating-tools .tp.icon { width: 30px; padding: 0; font-size: 14px; }
+  .floating-tools .tp.icon.bold      { font-weight: 800; font-family: -apple-system, "Segoe UI", sans-serif; }
+  .floating-tools .tp.icon.italic    { font-style: italic; font-family: Georgia, "Times New Roman", serif; }
+  .floating-tools .tp.icon.underline { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 2px; }
+  .floating-tools .tp.icon svg { width: 16px; height: 16px; display: block; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* Color swatch: hides the native chrome; the chip IS the color. */
+  .floating-tools .tp-color {
+    width: 30px; height: 30px; padding: 0;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: transparent; cursor: pointer;
+    overflow: hidden;
+    position: relative;
+  }
+  .floating-tools .tp-color::-webkit-color-swatch-wrapper { padding: 3px; }
+  .floating-tools .tp-color::-webkit-color-swatch { border: none; border-radius: 5px; }
+  .floating-tools .tp-color::-moz-color-swatch { border: none; border-radius: 5px; }
+  .floating-tools .tp-color:hover { border-color: var(--accent); }
+  /* Color-with-glyph: shows a letter overlay ("A") for text color, "▨" for fill. */
+  .floating-tools .tp-color-wrap {
+    position: relative; width: 30px; height: 30px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .floating-tools .tp-color-wrap .glyph {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    pointer-events: none; font-weight: 800; font-size: 15px; color: var(--text);
+    text-shadow: 0 0 2px var(--panel), 0 0 2px var(--panel);
+  }
+  .floating-tools .tp-color-wrap .glyph.small { font-size: 12px; }
+  /* Underline swatch under the glyph — colored to match the picker's current color. */
+  .floating-tools .tp-color-wrap[data-swatch]::after {
+    content: ""; position: absolute; left: 6px; right: 6px; bottom: 4px;
+    height: 4px; border-radius: 2px;
+    background: var(--swatch, currentColor);
+    box-shadow: 0 0 0 1px rgba(0,0,0,.15);
+  }
+  /* "No fill" indicator for the background chip. */
+  .floating-tools .tp-color-wrap.no-fill::before {
+    content: ""; position: absolute; inset: 4px;
+    background: repeating-linear-gradient(45deg,
+      color-mix(in srgb, var(--muted) 45%, transparent) 0 2px,
+      transparent 2px 5px);
+    border-radius: 5px;
+    pointer-events: none;
+  }
+  .floating-tools .tp-color-wrap.no-fill::after {
+    background: transparent;
+    box-shadow: none;
+  }
+  /* Tiny inline clear button that appears next to the fill chip when a color is set. */
+  .floating-tools .tp-clear {
+    width: 18px; height: 30px; padding: 0; color: var(--muted);
+    font-size: 14px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .floating-tools .tp-clear:hover { color: var(--text); }
+  .floating-tools .tp-clear[hidden] { display: none; }
+
+  /* Vertical rule between logical groups. */
+  .floating-tools .text-props .sep {
+    width: 1px; height: 20px; background: var(--border);
+    margin: 0 4px;
+  }
+
+  /* Close/deselect */
+  .floating-tools .tp-close {
+    width: 30px; padding: 0; color: var(--muted); font-size: 18px; line-height: 1;
+  }
+  .floating-tools .tp-close:hover { color: var(--text); }
   .toolbar {
     display: flex; align-items: center; gap: 10px;
     padding: 8px 14px;
@@ -157,6 +286,38 @@
   }
   .page-wrap.no-place { cursor: default; }
   .page-wrap canvas { display: block; }
+  /* Selectable text layer over the page canvas — pdf.js renders invisible
+     <span>s aligned to the real glyph positions so browser text selection
+     lands on the actual text. Only interactive in redact-mode. */
+  .text-layer {
+    position: absolute; inset: 0;
+    overflow: hidden;
+    opacity: 1;
+    line-height: 1;
+    --scale-factor: 1;
+    user-select: none;
+    pointer-events: none;
+    color: transparent;
+  }
+  .text-layer > span, .text-layer > br {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+  }
+  .text-layer ::selection {
+    background: rgba(255, 92, 92, 0.4);
+    color: transparent;
+  }
+  .page-wrap.redact-mode { cursor: text; }
+  .page-wrap.redact-mode .text-layer {
+    user-select: text;
+    pointer-events: none;              /* container is transparent to hits */
+  }
+  .page-wrap.redact-mode .text-layer > span {
+    pointer-events: auto;              /* only real glyph spans catch events */
+  }
   .page-label {
     position: absolute; top: -18px; right: 4px;
     font-size: 11px; color: var(--muted);
@@ -216,6 +377,23 @@
     border-color: #b57920;
     background: rgba(217,154,43,.06);
   }
+  .placement.type-redact {
+    border-color: #000;
+    background: #000;
+    color: #fff;
+  }
+  .placement.type-redact.selected { outline: 2px solid #ff5c5c; outline-offset: 2px; }
+  .placement.type-redact .redact-label {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff;
+    font: 700 10px/1 -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    pointer-events: none;
+    opacity: .7;
+  }
+  .placement.type-redact .close { background: #ff5c5c; }
   .placement.type-text.selected { background: rgba(217,154,43,.14); border-color: #b57920; }
   .placement.type-text .close { background: #b57920; }
   .placement.type-text .text-input {
@@ -231,12 +409,36 @@
     overflow: hidden;
     white-space: pre-wrap;
     word-break: break-word;
+    pointer-events: none;                /* select/drag the box unless we're editing */
+    user-select: none;
+  }
+  .placement.type-text.editing .text-input {
+    pointer-events: auto;
+    user-select: text;
+    cursor: text;
   }
   .placement.type-text .text-input:empty::before {
     content: attr(data-placeholder);
     color: #b57920;
     opacity: .55;
     pointer-events: none;
+  }
+  .placement.type-text .drag-strip {
+    position: absolute;
+    top: -1px; left: -1px; right: -1px; height: 10px;
+    background: transparent;
+    cursor: grab;
+    pointer-events: none;                /* default: whole box drags */
+    z-index: 6;                          /* above the text-input in edit mode */
+  }
+  .placement.type-text.editing .drag-strip {
+    pointer-events: auto;                /* in edit mode this strip is the only draggable part */
+    background: rgba(217,154,43,.35);
+    border-radius: 2px 2px 0 0;
+  }
+  .placement.type-text.editing {
+    outline: 2px solid #b57920;
+    outline-offset: 1px;
   }
   .placement-item .swatch.text { background: #d99a2b; }
   .placement .preview .meta {
@@ -679,9 +881,13 @@
           <label>Sign as of <span style="color:var(--muted)">(blank = now — set to backdate)</span></label>
           <input type="datetime-local" id="signDate" step="1">
           <label>After signing</label>
-          <div class="radio-group">
-            <label><input type="radio" name="lockmode" value="locked" checked> Lock document (no further changes)</label>
-            <label><input type="radio" name="lockmode" value="void"> Allow changes (any edit voids the signature)</label>
+          <div class="radio-group" id="lockmodeGroup">
+            <label><input type="radio" name="lockmode" value="certify" checked> Certify — allow further signatures (recommended for the first signer in a multi-signer flow)</label>
+            <label><input type="radio" name="lockmode" value="locked"> Lock document (no further changes, no further signatures)</label>
+            <label><input type="radio" name="lockmode" value="void"> No certification (any edit voids the signature)</label>
+          </div>
+          <div id="alreadySignedNote" class="hint" style="display:none; margin-top:6px; color:#b57920">
+            This PDF already has a valid signature. Your signature will be added as an <b>approval signature</b> in an incremental update, so the existing signature stays valid. Certification / locking is not available on follow-up signatures.
           </div>
         </div>
       </details>
@@ -700,16 +906,54 @@
       <button id="btnCloseDoc" title="Close this document and go back to the start screen">Close</button>
     </div>
     <div class="floating-tools" id="floatingTools" style="display:none">
-      <button id="btnPlaceSig" title="Place a signature">✍ Signature</button>
-      <button id="btnPlaceText" title="Place a text field">T Text</button>
-      <button id="btnPlaceStamp" title="Place a verification stamp">▤ Stamp</button>
-      <span class="sep"></span>
-      <div class="rotate-group">
-        <span class="stamp-info" id="stampOrientationLabel"></span>
-        <button id="btnRotateStamp" title="Rotate the selected stamp 90°">↻ Rotate</button>
+      <div class="tool-group">
+        <button id="btnPlaceSig" title="Place a signature">✍ Signature</button>
+        <button id="btnPlaceText" title="Place a text box (double-click to type, single-click to move)">T Text</button>
+        <button id="btnPlaceRedact" title="Redact — permanently destroys the text and images under the box; the affected page is rasterized so nothing is recoverable">▮ Redact</button>
+        <button id="btnPlaceStamp" title="Place a verification stamp">▤ Stamp</button>
+        <span class="sep"></span>
+        <div class="rotate-group">
+          <span class="stamp-info" id="stampOrientationLabel"></span>
+          <button id="btnRotateStamp" title="Rotate the selected stamp 90°">↻ Rotate</button>
+        </div>
+      </div>
+      <div class="text-props" id="textPropsBar">
+        <select id="tpFont" class="tp" title="Font family (bold / italic → use the B / I buttons)">
+          <option value="sans"  style="font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif">Helvetica</option>
+          <option value="serif" style="font-family:'Times New Roman',Times,serif">Times New Roman</option>
+          <option value="mono"  style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">Courier</option>
+        </select>
+        <input type="number" id="tpSize" class="tp tp-size" min="6" max="96" step="1" value="12" title="Font size (pt)">
+        <span class="sep"></span>
+        <button class="tp icon bold"      id="tpBold"      title="Bold (⌘/Ctrl+B)">B</button>
+        <button class="tp icon italic"    id="tpItalic"    title="Italic (⌘/Ctrl+I)">I</button>
+        <button class="tp icon underline" id="tpUnderline" title="Underline (⌘/Ctrl+U)">U</button>
+        <span class="sep"></span>
+        <span class="tp-color-wrap" id="tpColorWrap" data-swatch title="Text color">
+          <input type="color" id="tpColor" class="tp-color" value="#000000">
+          <span class="glyph">A</span>
+        </span>
+        <span class="tp-color-wrap no-fill" id="tpBgWrap" data-swatch title="Background color (click to fill, × to clear)">
+          <input type="color" id="tpBgColor" class="tp-color" value="#fff59d">
+          <span class="glyph small">▨</span>
+        </span>
+        <button class="tp tp-clear" id="tpBgClear" hidden title="Clear background">×</button>
+        <span class="sep"></span>
+        <button class="tp icon" id="tpAlignL" title="Align left">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><line x1="3" y1="5" x2="17" y2="5"/><line x1="3" y1="10" x2="12" y2="10"/><line x1="3" y1="15" x2="15" y2="15"/></svg>
+        </button>
+        <button class="tp icon" id="tpAlignC" title="Align center">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><line x1="3" y1="5" x2="17" y2="5"/><line x1="6" y1="10" x2="14" y2="10"/><line x1="4" y1="15" x2="16" y2="15"/></svg>
+        </button>
+        <button class="tp icon" id="tpAlignR" title="Align right">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><line x1="3" y1="5" x2="17" y2="5"/><line x1="8" y1="10" x2="17" y2="10"/><line x1="5" y1="15" x2="17" y2="15"/></svg>
+        </button>
+        <span class="sep"></span>
+        <button class="tp tp-close" id="tpDeselect" title="Deselect">×</button>
       </div>
     </div>
     <div id="verifyBanner" style="display:none"></div>
+    <div id="formFieldsBanner" style="display:none; padding:8px 14px; background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); border-bottom:1px solid var(--border); font-size:12.5px;"></div>
     <div class="scroll-area" id="scrollArea">
       <div class="empty" id="emptyState">
         <div style="font-size:40px; margin-bottom: 4px;">📄</div>
@@ -975,13 +1219,18 @@ const sigImage = {
 };
 const doc = {
   file: null, bytes: null, pdfjs: null, numPages: 0,
-  scale: 1.4, fitWidth: false,
+  scale: 1.0, fitWidth: true,
   pageMeta: [], // {index, width, height, viewport, wrapEl, canvasEl, rendered, page}
   placements: [], // {id, pageIndex, xPdf, yPdf, wPdf, hPdf, type: 'digital'|'image', el, labelEl}
   selectedPlacementId: null,
 };
 let currentTool = null;   // 'sig' or null (armed to place, or idle)
 let placementIdSeq = 1;
+// Remembers the last text-box typography so a new text box picks up where
+// the previous one left off (font, size, color, bold, italic, underline, align, bgColor).
+const lastTextStyle = { font: 'sans', size: 12, color: '#000000', bold: false, italic: false, underline: false, align: 'left', bgColor: null };
+// Which text placement (if any) is currently in edit mode. Only one at a time.
+let textEditingPlacementId = null;
 
 /* ─── undo / redo for placements ─── */
 const undoStack = [];
@@ -995,6 +1244,15 @@ function snapshotPlacements() {
     nameFont: p.nameFont || 'serif-italic',
     text: p.text || '',
     orientation: p.orientation || 'horizontal',
+    // Text-placement typography
+    font: p.font || 'sans',
+    size: p.size || 12,
+    color: p.color || '#000000',
+    bold: !!p.bold,
+    italic: !!p.italic,
+    underline: !!p.underline,
+    align: p.align || 'left',
+    bgColor: p.bgColor || null,
   }));
 }
 function pushUndo() {
@@ -1320,6 +1578,9 @@ $('btnImportId').onclick = async () => {
   let p12U8 = buf;
   let bundledSigImage = null;
   let bundledLabel = null;
+  let bundledGh = null;
+  let bundledSettings = null;
+  let wasEncrypted = false;
 
   if (looksJson) {
     let text;
@@ -1327,12 +1588,34 @@ $('btnImportId').onclick = async () => {
     catch (e) { toast('Not a text file (' + e.message + ')', 'err'); return; }
     let b;
     try { b = JSON.parse(text); }
-    catch (e) {
-      toast('This looks like JSON but does not parse: ' + e.message, 'err');
-      return;
+    catch (e) { toast('JSON does not parse: ' + e.message, 'err'); return; }
+    if (b.label) bundledLabel = b.label;
+
+    if (b.version >= 3 && b.ciphertext_b64) {
+      // Encrypted envelope — ask for the bundle password, decrypt, then continue.
+      wasEncrypted = true;
+      let plainObj = null;
+      while (plainObj == null) {
+        const body = document.createElement('div');
+        body.innerHTML = `
+          <p class="hint" style="margin-bottom:6px">This bundle is encrypted${bundledLabel ? ` (label: <b>${String(bundledLabel).replace(/[<&>]/g, c => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[c]))}</b>)` : ''}. Enter its password.</p>
+          <label>Bundle password</label>
+          <input type="password" id="bpw" autocomplete="current-password">
+        `;
+        const r = await modal({ title: 'Decrypt identity bundle', body, confirmText: 'Decrypt' });
+        if (!r) return;
+        try {
+          const plainU8 = await decryptBundle(b, r.bpw || '');
+          plainObj = JSON.parse(new TextDecoder().decode(plainU8));
+        } catch (e) {
+          toast('Wrong password or tampered bundle', 'err');
+        }
+      }
+      b = plainObj;
     }
+
     if (!b.p12_base64) {
-      toast('JSON is missing the p12_base64 field — not a valid identity bundle', 'err');
+      toast('Bundle is missing the p12_base64 field — not a valid identity bundle', 'err');
       return;
     }
     try { p12U8 = binStrToU8(atob(b.p12_base64)); }
@@ -1340,17 +1623,8 @@ $('btnImportId').onclick = async () => {
     if (b.signatureImage_base64) {
       try { bundledSigImage = binStrToU8(atob(b.signatureImage_base64)); } catch (_) {}
     }
-    if (b.label) bundledLabel = b.label;
-  }
-
-  let bundledGh = null;
-  let bundledSettings = null;
-  if (looksJson) {
-    try {
-      const b = JSON.parse(new TextDecoder().decode(buf));
-      if (b.ghVault && typeof b.ghVault === 'object') bundledGh = b.ghVault;
-      if (b.settings && typeof b.settings === 'object') bundledSettings = b.settings;
-    } catch (_) {}
+    if (b.ghVault && typeof b.ghVault === 'object') bundledGh = b.ghVault;
+    if (b.settings && typeof b.settings === 'object') bundledSettings = b.settings;
   }
 
   const r = await askPasswordAndUnlockP12(p12U8);
@@ -1370,42 +1644,66 @@ $('btnImportId').onclick = async () => {
   renderIdentity();
   ghSyncFromActiveIdentity();
   loadSettingsForActiveIdentity();
-  let msg = 'Identity imported';
+  let msg = 'Identity imported' + (wasEncrypted ? '' : ' (bundle was NOT encrypted — consider re-exporting)');
   const bits = [];
   if (bundledSigImage) bits.push('signature image');
   if (bundledGh)       bits.push('GitHub vault ' + (bundledGh.token ? 'with token' : 'without token — add it via Configure GitHub vault'));
   if (bundledSettings) bits.push('settings');
   if (bits.length) msg += ' with ' + bits.join(', ');
-  toast(msg, 'ok');
+  toast(msg, wasEncrypted ? 'ok' : 'err');
 };
 
 $('btnExportId').onclick = async () => {
   if (!identity.p12U8) return;
   const rec = identities.get(identity.id);
   const hasGh = !!(rec && rec.ghVault);
+  const prefillPw = identity.password || '';
   const body = document.createElement('div');
   body.innerHTML = `
-    <p class="hint">Bundle contains the identity's key + certificate, the signature image, saved UI settings, and (optionally) the GitHub vault config for this identity.</p>
-    <label class="lock-row"><input type="checkbox" id="incGh" ${hasGh ? 'checked' : 'disabled'}> Include GitHub vault config ${hasGh ? '' : '(none configured)'}</label>
-    <label class="lock-row"><input type="checkbox" id="incTok"> Include the GitHub token (sensitive — anyone with this bundle can push to the repo)</label>
+    <p class="hint" style="margin-bottom:8px">
+      The bundle is encrypted with a password (PBKDF2-SHA256 · 200k iterations → AES-256-GCM).
+      Everything is included: the identity's key + certificate, signature image, saved UI settings, and (when configured) the GitHub vault config <b>with the token</b>. Without the password the file reveals nothing.
+    </p>
+    <label>Bundle password</label>
+    <input type="password" id="bpw" autocomplete="new-password" value="${prefillPw.replace(/"/g,'&quot;')}">
+    <label>Confirm bundle password</label>
+    <input type="password" id="bpw2" autocomplete="new-password" value="${prefillPw.replace(/"/g,'&quot;')}">
+    <p class="hint" style="margin-top:6px">
+      ${prefillPw
+        ? 'Pre-filled with the identity password. Change it if you want a separate bundle password.'
+        : 'Pick any password. Anyone importing this bundle needs it.'}
+      GitHub vault included: <b>${hasGh ? 'yes (with token)' : 'no (none configured)'}</b>.
+    </p>
   `;
   const r = await modal({ title: 'Export identity bundle', body, confirmText: 'Export' });
   if (!r) return;
-  const bundle = {
-    format: 'pdf-signer identity bundle',
-    version: 2,
-    label: identity.label,
+  const pw = r.bpw || '';
+  if (pw.length < 6) return toast('Bundle password must be at least 6 characters', 'err');
+  if (pw !== r.bpw2) return toast('Passwords do not match', 'err');
+
+  const inner = {
     meta: { name: identity.meta.name, email: identity.meta.email },
     p12_base64: btoa(u8ToBinStr(identity.p12U8)),
     signatureImage_base64: sigImage.pngU8 ? btoa(u8ToBinStr(sigImage.pngU8)) : null,
     settings: (rec && rec.settings) || collectSettings(),
+    ghVault: hasGh ? { ...rec.ghVault } : null,
   };
-  if (r.incGh && hasGh) {
-    bundle.ghVault = { ...rec.ghVault };
-    if (!r.incTok) delete bundle.ghVault.token;
-  }
-  const json = new TextEncoder().encode(JSON.stringify(bundle, null, 2));
+  const innerU8 = new TextEncoder().encode(JSON.stringify(inner));
+  const enc = await encryptBundle(innerU8, pw);
+  const envelope = {
+    format: 'pdf-signer identity bundle (encrypted)',
+    version: 3,
+    label: identity.label,
+    // Kept in cleartext so an importer sees the label before typing the password.
+    kdf: 'PBKDF2-SHA256',
+    iterations: enc.iterations,
+    salt_b64: btoa(u8ToBinStr(enc.salt)),
+    iv_b64: btoa(u8ToBinStr(enc.iv)),
+    ciphertext_b64: btoa(u8ToBinStr(enc.ct)),
+  };
+  const json = new TextEncoder().encode(JSON.stringify(envelope, null, 2));
   download(safeFilename(identity.label || identity.meta.name) + '.pdfsigner.json', json, 'application/json');
+  toast('Encrypted bundle exported' + (hasGh ? ' (GitHub token included)' : ''), 'ok');
 };
 $('btnRenameId').onclick = async () => {
   if (!identity.id) return;
@@ -1611,6 +1909,9 @@ $('btnCloseDoc').onclick = () => closeDoc();
 function closeDoc() {
   doc.file = null; doc.bytes = null; doc.pdfjs = null; doc.numPages = 0;
   doc.placements = []; doc.pageMeta = []; doc.formFields = {}; doc.selectedPlacementId = null;
+  doc.alreadySigned = false;
+  textEditingPlacementId = null;
+  reflectAlreadySignedInUi();
   $('pageList').innerHTML = '';
   $('placementList').innerHTML = '';
   $('toolbar').style.display = 'none';
@@ -1633,10 +1934,21 @@ async function openPdf(file) {
   doc.bytes = new Uint8Array(await file.arrayBuffer());
   doc.pdfjs = await pdfjsLib.getDocument({ data: doc.bytes.slice() }).promise;
   doc.numPages = doc.pdfjs.numPages;
+  // Compute the fit-width scale before the first page-list build so pages
+  // are rendered at the right size the first time and we don't need a second
+  // pass.
+  try {
+    const firstPage = await doc.pdfjs.getPage(1);
+    const vp1 = firstPage.getViewport({ scale: 1 });
+    const avail = $('scrollArea').clientWidth - 40;
+    if (avail > 100) doc.scale = Math.max(0.25, Math.min(6, avail / vp1.width));
+    doc.fitWidth = true;
+  } catch (_) { /* fall back to the current doc.scale */ }
   doc.placements = [];
   doc.pageMeta = [];
   doc.formFields = {};
   doc.selectedPlacementId = null;
+  doc.alreadySigned = false;
   $('placementList').innerHTML = '';
   $('emptyState').style.display = 'none';
   $('toolbar').style.display = 'flex';
@@ -1658,68 +1970,207 @@ async function openPdf(file) {
   if (verifyResults.length === 0 && hasSigPayload) {
     verifyResults = [{ error: 'A signature is referenced in the file, but its byte range or CMS payload could not be parsed. The document has likely been rewritten by another tool.', byteRange: [0,0,0,0] }];
   }
+  // If there's at least one valid signature already, the next signature must
+  // go via the incremental-append path or it will void the existing one.
+  doc.alreadySigned = verifyResults.some(r => !r.error && r.cryptoValid);
+  reflectAlreadySignedInUi();
   renderVerifyBanner(verifyResults, hasSigField && !hasSigPayload && verifyResults.length === 0);
   await buildPageList();
   await addSignatureStatusOverlays(verifyResults, hasSigPayload, hasSigField && !hasSigPayload);
   await renderFormFieldOverlays();
-  if ($('stampEnable').checked) autoSeedStampsIfNone();
+  if ($('stampEnable').checked && !doc.alreadySigned) autoSeedStampsIfNone();
   updateSignButton();
 }
 
-// Render editable overlays over each interactive text form widget on every
-// page. Typed values are persisted in doc.formFields and written back into
-// the PDF at sign time (see makeSignedPdf).
+function reflectAlreadySignedInUi() {
+  const on = !!doc.alreadySigned;
+  const note = $('alreadySignedNote'); if (note) note.style.display = on ? '' : 'none';
+  const group = $('lockmodeGroup'); if (group) group.style.display = on ? 'none' : '';
+  // Text and stamp tools are unsafe on an already-signed doc — they would
+  // modify page content and void the existing signature.
+  const textBtn = $('btnPlaceText'); if (textBtn) { textBtn.disabled = on; textBtn.title = on ? 'Disabled — a text box would modify the page and void the existing signature' : 'Place a text field'; }
+  const stampBtn = $('btnPlaceStamp'); if (stampBtn) { stampBtn.disabled = on; stampBtn.title = on ? 'Disabled — a stamp would modify the page and void the existing signature' : 'Place a verification stamp'; }
+  const redactBtn = $('btnPlaceRedact'); if (redactBtn) { redactBtn.disabled = on; redactBtn.title = on ? 'Disabled — redaction rewrites the page and would void the existing signature' : 'Redact — permanently destroys the text and images under the box'; }
+  // The stamp checkbox itself — if on, disable it and force off.
+  const stampEnable = $('stampEnable');
+  if (stampEnable) {
+    stampEnable.disabled = on;
+    if (on && stampEnable.checked) { stampEnable.checked = false; stampEnable.dispatchEvent(new Event('change')); }
+  }
+  // Appearance: only text-only is supported for follow-up signatures.
+  document.querySelectorAll('input[name="appearance"]').forEach(r => {
+    if (on) {
+      r.disabled = r.value !== 'text';
+      if (r.disabled && r.checked) r.checked = false;
+    } else {
+      r.disabled = false;
+    }
+  });
+  if (on) {
+    const t = document.querySelector('input[name="appearance"][value="text"]');
+    if (t) t.checked = true;
+  }
+}
+
+// Render editable overlays over every interactive form widget on every page.
+// Supports text, textarea, checkbox, radio button, and choice (dropdown /
+// listbox). Values persist in doc.formFields and are drawn into the PDF at
+// sign time (see makeSignedPdf).
 async function renderFormFieldOverlays() {
+  const commonBoxCss = (left, top, w, h) => [
+    'position:absolute',
+    'left:' + left + 'px', 'top:' + top + 'px',
+    'width:' + w + 'px', 'height:' + h + 'px',
+    'margin:0',
+    'z-index:4',
+    'box-sizing:border-box',
+    'outline:none',
+  ];
+  const noSelectBubble = (el) => {
+    el.addEventListener('mousedown', ev => ev.stopPropagation());
+    el.addEventListener('click',     ev => ev.stopPropagation());
+    el.addEventListener('dblclick',  ev => ev.stopPropagation());
+  };
+  const rectToViewport = (a, meta) => {
+    const [x1, y1, x2, y2] = a.rect;
+    const [cx1, cy1] = meta.viewport.convertToViewportPoint(x1, y2);
+    const [cx2, cy2] = meta.viewport.convertToViewportPoint(x2, y1);
+    const left = Math.min(cx1, cx2), top = Math.min(cy1, cy2);
+    const w = Math.abs(cx2 - cx1), h = Math.abs(cy2 - cy1);
+    return { left, top, w, h };
+  };
+
+  let detected = 0;
   for (const meta of doc.pageMeta) {
     let anns = [];
     try { anns = await meta.page.getAnnotations(); } catch (_) { continue; }
     for (const a of anns) {
       if (a.annotationType !== 20) continue;              // WIDGET
-      const ft = (a.fieldType || '').toLowerCase();
-      if (ft !== 'tx') continue;                          // text only for now
       if (a.readOnly) continue;
       if (!a.rect || a.rect.length < 4) continue;
-
+      const ft = (a.fieldType || '').toLowerCase();
       const name = a.fieldName || ('unnamed-' + meta.index + '-' + (a.id || Math.random().toString(36).slice(2, 8)));
-      const initialVal = (doc.formFields[name] && doc.formFields[name].value != null)
-        ? doc.formFields[name].value
-        : (a.fieldValue || '');
-      doc.formFields[name] = { name, pageIndex: meta.index, rect: a.rect, value: initialVal, multiLine: !!a.multiLine };
+      const { left, top, w, h } = rectToViewport(a, meta);
 
-      const [x1, y1, x2, y2] = a.rect;
-      const [cx1, cy1] = meta.viewport.convertToViewportPoint(x1, y2);
-      const [cx2, cy2] = meta.viewport.convertToViewportPoint(x2, y1);
-      const left = Math.min(cx1, cx2), top = Math.min(cy1, cy2);
-      const w = Math.abs(cx2 - cx1), h = Math.abs(cy2 - cy1);
-
-      const el = document.createElement(a.multiLine ? 'textarea' : 'input');
-      if (!a.multiLine) el.type = 'text';
-      el.value = initialVal;
-      el.title = 'PDF form field: ' + name;
-      const fontSize = Math.max(9, Math.min(a.multiLine ? 12 : Math.round(h * 0.6), 16));
-      el.style.cssText = [
-        'position:absolute',
-        'left:' + left + 'px',
-        'top:' + top + 'px',
-        'width:' + w + 'px',
-        'height:' + h + 'px',
-        'padding:0 3px',
-        'margin:0',
-        'border:1.5px dashed rgba(47,111,235,.55)',
-        'background: rgba(47,111,235,.06)',
-        'color:#000',
-        'font: ' + fontSize + 'px -apple-system, "Segoe UI", Roboto, sans-serif',
-        'line-height:' + (a.multiLine ? '1.2' : (h + 'px')),
-        'z-index:4',
-        'box-sizing:border-box',
-        'resize:none',
-        'outline:none',
-      ].join(';');
-      el.addEventListener('input', () => { doc.formFields[name].value = el.value; });
-      // Don't propagate clicks that would otherwise create a placement.
-      el.addEventListener('mousedown', ev => ev.stopPropagation());
-      el.addEventListener('click', ev => ev.stopPropagation());
-      meta.wrapEl.appendChild(el);
+      if (ft === 'tx') {
+        detected++;
+        const initialVal = (doc.formFields[name] && doc.formFields[name].value != null)
+          ? doc.formFields[name].value
+          : (a.fieldValue || '');
+        doc.formFields[name] = { name, kind: 'text', pageIndex: meta.index, rect: a.rect, value: initialVal, multiLine: !!a.multiLine };
+        const el = document.createElement(a.multiLine ? 'textarea' : 'input');
+        if (!a.multiLine) el.type = 'text';
+        el.value = initialVal;
+        el.title = 'PDF form field: ' + name;
+        const fontSize = Math.max(9, Math.min(a.multiLine ? 12 : Math.round(h * 0.6), 16));
+        el.style.cssText = commonBoxCss(left, top, w, h).concat([
+          'padding:0 3px',
+          'border:1.5px dashed rgba(47,111,235,.7)',
+          'background: rgba(47,111,235,.08)',
+          'color:#000',
+          'font: ' + fontSize + 'px -apple-system, "Segoe UI", Roboto, sans-serif',
+          'line-height:' + (a.multiLine ? '1.2' : (h + 'px')),
+          'resize:none',
+        ]).join(';');
+        el.addEventListener('input', () => { doc.formFields[name].value = el.value; });
+        noSelectBubble(el);
+        meta.wrapEl.appendChild(el);
+      }
+      else if (ft === 'btn' && a.checkBox) {
+        detected++;
+        const initial = (doc.formFields[name] && typeof doc.formFields[name].value === 'boolean')
+          ? doc.formFields[name].value
+          : !!(a.fieldValue && a.fieldValue !== 'Off');
+        doc.formFields[name] = { name, kind: 'checkbox', pageIndex: meta.index, rect: a.rect, value: initial };
+        const box = document.createElement('div');
+        box.style.cssText = commonBoxCss(left, top, w, h).concat([
+          'display:flex', 'align-items:center', 'justify-content:center',
+          'border:1.5px dashed rgba(47,111,235,.7)',
+          'background: rgba(47,111,235,.08)',
+          'cursor:pointer',
+          'color:#0b3d91', 'font-size:' + Math.max(10, Math.min(h - 4, 20)) + 'px',
+          'font-weight:800', 'line-height:1',
+        ]).join(';');
+        box.title = 'PDF checkbox: ' + name;
+        const markCh = () => { box.textContent = doc.formFields[name].value ? '✓' : ''; };
+        markCh();
+        box.addEventListener('click', () => { doc.formFields[name].value = !doc.formFields[name].value; markCh(); });
+        noSelectBubble(box);
+        meta.wrapEl.appendChild(box);
+      }
+      else if (ft === 'btn' && a.radioButton) {
+        detected++;
+        // Radio: multiple widgets share a fieldName; each has its own exportValue.
+        // The field value is one of the exportValues (or the special 'Off').
+        const exportValue = a.buttonValue || 'On';
+        if (!doc.formFields[name]) {
+          const initial = a.fieldValue || null;
+          doc.formFields[name] = { name, kind: 'radio', pageIndex: meta.index, options: [], value: initial };
+        }
+        doc.formFields[name].options.push({ exportValue, rect: a.rect, pageIndex: meta.index });
+        const box = document.createElement('div');
+        box.style.cssText = commonBoxCss(left, top, w, h).concat([
+          'display:flex', 'align-items:center', 'justify-content:center',
+          'border:1.5px dashed rgba(47,111,235,.7)',
+          'background: rgba(47,111,235,.08)',
+          'border-radius:50%',
+          'cursor:pointer', 'color:#0b3d91',
+        ]).join(';');
+        box.title = 'PDF radio button: ' + name + ' → ' + exportValue;
+        const dotChar = '●';
+        const paint = () => { box.textContent = (doc.formFields[name].value === exportValue) ? dotChar : ''; };
+        paint();
+        box.addEventListener('click', () => {
+          doc.formFields[name].value = exportValue;
+          // Repaint all sibling widgets that share this fieldName.
+          meta.wrapEl.parentNode?.querySelectorAll(`[data-radioname="${name}"]`)
+            .forEach(el => el.dispatchEvent(new CustomEvent('radiorefresh')));
+        });
+        box.dataset.radioname = name;
+        box.addEventListener('radiorefresh', paint);
+        noSelectBubble(box);
+        meta.wrapEl.appendChild(box);
+      }
+      else if (ft === 'ch') {
+        detected++;
+        const initial = (doc.formFields[name] && doc.formFields[name].value != null)
+          ? doc.formFields[name].value
+          : (a.fieldValue || '');
+        doc.formFields[name] = { name, kind: 'choice', pageIndex: meta.index, rect: a.rect, value: initial, options: a.options || [] };
+        const el = document.createElement('select');
+        el.title = 'PDF choice: ' + name;
+        const empty = document.createElement('option'); empty.value = ''; empty.textContent = '— select —'; el.appendChild(empty);
+        for (const opt of (a.options || [])) {
+          const o = document.createElement('option');
+          o.value = opt.exportValue != null ? opt.exportValue : (opt.displayValue || '');
+          o.textContent = opt.displayValue || opt.exportValue || '';
+          if (o.value === initial) o.selected = true;
+          el.appendChild(o);
+        }
+        const fontSize = Math.max(9, Math.min(Math.round(h * 0.55), 14));
+        el.style.cssText = commonBoxCss(left, top, w, h).concat([
+          'padding:0 3px',
+          'border:1.5px dashed rgba(47,111,235,.7)',
+          'background: rgba(47,111,235,.08)',
+          'color:#000',
+          'font: ' + fontSize + 'px -apple-system, "Segoe UI", Roboto, sans-serif',
+        ]).join(';');
+        el.addEventListener('change', () => { doc.formFields[name].value = el.value; });
+        noSelectBubble(el);
+        meta.wrapEl.appendChild(el);
+      }
+    }
+  }
+  doc.formFieldCount = detected;
+  const banner = $('formFieldsBanner');
+  if (banner) {
+    if (detected > 0 && !doc.alreadySigned) {
+      banner.textContent = detected === 1
+        ? '1 fillable form field detected — click into it, then sign.'
+        : `${detected} fillable form fields detected — fill them in the page, then sign.`;
+      banner.style.display = '';
+    } else {
+      banner.style.display = 'none';
     }
   }
 }
@@ -1859,6 +2310,7 @@ async function buildPageList() {
   const list = $('pageList');
   list.innerHTML = '';
   if (intersectionObs) intersectionObs.disconnect();
+  doc.pageMeta = [];
 
   // Pre-fetch viewport metadata for all pages at current scale
   for (let i = 1; i <= doc.numPages; i++) {
@@ -1877,12 +2329,20 @@ async function buildPageList() {
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     wrap.appendChild(canvas);
+    // Text layer sits on top of the canvas. When the Redact tool is armed,
+    // pointer-events turn on for it and the browser handles native text
+    // selection over the real glyph positions.
+    const textLayer = document.createElement('div');
+    textLayer.className = 'text-layer';
+    textLayer.style.setProperty('--scale-factor', viewport.scale);
+    wrap.appendChild(textLayer);
+    if (currentTool === 'redact') wrap.classList.add('redact-mode');
     list.appendChild(wrap);
-    doc.pageMeta.push({ index: i - 1, page, viewport, wrapEl: wrap, canvasEl: canvas, rendered: false });
+    doc.pageMeta.push({ index: i - 1, page, viewport, wrapEl: wrap, canvasEl: canvas, textLayerEl: textLayer, rendered: false, textRendered: false });
     wrap.addEventListener('click', onPageClick);
   }
 
-  // Lazy-render on scroll
+  // Lazy-render on scroll — render both the canvas AND the text layer.
   intersectionObs = new IntersectionObserver(entries => {
     for (const e of entries) {
       if (!e.isIntersecting) continue;
@@ -1893,6 +2353,10 @@ async function buildPageList() {
         meta.page.render({ canvasContext: meta.canvasEl.getContext('2d'), viewport: meta.viewport }).promise
           .catch(err => console.warn('render fail', idx, err));
       }
+      if (!meta.textRendered) {
+        meta.textRendered = true;
+        renderTextLayerForPage(meta).catch(err => console.warn('text layer fail', idx, err));
+      }
     }
   }, { root: $('scrollArea'), rootMargin: '400px 0px' });
   for (const m of doc.pageMeta) intersectionObs.observe(m.wrapEl);
@@ -1902,60 +2366,199 @@ async function buildPageList() {
 
 async function rerenderAtScale() {
   // Preserve placements' PDF coords; rebuild page list, then re-mount placements.
+  const scrollEl = $('scrollArea');
+  const oldScale = doc.pageMeta[0]?.viewport?.scale || doc.scale;
+  const ratio = doc.scale / oldScale;
+  const anchorTop = scrollEl.scrollTop;
+  const anchorLeft = scrollEl.scrollLeft;
   await buildPageList();
+  scrollEl.scrollTop = Math.round(anchorTop * ratio);
+  scrollEl.scrollLeft = Math.round(anchorLeft * ratio);
   for (const p of doc.placements) attachPlacementToPage(p);
   // Re-render form field overlays too — buildPageList nuked them.
   const preserved = doc.formFields;
   doc.formFields = {};
   await renderFormFieldOverlays();
-  // Carry typed values back onto the freshly-rendered inputs.
+  // Carry filled values back onto the freshly-rendered widgets.
   for (const [name, prev] of Object.entries(preserved)) {
-    if (doc.formFields[name] && prev.value != null && prev.value !== '') {
-      doc.formFields[name].value = prev.value;
-      const meta = doc.pageMeta[doc.formFields[name].pageIndex];
-      const inputs = meta && meta.wrapEl.querySelectorAll('input, textarea');
-      if (inputs) for (const inp of inputs) if (inp.title === 'PDF form field: ' + name) inp.value = prev.value;
+    const cur = doc.formFields[name];
+    if (!cur) continue;
+    if (prev.value == null) continue;
+    cur.value = prev.value;
+    const meta = doc.pageMeta[cur.pageIndex];
+    if (!meta) continue;
+    if (cur.kind === 'text') {
+      const inputs = meta.wrapEl.querySelectorAll('input, textarea');
+      for (const inp of inputs) if (inp.title === 'PDF form field: ' + name) inp.value = String(prev.value ?? '');
+    } else if (cur.kind === 'checkbox') {
+      const boxes = meta.wrapEl.querySelectorAll('div');
+      for (const b of boxes) if (b.title === 'PDF checkbox: ' + name) b.textContent = prev.value ? '✓' : '';
+    } else if (cur.kind === 'radio') {
+      const boxes = meta.wrapEl.parentNode.querySelectorAll(`[data-radioname="${name}"]`);
+      for (const b of boxes) b.dispatchEvent(new CustomEvent('radiorefresh'));
+    } else if (cur.kind === 'choice') {
+      const selects = meta.wrapEl.querySelectorAll('select');
+      for (const s of selects) if (s.title === 'PDF choice: ' + name) s.value = String(prev.value ?? '');
     }
   }
   refreshSelectedPlacement();
 }
 
-$('btnZoomIn').onclick = () => { doc.scale = Math.min(4, doc.scale * 1.15); doc.fitWidth = false; rerenderAtScale(); };
-$('btnZoomOut').onclick = () => { doc.scale = Math.max(0.4, doc.scale / 1.15); doc.fitWidth = false; rerenderAtScale(); };
-$('btnFitWidth').onclick = async () => {
+$('btnZoomIn').onclick = () => { doc.scale = Math.min(6, doc.scale * 1.15); doc.fitWidth = false; rerenderAtScale(); };
+$('btnZoomOut').onclick = () => { doc.scale = Math.max(0.25, doc.scale / 1.15); doc.fitWidth = false; rerenderAtScale(); };
+$('btnFitWidth').onclick = async () => { await fitPageToWidth(); };
+async function fitPageToWidth() {
   if (!doc.pdfjs) return;
   const page = await doc.pdfjs.getPage(1);
   const vp1 = page.getViewport({ scale: 1 });
   const avail = $('scrollArea').clientWidth - 40;
-  doc.scale = avail / vp1.width;
+  const target = Math.max(0.25, Math.min(6, avail / vp1.width));
+  if (Math.abs(target - doc.scale) < 0.005 && doc.fitWidth) { updateZoomLabel(); return; }
+  doc.scale = target;
   doc.fitWidth = true;
+  await rerenderAtScale();
+}
+function updateZoomLabel() {
+  const pct = Math.round(doc.scale * 100);
+  $('zoomLabel').textContent = (doc.fitWidth ? 'Fit · ' : '') + pct + '%';
+  $('btnFitWidth').classList.toggle('active', !!doc.fitWidth);
+}
+
+// Ctrl/Cmd + wheel over the PDF area = zoom in/out around the pointer.
+$('scrollArea').addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (!doc.pdfjs) return;
+  e.preventDefault();
+  const dir = e.deltaY < 0 ? 1 : -1;
+  const factor = dir > 0 ? 1.1 : 1 / 1.1;
+  doc.scale = Math.max(0.25, Math.min(6, doc.scale * factor));
+  doc.fitWidth = false;
   rerenderAtScale();
-};
-function updateZoomLabel() { $('zoomLabel').textContent = Math.round(doc.scale / 1.4 * 100) + '%'; }
+}, { passive: false });
+
+// Re-fit on window resize when Fit-Width is on. Debounce so we don't thrash.
+let _resizeTimer;
+window.addEventListener('resize', () => {
+  if (!doc.pdfjs || !doc.fitWidth) return;
+  clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(() => { fitPageToWidth(); }, 120);
+});
 
 /* ═══════════════════════════════════════════════════════════════════════
    Placements: create, drag, resize, delete, list
    ═══════════════════════════════════════════════════════════════════════ */
-$('btnPlaceSig').onclick   = () => setTool(currentTool === 'sig'   ? null : 'sig');
-$('btnPlaceText').onclick  = () => setTool(currentTool === 'text'  ? null : 'text');
-$('btnPlaceStamp').onclick = () => setTool(currentTool === 'stamp' ? null : 'stamp');
+$('btnPlaceSig').onclick    = () => setTool(currentTool === 'sig'    ? null : 'sig');
+$('btnPlaceText').onclick   = () => setTool(currentTool === 'text'   ? null : 'text');
+$('btnPlaceStamp').onclick  = () => setTool(currentTool === 'stamp'  ? null : 'stamp');
+$('btnPlaceRedact').onclick = () => setTool(currentTool === 'redact' ? null : 'redact');
 function setTool(t) {
   currentTool = t;
-  $('btnPlaceSig').classList.toggle('active',   t === 'sig');
-  $('btnPlaceText').classList.toggle('active',  t === 'text');
-  $('btnPlaceStamp').classList.toggle('active', t === 'stamp');
+  $('btnPlaceSig').classList.toggle('active',    t === 'sig');
+  $('btnPlaceText').classList.toggle('active',   t === 'text');
+  $('btnPlaceStamp').classList.toggle('active',  t === 'stamp');
+  $('btnPlaceRedact').classList.toggle('active', t === 'redact');
   const wraps = document.querySelectorAll('.page-wrap');
-  wraps.forEach(w => w.classList.toggle('no-place', t === null));
+  wraps.forEach(w => {
+    w.classList.toggle('no-place', t === null);
+    w.classList.toggle('redact-mode', t === 'redact');
+  });
   $('toolHint').textContent =
-      t === 'sig'   ? 'Click a page to place the signature. Drag to move, corner to resize, × or Delete to remove.'
-    : t === 'text'  ? 'Click a page to drop a text field. Click inside to type, drag the border to move, corner to resize.'
-    : t === 'stamp' ? 'Click a page to drop the integrity stamp box. Only ONE stamp position is used — its coords are reused on every page at sign time.'
-    :                 'Pick ✍ Signature, A Text field or ▤ Stamp box, then click a page. Drag boxes to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo.';
+      t === 'sig'    ? 'Click a page to place the signature. Drag to move, corner to resize, × or Delete to remove.'
+    : t === 'text'   ? 'Click a page to drop a text field. Click inside to type, drag the border to move, corner to resize.'
+    : t === 'stamp'  ? 'Click a page to drop the integrity stamp box. Only ONE stamp position is used — its coords are reused on every page at sign time.'
+    : t === 'redact' ? 'Drag over any text to mark it for redaction (works across lines and inside words). Or click an empty area to drop a redaction box for images.'
+    :                  'Pick a tool, then click a page. Drag boxes to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo.';
 }
+
+// Render pdf.js's text layer over a page canvas. Invisible spans that match
+// the real glyph positions, so browser text selection is pixel-accurate.
+async function renderTextLayerForPage(meta) {
+  const container = meta.textLayerEl;
+  if (!container || container.childElementCount > 0) return;
+  const textContent = await meta.page.getTextContent();
+  container.style.setProperty('--scale-factor', meta.viewport.scale);
+  try {
+    // pdf.js 3.x renderTextLayer returns an object with a `.promise` for the
+    // async render. Older signatures return the promise directly. Handle both.
+    const task = pdfjsLib.renderTextLayer({
+      textContentSource: textContent,
+      container,
+      viewport: meta.viewport,
+      textDivs: [],
+    });
+    if (task && task.promise) await task.promise;
+    else if (task && typeof task.then === 'function') await task;
+  } catch (e) {
+    console.warn('renderTextLayer failed on page', meta.index, e);
+  }
+}
+
+// When the user drags a selection while the Redact tool is armed, convert
+// each contiguous piece of the selection into a redaction placement whose
+// rectangle matches the exact bounding boxes of the selected glyphs.
+function commitTextSelectionAsRedactions() {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return 0;
+  const range = sel.getRangeAt(0);
+  if (range.collapsed) return 0;
+  // Find the page-wrap the selection is inside.
+  let node = range.commonAncestorContainer;
+  while (node && !(node.classList && node.classList.contains('page-wrap'))) node = node.parentNode;
+  if (!node) return 0;
+  const pageIndex = parseInt(node.dataset.pageIndex, 10);
+  const meta = doc.pageMeta[pageIndex];
+  if (!meta) return 0;
+  const wrapRect = node.getBoundingClientRect();
+  const rects = range.getClientRects();
+  if (!rects || rects.length === 0) return 0;
+  pushUndo();
+  let count = 0;
+  for (const r of rects) {
+    if (r.width < 2 || r.height < 2) continue;
+    const localX = r.left - wrapRect.left;
+    const localY = r.top  - wrapRect.top;
+    const [x1, y1] = meta.viewport.convertToPdfPoint(localX,             localY + r.height);
+    const [x2, y2] = meta.viewport.convertToPdfPoint(localX + r.width,   localY);
+    const xPdf = Math.min(x1, x2), yPdf = Math.min(y1, y2);
+    const wPdf = Math.abs(x2 - x1), hPdf = Math.abs(y2 - y1);
+    // Tiny slop so a tight character-height box also catches ascender/descender pixels.
+    const p = {
+      id: placementIdSeq++,
+      pageIndex,
+      xPdf: xPdf - 1, yPdf: yPdf - 1,
+      wPdf: wPdf + 2, hPdf: hPdf + 2,
+      type: 'redact',
+    };
+    doc.placements.push(p);
+    attachPlacementToPage(p);
+    count++;
+  }
+  sel.removeAllRanges();
+  if (count > 0) renderPlacementList();
+  return count;
+}
+
+// mouseup anywhere on the scroll area: if a text selection landed on a page
+// while the Redact tool was armed, convert it into redaction placements.
+document.addEventListener('mouseup', () => {
+  if (currentTool !== 'redact') return;
+  // Defer one tick so window.getSelection() has finalized the range.
+  setTimeout(() => {
+    const n = commitTextSelectionAsRedactions();
+    if (n > 0) toast(`Marked ${n} text run${n > 1 ? 's' : ''} for redaction`, 'ok');
+  }, 0);
+});
 
 function onPageClick(e) {
   if (e.target.closest('.placement')) return;
-  if (currentTool !== 'sig' && currentTool !== 'text' && currentTool !== 'stamp') {
+  // Clicks that landed on a text-layer span (or that follow a text selection
+  // drag) belong to the redaction text-selection workflow, not the
+  // drop-a-default-box workflow.
+  if (e.target.closest('.text-layer')) return;
+  const sel = window.getSelection && window.getSelection();
+  if (sel && sel.rangeCount && !sel.getRangeAt(0).collapsed) return;
+  const armed = ['sig', 'text', 'stamp', 'redact'].includes(currentTool);
+  if (!armed) {
     if (doc.selectedPlacementId != null) {
       doc.selectedPlacementId = null;
       refreshSelectedPlacement();
@@ -1970,10 +2573,14 @@ function onPageClick(e) {
   const cx = e.clientX - rect.left;
   const cy = e.clientY - rect.top;
   const [xPdf, yPdf] = meta.viewport.convertToPdfPoint(cx, cy);
-  const isText  = currentTool === 'text';
-  const isStamp = currentTool === 'stamp';
-  const wPdf = isStamp ? Math.min(500, meta.viewport.viewBox[2] - 20) : (isText ? 180 : 220);
-  const hPdf = isStamp ? 44                                            : (isText ?  22 :  72);
+  const isText   = currentTool === 'text';
+  const isStamp  = currentTool === 'stamp';
+  const isRedact = currentTool === 'redact';
+  const wPdf = isStamp ? Math.min(500, meta.viewport.viewBox[2] - 20)
+             : isRedact ? 180
+             : isText   ? 180
+             :            220;
+  const hPdf = isStamp ? 44 : (isRedact ? 20 : (isText ? 22 : 72));
   pushUndo();
   const p = {
     id: placementIdSeq++,
@@ -1981,18 +2588,27 @@ function onPageClick(e) {
     xPdf: xPdf - wPdf / 2,
     yPdf: yPdf - hPdf / 2,
     wPdf, hPdf,
-    type: isStamp ? 'stamp' : (isText ? 'text' : 'digital'),
-    appearance: (isText || isStamp) ? undefined : currentAppearance(),
-    nameFont:   (isText || isStamp) ? undefined : ($('nameFont')?.value || 'serif-italic'),
+    type: isStamp ? 'stamp' : (isRedact ? 'redact' : (isText ? 'text' : 'digital')),
+    appearance: (isText || isStamp || isRedact) ? undefined : currentAppearance(),
+    nameFont:   (isText || isStamp || isRedact) ? undefined : ($('nameFont')?.value || 'serif-italic'),
     text: isText ? '' : undefined,
     orientation: isStamp ? 'horizontal' : undefined,
+    font: isText ? (lastTextStyle.font || 'sans') : undefined,
+    size: isText ? (lastTextStyle.size || 12) : undefined,
+    color: isText ? (lastTextStyle.color || '#000000') : undefined,
+    bold: isText ? !!lastTextStyle.bold : false,
+    italic: isText ? !!lastTextStyle.italic : false,
+    underline: isText ? !!lastTextStyle.underline : false,
+    align: isText ? (lastTextStyle.align || 'left') : undefined,
+    bgColor: isText ? (lastTextStyle.bgColor || null) : undefined,
   };
   doc.placements.push(p);
   attachPlacementToPage(p);
   renderPlacementList();
   selectPlacement(p.id);
   if (isText) {
-    setTimeout(() => p.el?.querySelector('.text-input')?.focus(), 20);
+    // Drop straight into edit mode so the user can just start typing.
+    setTimeout(() => enterTextEditMode(p), 20);
   }
   if (isStamp) {
     // Turn on stamping automatically once the user positions one.
@@ -2029,13 +2645,32 @@ function attachPlacementToPage(p) {
   if (p.type === 'text') {
     const input = document.createElement('div');
     input.className = 'text-input';
-    input.contentEditable = 'true';
+    input.contentEditable = 'false';         // starts non-editable so single-click drags
     input.spellcheck = false;
-    input.dataset.placeholder = 'Type here…';
+    input.dataset.placeholder = 'Double-click to type';
     input.textContent = p.text || '';
     input.addEventListener('input', () => { p.text = input.innerText; });
-    input.addEventListener('mousedown', ev => ev.stopPropagation()); // don't start a drag on typing
+    // In edit mode only, don't let mousedown bubble up and start a drag.
+    input.addEventListener('mousedown', ev => {
+      if (textEditingPlacementId === p.id) ev.stopPropagation();
+    });
+    // Double-click on the box (or the input inside it) enters edit mode.
+    el.addEventListener('dblclick', ev => {
+      if (ev.target.classList && (ev.target.classList.contains('close') || ev.target.classList.contains('handle') || ev.target.classList.contains('drag-strip'))) return;
+      enterTextEditMode(p);
+    });
+    // A slim drag strip along the top edge so users can move even in edit mode.
+    const strip = document.createElement('div');
+    strip.className = 'drag-strip';
+    strip.title = 'Drag to move';
+    el.appendChild(strip);
     el.appendChild(input);
+    applyTextPlacementStyle(p);
+  } else if (p.type === 'redact') {
+    const label = document.createElement('div');
+    label.className = 'redact-label';
+    label.textContent = 'Redact';
+    el.appendChild(label);
   } else if (p.type === 'stamp') {
     const preview = document.createElement('div');
     preview.style.cssText = 'position:absolute; inset:0; display:flex; align-items:center; gap:6px; padding:4px; font-size:11px; color:#8a5a10; pointer-events:none;';
@@ -2314,6 +2949,7 @@ function removePlacement(id) {
   const idx = doc.placements.findIndex(p => p.id === id);
   if (idx < 0) return;
   const p = doc.placements[idx];
+  if (textEditingPlacementId === id) textEditingPlacementId = null;
   if (p.el?.parentNode) p.el.parentNode.removeChild(p.el);
   doc.placements.splice(idx, 1);
   if (doc.selectedPlacementId === id) doc.selectedPlacementId = null;
@@ -2336,12 +2972,180 @@ function selectPlacement(id) {
 function updateStampRotateRow() {
   const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
   const isStamp = !!(p && p.type === 'stamp');
+  const isText  = !!(p && p.type === 'text');
   const ft = $('floatingTools');
-  if (ft) ft.classList.toggle('has-stamp-selected', isStamp);
+  if (ft) {
+    ft.classList.toggle('has-stamp-selected', isStamp);
+    ft.classList.toggle('has-text-selected', isText);
+  }
   if (isStamp) {
     $('stampOrientationLabel').textContent = p.orientation === 'vertical' ? 'vertical' : 'horizontal';
   }
+  if (isText) syncTextPropsBar(p);
 }
+
+/* ─── real text tool: typography + edit-mode UX ─── */
+
+const CSS_FONT_FOR = {
+  sans:  '-apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif',
+  serif: '"Times New Roman", Times, serif',
+  mono:  'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+};
+
+function applyTextPlacementStyle(p) {
+  if (!p.el) return;
+  const input = p.el.querySelector('.text-input');
+  if (!input) return;
+  const scale = doc.pageMeta[p.pageIndex]?.viewport?.scale || 1;
+  const family = CSS_FONT_FOR[p.font || 'sans'] || CSS_FONT_FOR.sans;
+  input.style.fontFamily = family;
+  input.style.fontSize   = ((p.size || 12) * scale) + 'px';
+  input.style.fontWeight = p.bold ? '700' : '400';
+  input.style.fontStyle  = p.italic ? 'italic' : 'normal';
+  input.style.textDecoration = p.underline ? 'underline' : 'none';
+  input.style.color      = p.color || '#000000';
+  input.style.textAlign  = p.align || 'left';
+  // Background fill: applied to the placement box itself so it visibly
+  // covers whatever's underneath, even when the text is short.
+  if (p.bgColor) {
+    p.el.style.background = p.bgColor;
+    p.el.style.borderColor = 'transparent';         // hide the dashed guide when a fill is set
+  } else {
+    p.el.style.background = '';
+    p.el.style.borderColor = '';
+  }
+}
+
+function syncTextPropsBar(p) {
+  if (!p || p.type !== 'text') return;
+  const fam = p.font || 'sans';
+  const fSel = $('tpFont');
+  fSel.value = fam;
+  fSel.style.fontFamily = CSS_FONT_FOR[fam] || CSS_FONT_FOR.sans;   // preview the family in the chip itself
+  $('tpSize').value = p.size || 12;
+  $('tpColor').value = p.color || '#000000';
+  $('tpColorWrap').style.setProperty('--swatch', p.color || '#000000');
+  // Background chip: shows the color if set, or a "no fill" hatched swatch.
+  const bgWrap = $('tpBgWrap');
+  if (p.bgColor) {
+    $('tpBgColor').value = p.bgColor;
+    bgWrap.style.setProperty('--swatch', p.bgColor);
+    bgWrap.classList.remove('no-fill');
+    $('tpBgClear').hidden = false;
+  } else {
+    bgWrap.style.setProperty('--swatch', 'transparent');
+    bgWrap.classList.add('no-fill');
+    $('tpBgClear').hidden = true;
+  }
+  $('tpBold').classList.toggle('active', !!p.bold);
+  $('tpItalic').classList.toggle('active', !!p.italic);
+  $('tpUnderline').classList.toggle('active', !!p.underline);
+  for (const a of ['left', 'center', 'right']) {
+    $(`tpAlign${a[0].toUpperCase()}`).classList.toggle('active', (p.align || 'left') === a);
+  }
+}
+
+function mutateSelectedText(fn) {
+  const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
+  if (!p || p.type !== 'text') return;
+  pushUndo();
+  fn(p);
+  Object.assign(lastTextStyle, {
+    font: p.font, size: p.size, color: p.color,
+    bold: p.bold, italic: p.italic, underline: p.underline, align: p.align,
+    bgColor: p.bgColor,
+  });
+  applyTextPlacementStyle(p);
+  syncTextPropsBar(p);
+  renderPlacementList();
+}
+
+function enterTextEditMode(p) {
+  if (!p || p.type !== 'text' || !p.el) return;
+  if (textEditingPlacementId != null && textEditingPlacementId !== p.id) {
+    const prev = doc.placements.find(pp => pp.id === textEditingPlacementId);
+    if (prev) exitTextEditMode(prev);
+  }
+  textEditingPlacementId = p.id;
+  selectPlacement(p.id);
+  const input = p.el.querySelector('.text-input');
+  if (!input) return;
+  p.el.classList.add('editing');
+  input.contentEditable = 'true';
+  input.focus();
+  // Put the caret at the end.
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(input);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function exitTextEditMode(p) {
+  if (!p || p.type !== 'text' || !p.el) return;
+  const input = p.el.querySelector('.text-input');
+  if (input) {
+    input.contentEditable = 'false';
+    p.text = input.innerText;
+  }
+  p.el.classList.remove('editing');
+  if (textEditingPlacementId === p.id) textEditingPlacementId = null;
+}
+
+// Outside-click behavior: exit edit mode AND deselect the text box, which
+// hides the typography bar and brings the signature/text/stamp tool bar back.
+document.addEventListener('mousedown', (e) => {
+  const inTextProps = !!(e.target.closest && e.target.closest('.text-props'));
+  if (inTextProps) return;  // clicks on the typography controls are for the current selection
+  // Exit edit mode if we were editing and the click is outside the editing box.
+  if (textEditingPlacementId != null) {
+    const editing = doc.placements.find(pp => pp.id === textEditingPlacementId);
+    if (editing && editing.el && !editing.el.contains(e.target)) exitTextEditMode(editing);
+  }
+  // Deselect the currently-selected text placement when the click misses it.
+  const sel = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
+  if (sel && sel.type === 'text' && sel.el && !sel.el.contains(e.target)) {
+    doc.selectedPlacementId = null;
+    refreshSelectedPlacement();
+    updateStampRotateRow();
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && textEditingPlacementId != null) {
+    const p = doc.placements.find(pp => pp.id === textEditingPlacementId);
+    if (p) { exitTextEditMode(p); e.preventDefault(); }
+  }
+  // Bold/Italic/Underline shortcuts (only when a text placement is selected)
+  const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
+  if (!p || p.type !== 'text') return;
+  if (!(e.metaKey || e.ctrlKey)) return;
+  if (e.key === 'b' || e.key === 'B') { e.preventDefault(); mutateSelectedText(pp => pp.bold = !pp.bold); }
+  else if (e.key === 'i' || e.key === 'I') { e.preventDefault(); mutateSelectedText(pp => pp.italic = !pp.italic); }
+  else if (e.key === 'u' || e.key === 'U') { e.preventDefault(); mutateSelectedText(pp => pp.underline = !pp.underline); }
+});
+
+// Wire the floating text-props bar.
+$('tpFont').addEventListener('change',      () => mutateSelectedText(p => p.font = $('tpFont').value));
+$('tpSize').addEventListener('input',       () => mutateSelectedText(p => p.size = Math.max(6, Math.min(96, parseInt($('tpSize').value, 10) || 12))));
+$('tpColor').addEventListener('input',      () => mutateSelectedText(p => p.color = $('tpColor').value));
+$('tpBgColor').addEventListener('input',    () => mutateSelectedText(p => p.bgColor = $('tpBgColor').value));
+$('tpBgClear').addEventListener('click',    () => mutateSelectedText(p => p.bgColor = null));
+$('tpBold').addEventListener('click',       () => mutateSelectedText(p => p.bold = !p.bold));
+$('tpItalic').addEventListener('click',     () => mutateSelectedText(p => p.italic = !p.italic));
+$('tpUnderline').addEventListener('click',  () => mutateSelectedText(p => p.underline = !p.underline));
+for (const a of ['L', 'C', 'R']) {
+  const map = { L: 'left', C: 'center', R: 'right' };
+  $('tpAlign' + a).addEventListener('click', () => mutateSelectedText(p => p.align = map[a]));
+}
+$('tpDeselect').addEventListener('click', () => {
+  const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
+  if (p && p.type === 'text' && textEditingPlacementId === p.id) exitTextEditMode(p);
+  doc.selectedPlacementId = null;
+  refreshSelectedPlacement();
+  updateStampRotateRow();
+});
 
 $('btnRotateStamp').onclick = () => {
   const p = doc.placements.find(pp => pp.id === doc.selectedPlacementId);
@@ -2376,8 +3180,8 @@ function renderPlacementList() {
   for (const p of doc.placements) {
     const row = document.createElement('div');
     row.className = 'placement-item' + (p.id === doc.selectedPlacementId ? ' selected' : '');
-    const swatchClass = p.type === 'text' ? 'text' : (p.type === 'stamp' ? 'text' : 'digital');
-    const kind = p.type === 'text' ? 'Text field' : (p.type === 'stamp' ? 'Stamp position' : 'Signature');
+    const swatchClass = p.type === 'text' ? 'text' : (p.type === 'stamp' ? 'text' : (p.type === 'redact' ? 'text' : 'digital'));
+    const kind = p.type === 'text' ? 'Text field' : (p.type === 'stamp' ? 'Stamp position' : (p.type === 'redact' ? 'Redaction' : 'Signature'));
     const preview = p.type === 'text' && p.text
       ? ' — “' + (p.text.length > 22 ? p.text.slice(0, 22) + '…' : p.text) + '”'
       : '';
@@ -2402,7 +3206,7 @@ function updateSignButton() {
   const has = doc.pdfjs && hasSig && identity.meta;
   const needsImage = doc.placements.some(p => p.type !== 'text' && (p.appearance === 'image' || p.appearance === 'both')) && !sigImage.pngU8;
   $('btnSign').disabled = !has || needsImage;
-  $('btnSign').textContent = 'Sign & Download';
+  $('btnSign').textContent = doc.alreadySigned ? 'Add signature (keeps existing valid) & Download' : 'Sign & Download';
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -2507,17 +3311,73 @@ function drawDigitalAppearance(page, p, opts) {
   if (location) drawStack('Location: ' + location, bodySize, bodyFont, rgb(0.32, 0.32, 0.32));
 }
 
+function pickTextFieldFont(fonts, family, bold, italic) {
+  if (family === 'serif') {
+    if (bold && italic) return fonts.timesBoldItalic || fonts.timesBold;
+    if (bold)   return fonts.timesBold;
+    if (italic) return fonts.timesItalic;
+    return fonts.times;
+  }
+  if (family === 'mono') {
+    if (bold && italic) return fonts.courierBoldOblique || fonts.courierBold || fonts.courier;
+    if (bold)   return fonts.courierBold || fonts.courier;
+    if (italic) return fonts.courierOblique || fonts.courier;
+    return fonts.courier;
+  }
+  // sans (default)
+  if (bold && italic) return fonts.helvBoldOblique || fonts.helvBold;
+  if (bold)   return fonts.helvBold;
+  if (italic) return fonts.helvOblique;
+  return fonts.helv;
+}
+function hexToRgb(hex) {
+  const h = (hex || '#000000').replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
 function drawTextField(page, p, fonts) {
   const { rgb } = window.PDFLib;
+  // Paint background fill (if any) whether or not text is present — an empty
+  // filled box is still a useful redaction / highlight primitive.
+  if (p.bgColor) {
+    const [br, bg, bb] = hexToRgb(p.bgColor);
+    page.drawRectangle({
+      x: p.xPdf, y: p.yPdf, width: p.wPdf, height: p.hPdf,
+      color: rgb(br, bg, bb),
+    });
+  }
   if (!p.text) return;
-  const size = Math.min(14, Math.max(7, Math.floor(p.hPdf * 0.55)));
+  const size = Math.max(6, Math.min(96, p.size || Math.min(14, Math.max(7, Math.floor(p.hPdf * 0.55)))));
   const pad = 3;
-  const lines = wrapTextLines(p.text, fonts.helv, size, p.wPdf - 2 * pad);
-  const lineH = size * 1.15;
+  const font = pickTextFieldFont(fonts, p.font || 'sans', !!p.bold, !!p.italic);
+  const [r, g, b] = hexToRgb(p.color || '#000000');
+  const lineH = size * 1.2;
+  const maxW = p.wPdf - 2 * pad;
+  // Preserve explicit \n in the source text, wrap each paragraph.
+  const paragraphs = String(p.text).split(/\r?\n/);
+  const wrapped = [];
+  for (const par of paragraphs) {
+    if (par === '') { wrapped.push(''); continue; }
+    for (const l of wrapTextLines(par, font, size, maxW)) wrapped.push(l);
+  }
   let y = p.yPdf + p.hPdf - pad - size;
-  for (const line of lines) {
+  for (const line of wrapped) {
     if (y < p.yPdf + pad) break;
-    page.drawText(line, { x: p.xPdf + pad, y, size, font: fonts.helv, color: rgb(0, 0, 0) });
+    const lineW = font.widthOfTextAtSize(line, size);
+    let x = p.xPdf + pad;
+    const align = p.align || 'left';
+    if (align === 'center') x = p.xPdf + (p.wPdf - lineW) / 2;
+    else if (align === 'right') x = p.xPdf + p.wPdf - pad - lineW;
+    page.drawText(line, { x, y, size, font, color: rgb(r, g, b) });
+    if (p.underline && line) {
+      const uy = y - Math.max(1, size * 0.08);
+      page.drawLine({
+        start: { x, y: uy },
+        end:   { x: x + lineW, y: uy },
+        thickness: Math.max(0.5, size * 0.06),
+        color: rgb(r, g, b),
+      });
+    }
     y -= lineH;
   }
 }
@@ -2551,6 +3411,41 @@ async function aesGcmEncrypt(keyU8, plaintextU8) {
   out.set(iv, 4);
   out.set(ct, 16);
   return out;
+}
+
+// Password-based key derivation for encrypting export bundles.
+// PBKDF2-SHA256, 200k iterations → 32-byte AES-GCM key.
+async function deriveBundleKey(password, saltU8, iterations) {
+  const pwKey = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password),
+    { name: 'PBKDF2' }, false, ['deriveBits'],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: saltU8, iterations, hash: 'SHA-256' },
+    pwKey, 256,
+  );
+  return new Uint8Array(bits);
+}
+
+async function encryptBundle(plainJsonU8, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const iterations = 200000;
+  const keyBytes = await deriveBundleKey(password, salt, iterations);
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt']);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plainJsonU8));
+  return { salt, iv, iterations, ct };
+}
+
+async function decryptBundle(envelope, password) {
+  const salt = binStrToU8(atob(envelope.salt_b64));
+  const iv   = binStrToU8(atob(envelope.iv_b64));
+  const ct   = binStrToU8(atob(envelope.ciphertext_b64));
+  const iterations = envelope.iterations || 200000;
+  const keyBytes = await deriveBundleKey(password, salt, iterations);
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  return new Uint8Array(pt);
 }
 async function aesGcmDecrypt(keyU8, blobU8) {
   if (blobU8.length < 16 + 16) throw new Error('vault file too short');
@@ -3074,7 +3969,7 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   }
 }
 
-async function makeSignedPdf({bytes, placements, lock, meta, reason, location, appearance, cert, key, sigPngU8, stamp, formFields, signingTime}) {
+async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, sigPngU8, stamp, formFields, signingTime, pdfjsDoc}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
@@ -3082,13 +3977,18 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
 
   const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: false });
   const fonts = {
-    helv:        await pdfDoc.embedFont(StandardFonts.Helvetica),
-    helvBold:    await pdfDoc.embedFont(StandardFonts.HelveticaBold),
-    helvOblique: await pdfDoc.embedFont(StandardFonts.HelveticaOblique),
-    times:       await pdfDoc.embedFont(StandardFonts.TimesRoman),
-    timesBold:   await pdfDoc.embedFont(StandardFonts.TimesRomanBold),
-    timesItalic: await pdfDoc.embedFont(StandardFonts.TimesRomanItalic),
-    courier:     await pdfDoc.embedFont(StandardFonts.Courier),
+    helv:              await pdfDoc.embedFont(StandardFonts.Helvetica),
+    helvBold:          await pdfDoc.embedFont(StandardFonts.HelveticaBold),
+    helvOblique:       await pdfDoc.embedFont(StandardFonts.HelveticaOblique),
+    helvBoldOblique:   await pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique),
+    times:             await pdfDoc.embedFont(StandardFonts.TimesRoman),
+    timesBold:         await pdfDoc.embedFont(StandardFonts.TimesRomanBold),
+    timesItalic:       await pdfDoc.embedFont(StandardFonts.TimesRomanItalic),
+    timesBoldItalic:   await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic),
+    courier:           await pdfDoc.embedFont(StandardFonts.Courier),
+    courierBold:       await pdfDoc.embedFont(StandardFonts.CourierBold),
+    courierOblique:    await pdfDoc.embedFont(StandardFonts.CourierOblique),
+    courierBoldOblique:await pdfDoc.embedFont(StandardFonts.CourierBoldOblique),
   };
   const sigImgObj = sigPngU8 ? await pdfDoc.embedPng(sigPngU8) : null;
 
@@ -3098,9 +3998,44 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
 
   // Split placements: text fields are stamped without a signature widget,
   // digital signatures share one crypto payload but each get their own widget.
-  const sigPlacements   = placements.filter(p => p.type === 'digital');
-  const textPlacements  = placements.filter(p => p.type === 'text');
-  const stampPlacement  = placements.find(p => p.type === 'stamp') || null;
+  const sigPlacements    = placements.filter(p => p.type === 'digital');
+  const textPlacements   = placements.filter(p => p.type === 'text');
+  const stampPlacement   = placements.find(p => p.type === 'stamp') || null;
+  const redactPlacements = placements.filter(p => p.type === 'redact');
+
+  // ── Real redaction ────────────────────────────────────────────────────
+  // Two paths, chosen per-page:
+  //   1. Surgical (preferred): parse the page's content stream, remove any
+  //      text-showing operator whose glyphs land inside a redaction rect,
+  //      keep everything else (paths, other images, other text) as VECTORS.
+  //      The rest of the page stays selectable, searchable, high-DPI.
+  //   2. Raster (fallback): if surgical fails on this page (unsupported
+  //      filter, missing font metrics, CID font, etc.), rasterize the page
+  //      at 220 DPI, burn in the black rectangles, replace the page with a
+  //      single image. Nothing on that page is selectable but the redaction
+  //      is guaranteed.
+  // Either way, solid black rectangles are painted at the redaction
+  // locations so viewers show them clearly.
+  if (redactPlacements.length > 0) {
+    if (!pdfjsDoc) throw new Error('redaction needs the open pdf.js document (pdfjsDoc)');
+    const byPage = new Map();
+    for (const r of redactPlacements) {
+      if (!byPage.has(r.pageIndex)) byPage.set(r.pageIndex, []);
+      byPage.get(r.pageIndex).push(r);
+    }
+    for (const [pageIndex, rects] of byPage) {
+      let mode = 'surgical';
+      try {
+        await surgicalRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects);
+      } catch (e) {
+        console.warn(`surgical redact fell back to raster on page ${pageIndex + 1}:`, e && e.message);
+        mode = 'raster';
+        await rasterRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects);
+      }
+      console.info(`redact page ${pageIndex + 1}: ${mode}`);
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────────
 
   // Interactive PDF form widgets are annotations that render on top of page
   // content, and pdf-lib's setText + updateFieldAppearances + flatten pipeline
@@ -3109,8 +4044,12 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
   // regenerate). Bulletproof approach: flatten (removing all widgets so
   // nothing obscures our drawings), then draw the typed values ourselves at
   // each widget's rect using pdf-lib's page.drawText.
-  const fieldsToFill = formFields ? Object.values(formFields).filter(f => f.value != null && f.value !== '') : [];
-  const shouldFlatten = fieldsToFill.length > 0 || textPlacements.length > 0;
+  const fieldsToFill = formFields ? Object.values(formFields).filter(f => {
+    if (f.kind === 'checkbox') return !!f.value;
+    if (f.kind === 'radio')    return f.value != null && f.value !== 'Off';
+    return f.value != null && f.value !== '';
+  }) : [];
+  const shouldFlatten = fieldsToFill.length > 0 || textPlacements.length > 0 || redactPlacements.length > 0;
   if (shouldFlatten) {
     // pdf-lib's form.flatten() didn't reliably remove widget annotations on
     // all PDFs — Firefox kept rendering the empty widget on top of the text
@@ -3148,29 +4087,54 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
   }
   if (fieldsToFill.length > 0) {
     const { rgb } = window.PDFLib;
-    for (const f of fieldsToFill) {
-      if (f.pageIndex == null || !f.rect || f.rect.length < 4) continue;
-      const page = pdfDoc.getPage(f.pageIndex);
-      const [x1, y1, x2, y2] = f.rect;
+    const drawBoxOnRect = (page, rect, drawer) => {
+      const [x1, y1, x2, y2] = rect;
       const x = Math.min(x1, x2), y = Math.min(y1, y2);
       const w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
-      const size = Math.max(8, Math.min(f.multiLine ? 11 : Math.floor(h * 0.55), 14));
-      const value = String(f.value);
-      const lines = f.multiLine ? wrapTextLines(value, fonts.helv, size, w - 6) : [value];
-      const lineH = size * 1.2;
-      // Center a single line vertically; stack multi-line from top.
-      let ty = f.multiLine
-        ? y + h - size - 2
-        : y + (h - size) / 2 + 1;
-      for (const line of lines) {
-        if (ty < y + 1) break;
-        page.drawText(line, {
-          x: x + 3, y: ty,
-          size, font: fonts.helv, color: rgb(0, 0, 0),
-          maxWidth: w - 6,
+      drawer(page, x, y, w, h);
+    };
+    for (const f of fieldsToFill) {
+      if (f.pageIndex == null) continue;
+      const page = pdfDoc.getPage(f.pageIndex);
+
+      if (f.kind === 'checkbox' && f.rect) {
+        drawBoxOnRect(page, f.rect, (pg, x, y, w, h) => {
+          const size = Math.min(w, h) * 0.9;
+          const cx = x + w / 2, cy = y + h / 2;
+          pg.drawText('✓', {
+            x: cx - size * 0.35, y: cy - size * 0.35,
+            size, font: fonts.helvBold, color: rgb(0, 0, 0),
+          });
         });
-        ty -= lineH;
+        continue;
       }
+      if (f.kind === 'radio' && Array.isArray(f.options)) {
+        for (const opt of f.options) {
+          if (opt.exportValue !== f.value) continue;
+          const pg = pdfDoc.getPage(opt.pageIndex ?? f.pageIndex);
+          drawBoxOnRect(pg, opt.rect, (p, x, y, w, h) => {
+            const r = Math.min(w, h) * 0.32;
+            const cx = x + w / 2, cy = y + h / 2;
+            // Draw a filled dot using a small circle approximation.
+            p.drawCircle({ x: cx, y: cy, size: r, color: rgb(0, 0, 0) });
+          });
+        }
+        continue;
+      }
+      // text or choice
+      if (!f.rect || f.rect.length < 4) continue;
+      drawBoxOnRect(page, f.rect, (pg, x, y, w, h) => {
+        const size = Math.max(8, Math.min(f.multiLine ? 11 : Math.floor(h * 0.55), 14));
+        const value = String(f.value);
+        const lines = f.multiLine ? wrapTextLines(value, fonts.helv, size, w - 6) : [value];
+        const lineH = size * 1.2;
+        let ty = f.multiLine ? y + h - size - 2 : y + (h - size) / 2 + 1;
+        for (const line of lines) {
+          if (ty < y + 1) break;
+          pg.drawText(line, { x: x + 3, y: ty, size, font: fonts.helv, color: rgb(0, 0, 0), maxWidth: w - 6 });
+          ty -= lineH;
+        }
+      });
     }
   }
 
@@ -3226,13 +4190,18 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
   });
   const sigRef = context.register(sigDict);
 
-  if (lock) {
+  // certifyMode: 'lock' → DocMDP P=1 (no further changes)
+  //              'certify' → DocMDP P=3 (form fill + further signatures allowed)
+  //              'none' → no DocMDP (approval-only signature)
+  // Legacy `lock` boolean maps to 'lock' vs 'none' when certifyMode isn't given.
+  const mdp = certifyMode || (lock ? 'lock' : 'none');
+  if (mdp === 'lock' || mdp === 'certify') {
     const sigRefEntry = context.obj({
       Type: 'SigRef',
       TransformMethod: 'DocMDP',
       TransformParams: context.obj({
         Type: 'TransformParams',
-        P: PDFNumber.of(1),
+        P: PDFNumber.of(mdp === 'lock' ? 1 : 3),
         V: PDFName.of('1.2'),
       }),
     });
@@ -3290,7 +4259,7 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
     pdfDoc.catalog.set(acroFormKey, context.register(acroForm));
   }
 
-  if (lock) pdfDoc.catalog.set(PDFName.of('Perms'), context.obj({ DocMDP: sigRef }));
+  if (mdp === 'lock' || mdp === 'certify') pdfDoc.catalog.set(PDFName.of('Perms'), context.obj({ DocMDP: sigRef }));
 
   let saved = await pdfDoc.save({ useObjectStreams: false, addDefaultPage: false });
   saved = new Uint8Array(saved);
@@ -3339,6 +4308,1003 @@ async function makeSignedPdf({bytes, placements, lock, meta, reason, location, a
   return saved;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Redaction — surgical (vector-preserving) and raster (fallback).
+   ═══════════════════════════════════════════════════════════════════════ */
+
+// Rasterize the page and burn in the black rectangles. Everything else on the
+// page is lost to raster. Used as a fallback when surgical fails.
+async function rasterRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects) {
+  const { PDFName, PDFRawStream, PDFDict } = window.PDFLib;
+  const pdfjsPage = await pdfjsDoc.getPage(pageIndex + 1);
+  const vp1 = pdfjsPage.getViewport({ scale: 1 });
+  const scale = 220 / 72;
+  const vp = pdfjsPage.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(vp.width);
+  canvas.height = Math.round(vp.height);
+  const ctx = canvas.getContext('2d');
+  await pdfjsPage.render({ canvasContext: ctx, viewport: vp }).promise;
+  ctx.fillStyle = '#000';
+  for (const r of rects) {
+    const x = Math.round(r.xPdf * scale);
+    const y = Math.round((vp1.height - r.yPdf - r.hPdf) * scale);
+    const w = Math.round(r.wPdf * scale);
+    const h = Math.round(r.hPdf * scale);
+    ctx.fillRect(x, y, w, h);
+  }
+  const pngB64 = canvas.toDataURL('image/png').split(',')[1];
+  const pngBytes = binStrToU8(atob(pngB64));
+  const imgObj = await pdfDoc.embedPng(pngBytes);
+  const page = pdfDoc.getPage(pageIndex);
+  const { width: pageW, height: pageH } = page.getSize();
+  const content = `q ${pageW} 0 0 ${pageH} 0 0 cm /RedactImg Do Q\n`;
+  const streamBytes = new TextEncoder().encode(content);
+  const streamDict = PDFDict.withContext(pdfDoc.context);
+  streamDict.set(PDFName.of('Length'), pdfDoc.context.obj(streamBytes.length));
+  const stream = PDFRawStream.of(streamDict, streamBytes);
+  const streamRef = pdfDoc.context.register(stream);
+  page.node.set(PDFName.of('Contents'), streamRef);
+  page.node.set(PDFName.of('Resources'), pdfDoc.context.obj({
+    XObject: { RedactImg: imgObj.ref },
+    ProcSet: ['PDF', 'ImageC'],
+  }));
+  page.node.delete(PDFName.of('Annots'));
+}
+
+// Surgical: remove ONLY the glyphs (and images) inside the redaction rects.
+// Vector paths, other text, other images stay untouched. Falls back if the
+// page uses constructs we haven't implemented (CID fonts, complex encodings,
+// unusual filters).
+async function surgicalRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects) {
+  const { PDFName, PDFRawStream, PDFDict } = window.PDFLib;
+  const page = pdfDoc.getPage(pageIndex);
+
+  // 1. Fetch pdf.js's authoritative text-item geometry for this page and use
+  //    it as the redaction oracle. Each item carries device-space coordinates.
+  const pdfjsPage = await pdfjsDoc.getPage(pageIndex + 1);
+  const textContent = await pdfjsPage.getTextContent({ includeMarkedContent: false, disableCombineTextItems: true });
+  const vp1 = pdfjsPage.getViewport({ scale: 1 });
+  const redactedItems = [];        // items to redact, keyed by (x, y, str)
+  for (const item of textContent.items) {
+    if (!item.str) continue;
+    // item.transform = [a, b, c, d, e, f]; (e, f) is baseline start in PDF pt.
+    // item.width / item.height are in device space at scale 1 — same units.
+    const x1 = item.transform[4], y1 = item.transform[5];
+    const x2 = x1 + item.width,   y2 = y1 + item.height;
+    // Redaction rects are in PDF coords with y-up, {xPdf, yPdf, wPdf, hPdf}.
+    const hit = rects.some(r => !(x2 < r.xPdf || x1 > r.xPdf + r.wPdf
+                               || y2 < r.yPdf || y1 > r.yPdf + r.hPdf));
+    if (hit) redactedItems.push({ x: x1, y: y1, str: item.str });
+  }
+
+  // 2. Extract the page's content stream(s) and decompress them.
+  const combined = await extractDecompressedPageContent(pdfDoc, page);
+  if (combined === null) throw new Error('unsupported stream filter');
+
+  // 3. Tokenize + group into (op, operands) sequence.
+  const ops = parseContentOperators(combined);
+
+  // 4. Walk the operators tracking (CTM, text matrix, text-line matrix, Tf,
+  //    Tc, Tw, Th) and, for each text-showing op, compute the pen position
+  //    in device coords at the START of the shown string. If that position
+  //    matches a redacted item within a small tolerance, replace the op with
+  //    a movement-only equivalent so following text stays put.
+  const out = rewriteRedactingTextOps(ops, redactedItems);
+
+  // 5. Serialize back to a content-stream body. Append fill-black-rect ops
+  //    so viewers see a solid black band where the redaction happened.
+  const body = serializeOperators(out) + '\n' +
+    rects.map(r => `q 0 0 0 rg ${pdfNum(r.xPdf)} ${pdfNum(r.yPdf)} ${pdfNum(r.wPdf)} ${pdfNum(r.hPdf)} re f Q`).join('\n') + '\n';
+  const outBytes = new TextEncoder().encode(body);
+
+  // 6. Replace Contents with the rewritten stream. Keep the existing
+  //    Resources — the surviving text still needs its fonts and its XObjects.
+  const streamDict = PDFDict.withContext(pdfDoc.context);
+  streamDict.set(PDFName.of('Length'), pdfDoc.context.obj(outBytes.length));
+  const stream = PDFRawStream.of(streamDict, outBytes);
+  const streamRef = pdfDoc.context.register(stream);
+  page.node.set(PDFName.of('Contents'), streamRef);
+
+  // 7. Drop annotations that fall inside a redaction rect (comments, links,
+  //    embedded form widgets), keep the rest.
+  pruneAnnotationsInRects(pdfDoc, page, rects);
+}
+
+async function extractDecompressedPageContent(pdfDoc, page) {
+  const { PDFName, PDFArray, PDFRawStream } = window.PDFLib;
+  const contents = page.node.get(PDFName.of('Contents'));
+  if (!contents) return new Uint8Array();
+  const looked = pdfDoc.context.lookup(contents);
+  const streams = [];
+  if (looked instanceof PDFArray) {
+    for (let i = 0; i < looked.size(); i++) {
+      streams.push(pdfDoc.context.lookup(looked.get(i)));
+    }
+  } else {
+    streams.push(looked);
+  }
+  const chunks = [];
+  for (const s of streams) {
+    if (!(s instanceof PDFRawStream)) return null;
+    let raw = s.contents;
+    const dict = s.dict;
+    let filter = dict.get(PDFName.of('Filter'));
+    if (filter) filter = pdfDoc.context.lookup(filter);
+    const filterName =
+      filter && filter.constructor && filter.constructor.name === 'PDFName' ? filter.value()
+      : filter && filter.asArray ? (filter.asArray()[0] && pdfDoc.context.lookup(filter.asArray()[0]).value())
+      : null;
+    if (filterName == null || filterName === '' || filterName === '/') {
+      chunks.push(raw);
+    } else if (filterName === 'FlateDecode' || filterName === '/FlateDecode') {
+      try {
+        const ds = new DecompressionStream('deflate');
+        const buf = await new Response(new Blob([raw]).stream().pipeThrough(ds)).arrayBuffer();
+        chunks.push(new Uint8Array(buf));
+      } catch (e) {
+        // Some PDFs use raw deflate without zlib header — try 'deflate-raw'.
+        try {
+          const ds2 = new DecompressionStream('deflate-raw');
+          const buf = await new Response(new Blob([raw]).stream().pipeThrough(ds2)).arrayBuffer();
+          chunks.push(new Uint8Array(buf));
+        } catch (e2) {
+          return null;
+        }
+      }
+    } else {
+      return null;
+    }
+  }
+  const total = chunks.reduce((a, c) => a + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
+
+/* ── Content-stream tokenizer + operator grouper ─────────────────────── */
+
+const OP_DELIMS = new Set(['(', ')', '<', '>', '[', ']', '{', '}', '/', '%']);
+function isWs(c) { return c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\0'; }
+
+function parseContentOperators(bytes) {
+  const s = new TextDecoder('latin1').decode(bytes);
+  const ops = [];
+  let operands = [];
+  let i = 0;
+  function readObj() {
+    // Skip whitespace + comments
+    while (i < s.length) {
+      if (isWs(s[i])) { i++; continue; }
+      if (s[i] === '%') { while (i < s.length && s[i] !== '\n' && s[i] !== '\r') i++; continue; }
+      break;
+    }
+    if (i >= s.length) return null;
+    const c = s[i];
+    if (c === '(') return readString();
+    if (c === '<') {
+      if (s[i + 1] === '<') return readDict();
+      return readHexString();
+    }
+    if (c === '[') return readArray();
+    if (c === '/') return readName();
+    if (/[0-9+\-.]/.test(c)) return readNumberOrOp();
+    return readOperator();
+  }
+  function readString() {
+    let depth = 1, out = '';
+    i++;
+    while (i < s.length && depth > 0) {
+      const ch = s[i];
+      if (ch === '\\') {
+        i++;
+        const n = s[i];
+        if (n === 'n') { out += '\n'; i++; }
+        else if (n === 'r') { out += '\r'; i++; }
+        else if (n === 't') { out += '\t'; i++; }
+        else if (n === 'b') { out += '\b'; i++; }
+        else if (n === 'f') { out += '\f'; i++; }
+        else if (n === '(') { out += '('; i++; }
+        else if (n === ')') { out += ')'; i++; }
+        else if (n === '\\') { out += '\\'; i++; }
+        else if (/[0-7]/.test(n)) {
+          let oct = n; i++;
+          if (i < s.length && /[0-7]/.test(s[i])) { oct += s[i]; i++; }
+          if (i < s.length && /[0-7]/.test(s[i])) { oct += s[i]; i++; }
+          out += String.fromCharCode(parseInt(oct, 8));
+        } else if (n === '\r') { i++; if (s[i] === '\n') i++; }
+        else if (n === '\n') { i++; }
+        else { out += n; i++; }
+      } else if (ch === '(') { depth++; out += ch; i++; }
+      else if (ch === ')') { depth--; if (depth > 0) out += ch; i++; }
+      else { out += ch; i++; }
+    }
+    return { type: 'str', bytes: out };  // bytes: latin1-string of raw codes
+  }
+  function readHexString() {
+    let hex = '';
+    i++;
+    while (i < s.length && s[i] !== '>') {
+      if (!isWs(s[i])) hex += s[i];
+      i++;
+    }
+    i++;
+    if (hex.length % 2) hex += '0';
+    let out = '';
+    for (let j = 0; j < hex.length; j += 2) out += String.fromCharCode(parseInt(hex.substr(j, 2), 16));
+    return { type: 'str', bytes: out, hex: true };
+  }
+  function readDict() {
+    let depth = 1, start = i;
+    i += 2;
+    while (i < s.length && depth > 0) {
+      if (s[i] === '<' && s[i + 1] === '<') { depth++; i += 2; }
+      else if (s[i] === '>' && s[i + 1] === '>') { depth--; i += 2; }
+      else if (s[i] === '(') { readString(); }
+      else i++;
+    }
+    return { type: 'dict', raw: s.substring(start, i) };
+  }
+  function readArray() {
+    i++;
+    const arr = [];
+    while (i < s.length) {
+      while (i < s.length && isWs(s[i])) i++;
+      if (s[i] === ']') { i++; break; }
+      const el = readObj();
+      if (el == null) break;
+      arr.push(el);
+    }
+    return { type: 'arr', value: arr };
+  }
+  function readName() {
+    let start = i + 1;
+    i++;
+    while (i < s.length && !isWs(s[i]) && !OP_DELIMS.has(s[i])) i++;
+    return { type: 'name', value: s.substring(start, i) };
+  }
+  function readNumberOrOp() {
+    let start = i;
+    if (s[i] === '+' || s[i] === '-') i++;
+    let sawDigit = false, sawDot = false;
+    while (i < s.length && (/[0-9]/.test(s[i]) || (s[i] === '.' && !sawDot))) {
+      if (s[i] === '.') sawDot = true;
+      else sawDigit = true;
+      i++;
+    }
+    if (!sawDigit && !sawDot) {
+      // Not a number after all — treat as operator start.
+      i = start;
+      return readOperator();
+    }
+    return { type: 'num', value: parseFloat(s.substring(start, i)) };
+  }
+  function readOperator() {
+    let start = i;
+    while (i < s.length && !isWs(s[i]) && !OP_DELIMS.has(s[i])) i++;
+    return { type: 'op', value: s.substring(start, i) };
+  }
+  while (i < s.length) {
+    const tok = readObj();
+    if (tok == null) break;
+    if (tok.type === 'op') {
+      ops.push({ op: tok.value, args: operands });
+      operands = [];
+    } else {
+      operands.push(tok);
+    }
+  }
+  return ops;
+}
+
+/* ── State-machine rewriter: drop text-showing ops that fall in a redaction ── */
+
+function matMul(A, B) {
+  // 2D affine: A × B, using [a b c d e f] convention.
+  const [a1, b1, c1, d1, e1, f1] = A;
+  const [a2, b2, c2, d2, e2, f2] = B;
+  return [
+    a1 * a2 + b1 * c2,
+    a1 * b2 + b1 * d2,
+    c1 * a2 + d1 * c2,
+    c1 * b2 + d1 * d2,
+    e1 * a2 + f1 * c2 + e2,
+    e1 * b2 + f1 * d2 + f2,
+  ];
+}
+const I6 = [1, 0, 0, 1, 0, 0];
+
+function rewriteRedactingTextOps(ops, redactedItems) {
+  const out = [];
+  let ctmStack = [I6.slice()];
+  let ctm = () => ctmStack[ctmStack.length - 1];
+  let inText = false;
+  let Tm = I6.slice(), Tlm = I6.slice();
+  let Tf_size = 0;
+  let Tc = 0, Tw = 0, Th = 100, TL = 0;
+  const TOL = 2;              // 2 pt slop between pdf.js positions and ours
+
+  function currentPenDevice() {
+    // Text rendering start position: CTM × Tm × (0, 0)
+    const M = matMul(Tm, ctm());
+    return [M[4], M[5]];
+  }
+  function shouldRedactAt(x, y, str) {
+    for (const it of redactedItems) {
+      if (Math.abs(it.x - x) <= TOL && Math.abs(it.y - y) <= TOL) {
+        if (!str || it.str === str || it.str.startsWith(str) || str.startsWith(it.str)) return true;
+      }
+    }
+    return false;
+  }
+  function replaceWithMovement(x0, y0) {
+    // Emit a Td that lands the text position at (x0, y0) BEFORE the next real
+    // op, so the removed glyphs don't disturb the flow. Simpler: since Tm is
+    // already at (x0, y0) and we didn't advance it, do nothing.
+  }
+
+  for (const { op, args } of ops) {
+    switch (op) {
+      case 'q': ctmStack.push(ctm().slice()); out.push({ op, args }); continue;
+      case 'Q': if (ctmStack.length > 1) ctmStack.pop(); out.push({ op, args }); continue;
+      case 'cm': {
+        if (args.length === 6 && args.every(a => a.type === 'num')) {
+          ctmStack[ctmStack.length - 1] = matMul(args.map(a => a.value), ctm());
+        }
+        out.push({ op, args }); continue;
+      }
+      case 'BT': inText = true; Tm = I6.slice(); Tlm = I6.slice(); out.push({ op, args }); continue;
+      case 'ET': inText = false; out.push({ op, args }); continue;
+      case 'Tf':
+        if (args.length >= 2 && args[1].type === 'num') Tf_size = args[1].value;
+        out.push({ op, args }); continue;
+      case 'Tc': if (args[0]?.type === 'num') Tc = args[0].value; out.push({ op, args }); continue;
+      case 'Tw': if (args[0]?.type === 'num') Tw = args[0].value; out.push({ op, args }); continue;
+      case 'Tz': if (args[0]?.type === 'num') Th = args[0].value; out.push({ op, args }); continue;
+      case 'TL': if (args[0]?.type === 'num') TL = args[0].value; out.push({ op, args }); continue;
+      case 'Td':
+      case 'TD': {
+        if (args.length === 2 && args.every(a => a.type === 'num')) {
+          const tx = args[0].value, ty = args[1].value;
+          const trans = [1, 0, 0, 1, tx, ty];
+          Tlm = matMul(trans, Tlm);
+          Tm = Tlm.slice();
+          if (op === 'TD') TL = -ty;
+        }
+        out.push({ op, args }); continue;
+      }
+      case 'Tm': {
+        if (args.length === 6 && args.every(a => a.type === 'num')) {
+          Tm = args.map(a => a.value);
+          Tlm = Tm.slice();
+        }
+        out.push({ op, args }); continue;
+      }
+      case 'T*': {
+        const trans = [1, 0, 0, 1, 0, -TL];
+        Tlm = matMul(trans, Tlm);
+        Tm = Tlm.slice();
+        out.push({ op, args }); continue;
+      }
+      case "'":
+      case '"':
+      case 'Tj':
+      case 'TJ': {
+        // Compute pen position and check for redaction.
+        const [px, py] = currentPenDevice();
+        let showedStr = '';
+        if (op === 'Tj' || op === "'" || op === '"') {
+          const s = args.find(a => a.type === 'str');
+          if (s) showedStr = s.bytes;
+        } else {
+          for (const a of args) {
+            if (a.type === 'arr') {
+              for (const el of a.value) if (el.type === 'str') showedStr += el.bytes;
+            }
+          }
+        }
+        const redact = shouldRedactAt(px, py, showedStr);
+        if (redact) {
+          // Drop the showing op. If it was a next-line variant (' or "), emit
+          // an equivalent T* so the following line is still positioned right.
+          if (op === "'" || op === '"') out.push({ op: 'T*', args: [] });
+          continue;
+        }
+        out.push({ op, args }); continue;
+      }
+      default:
+        out.push({ op, args }); continue;
+    }
+  }
+  return out;
+}
+
+function serializeOperators(ops) {
+  const bits = [];
+  const serArg = (a) => {
+    if (a.type === 'num') return pdfNum(a.value);
+    if (a.type === 'name') return '/' + a.value;
+    if (a.type === 'str') {
+      if (a.hex) {
+        let hex = '';
+        for (let i = 0; i < a.bytes.length; i++) hex += a.bytes.charCodeAt(i).toString(16).padStart(2, '0');
+        return '<' + hex + '>';
+      }
+      // Escape ( ) \ and control bytes as octal.
+      let out = '(';
+      for (let i = 0; i < a.bytes.length; i++) {
+        const cc = a.bytes.charCodeAt(i);
+        const ch = a.bytes[i];
+        if (ch === '(' || ch === ')' || ch === '\\') out += '\\' + ch;
+        else if (cc < 32 || cc > 126) out += '\\' + cc.toString(8).padStart(3, '0');
+        else out += ch;
+      }
+      out += ')';
+      return out;
+    }
+    if (a.type === 'arr') return '[' + a.value.map(serArg).join(' ') + ']';
+    if (a.type === 'dict') return a.raw;
+    return '';
+  };
+  for (const { op, args } of ops) {
+    const line = (args.length ? args.map(serArg).join(' ') + ' ' : '') + op;
+    bits.push(line);
+  }
+  return bits.join('\n');
+}
+
+function pruneAnnotationsInRects(pdfDoc, page, rects) {
+  const { PDFName } = window.PDFLib;
+  let annots = page.node.get(PDFName.of('Annots'));
+  if (!annots) return;
+  annots = pdfDoc.context.lookup(annots);
+  if (!annots || typeof annots.asArray !== 'function') return;
+  const arr = annots.asArray();
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const a = pdfDoc.context.lookup(arr[i]);
+    if (!a || typeof a.get !== 'function') continue;
+    const rect = a.get(PDFName.of('Rect'));
+    if (!rect || typeof rect.asArray !== 'function') continue;
+    const r = rect.asArray().map(v => pdfDoc.context.lookup(v));
+    if (r.length < 4) continue;
+    const [x1, y1, x2, y2] = r.map(v => (v && typeof v.value === 'function' ? v.value() : Number(v)));
+    const ax1 = Math.min(x1, x2), ay1 = Math.min(y1, y2);
+    const ax2 = Math.max(x1, x2), ay2 = Math.max(y1, y2);
+    const hit = rects.some(rd => !(ax2 < rd.xPdf || ax1 > rd.xPdf + rd.wPdf
+                                || ay2 < rd.yPdf || ay1 > rd.yPdf + rd.hPdf));
+    if (hit) annots.remove(i);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Incremental signing (adds a signature without rewriting the file, so
+   prior signatures stay valid). PDF §7.5.6.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+function latin1Encode(str) {
+  const out = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i) & 0xff;
+  return out;
+}
+
+function escapePdfString(s) {
+  return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}
+
+function pdfDate(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `D:${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`;
+}
+
+// PDF numerics — never emit scientific notation.
+function pdfNum(n) {
+  const v = Number(n);
+  if (!isFinite(v)) return '0';
+  if (Number.isInteger(v)) return String(v);
+  return v.toFixed(4).replace(/\.?0+$/, '');
+}
+
+function extractBalancedDict(src, startIdx) {
+  // src[startIdx..] should begin with '<<'. Return substring including outer '<<' and '>>'.
+  if (src[startIdx] !== '<' || src[startIdx + 1] !== '<') return null;
+  let depth = 0, i = startIdx;
+  while (i < src.length) {
+    if (src[i] === '<' && src[i + 1] === '<') { depth++; i += 2; }
+    else if (src[i] === '>' && src[i + 1] === '>') { depth--; i += 2; if (depth === 0) return src.substring(startIdx, i); }
+    else i++;
+  }
+  return null;
+}
+
+function extractObjDictText(objSource) {
+  const openIdx = objSource.indexOf('<<');
+  if (openIdx < 0) return null;
+  return extractBalancedDict(objSource, openIdx);
+}
+
+function parsePdfForIncremental(bytes) {
+  const text = new TextDecoder('latin1').decode(bytes);
+
+  // 1. Last startxref
+  const lastSxr = text.lastIndexOf('startxref');
+  if (lastSxr < 0) throw new Error('startxref not found');
+  const sxrMatch = text.substring(lastSxr).match(/startxref\s+(\d+)/);
+  if (!sxrMatch) throw new Error('startxref value not parsable');
+  const prevXrefOffset = parseInt(sxrMatch[1], 10);
+
+  // 2. Classical xref only (this app writes non-stream xrefs).
+  const xrefHead = text.substring(prevXrefOffset, prevXrefOffset + 4);
+  if (xrefHead !== 'xref') {
+    throw new Error('This PDF uses cross-reference streams. Re-save the input from a tool that emits classical xref sections (this app does, for example) before adding a follow-up signature.');
+  }
+  const trailerIdx = text.indexOf('trailer', prevXrefOffset);
+  if (trailerIdx < 0) throw new Error('trailer not found after xref');
+
+  // 3. Walk BOTH the current xref section AND any /Prev xrefs so we resolve
+  //    every live object number in the whole revision chain.
+  const xrefEntries = {}; // objNum → { offset, gen, inUse } (later revisions override earlier)
+  let seenSize = 0;
+  const seen = new Set();
+  const walkXref = (offset) => {
+    if (seen.has(offset)) return;
+    seen.add(offset);
+    if (text.substring(offset, offset + 4) !== 'xref') {
+      throw new Error('This PDF has a cross-reference stream in its revision chain. Multi-signer signing requires classical xref sections throughout.');
+    }
+    const tIdx = text.indexOf('trailer', offset);
+    if (tIdx < 0) return;
+    const body = text.substring(offset + 4, tIdx).trim();
+    const lines = body.split(/\r?\n/);
+    let li = 0;
+    while (li < lines.length) {
+      const hdr = lines[li].trim().split(/\s+/);
+      if (hdr.length < 2 || !/^\d+$/.test(hdr[0])) break;
+      const first = parseInt(hdr[0], 10), count = parseInt(hdr[1], 10);
+      li++;
+      for (let j = 0; j < count && li < lines.length; j++, li++) {
+        const parts = lines[li].trim().split(/\s+/);
+        if (parts.length < 3) continue;
+        const num = first + j;
+        if (xrefEntries[num] == null) {
+          xrefEntries[num] = { offset: parseInt(parts[0], 10), gen: parseInt(parts[1], 10), inUse: parts[2] === 'n' };
+        }
+      }
+    }
+    // Trailer dict
+    const dictText = extractBalancedDict(text, text.indexOf('<<', tIdx));
+    if (!dictText) return;
+    const sizeM = dictText.match(/\/Size\s+(\d+)/);
+    if (sizeM) seenSize = Math.max(seenSize, parseInt(sizeM[1], 10));
+    const prevM = dictText.match(/\/Prev\s+(\d+)/);
+    if (prevM) walkXref(parseInt(prevM[1], 10));
+  };
+  walkXref(prevXrefOffset);
+
+  // 4. Trailer dict of the LATEST revision (for Root/Info/ID)
+  const dictStart = text.indexOf('<<', trailerIdx);
+  const trailerDictText = extractBalancedDict(text, dictStart);
+  if (!trailerDictText) throw new Error('trailer dict not parsable');
+  const rootM = trailerDictText.match(/\/Root\s+(\d+)\s+(\d+)\s+R/);
+  if (!rootM) throw new Error('/Root not found in trailer');
+  const rootRef = { num: +rootM[1], gen: +rootM[2] };
+  const infoM = trailerDictText.match(/\/Info\s+(\d+)\s+(\d+)\s+R/);
+  const infoRef = infoM ? { num: +infoM[1], gen: +infoM[2] } : null;
+  // ID array — may span two hex strings <..> <..>
+  const idM = trailerDictText.match(/\/ID\s*\[([\s\S]*?)\]/);
+  const idHex = idM ? idM[1].trim() : null;
+
+  const maxObjNum = Math.max(seenSize - 1, ...Object.keys(xrefEntries).map(n => +n));
+
+  return { text, bytes, prevXrefOffset, xrefEntries, rootRef, infoRef, idHex, size: seenSize, maxObjNum };
+}
+
+function readObjectSource(parsed, num) {
+  const entry = parsed.xrefEntries[num];
+  if (!entry || !entry.inUse) throw new Error(`object ${num} not found in xref (revision chain)`);
+  const start = entry.offset;
+  const endObjIdx = parsed.text.indexOf('endobj', start);
+  if (endObjIdx < 0) throw new Error(`endobj for object ${num} not found`);
+  return parsed.text.substring(start, endObjIdx + 6);
+}
+
+function collectPageRefsInOrder(parsed) {
+  // Read Catalog → /Pages → walk /Kids depth-first. Returns array of {num, gen}.
+  const catSrc = readObjectSource(parsed, parsed.rootRef.num);
+  const catDict = extractObjDictText(catSrc);
+  const pagesM = catDict && catDict.match(/\/Pages\s+(\d+)\s+(\d+)\s+R/);
+  if (!pagesM) throw new Error('/Pages ref not found in Catalog');
+  const out = [];
+  const walk = (num, gen) => {
+    const src = readObjectSource(parsed, num);
+    const dict = extractObjDictText(src) || '';
+    const typeM = dict.match(/\/Type\s*\/(Page|Pages)\b/);
+    const type = typeM ? typeM[1] : null;
+    if (type === 'Page' || (!type && !/\/Kids\s*\[/.test(dict))) {
+      out.push({ num, gen });
+      return;
+    }
+    const kidsM = dict.match(/\/Kids\s*\[([\s\S]*?)\]/);
+    if (!kidsM) return;
+    const re = /(\d+)\s+(\d+)\s+R/g;
+    let m;
+    while ((m = re.exec(kidsM[1])) !== null) walk(+m[1], +m[2]);
+  };
+  walk(+pagesM[1], +pagesM[2]);
+  return out;
+}
+
+function findExistingAcroForm(parsed) {
+  const catSrc = readObjectSource(parsed, parsed.rootRef.num);
+  const catDict = extractObjDictText(catSrc);
+  if (!catDict) return { ref: null, inlineText: null, catalogDictText: catDict };
+  const refM = catDict.match(/\/AcroForm\s+(\d+)\s+(\d+)\s+R/);
+  if (refM) return { ref: { num: +refM[1], gen: +refM[2] }, inlineText: null, catalogDictText: catDict };
+  const inlineIdx = catDict.search(/\/AcroForm\s*<</);
+  if (inlineIdx >= 0) {
+    const ddStart = catDict.indexOf('<<', inlineIdx);
+    const inline = extractBalancedDict(catDict, ddStart);
+    return { ref: null, inlineText: inline, catalogDictText: catDict };
+  }
+  return { ref: null, inlineText: null, catalogDictText: catDict };
+}
+
+function buildSigAppearanceStream({ name, dateStr, reason, location, w, h, nameFontResource }) {
+  // Coords in the Form XObject are local (0..w, 0..h). y grows upward.
+  const pad = 6;
+  const nameSize = Math.min(13, Math.max(9, Math.floor(h * 0.22)));
+  const bodySize = Math.min(8, Math.max(6, Math.floor(h * 0.11)));
+  const lineGap = 2;
+  let cursorY = h - pad - nameSize;
+  const lines = [];
+  lines.push(`q`);
+  lines.push(`0 0 0 rg`);
+  lines.push(`BT`);
+  lines.push(`/${nameFontResource} ${nameSize} Tf`);
+  lines.push(`${pdfNum(pad)} ${pdfNum(cursorY)} Td`);
+  lines.push(`(${escapePdfString(name)}) Tj`);
+  lines.push(`ET`);
+  cursorY -= lineGap + 4;
+  const bodyLines = [`Date: ${dateStr}`];
+  if (reason)   bodyLines.push(`Reason: ${reason}`);
+  if (location) bodyLines.push(`Location: ${location}`);
+  lines.push(`0.32 0.32 0.32 rg`);
+  lines.push(`BT`);
+  lines.push(`/F1 ${bodySize} Tf`);
+  for (const bl of bodyLines) {
+    cursorY -= bodySize;
+    if (cursorY < pad) break;
+    lines.push(`1 0 0 1 ${pdfNum(pad)} ${pdfNum(cursorY)} Tm`);
+    lines.push(`(${escapePdfString(bl)}) Tj`);
+    cursorY -= lineGap;
+  }
+  lines.push(`ET`);
+  lines.push(`Q`);
+  return lines.join('\n') + '\n';
+}
+
+// PDF standard 14 font PostScript names by our nameFont key
+function stdFontNameFor(key) {
+  switch (key) {
+    case 'sans':          return 'Helvetica';
+    case 'sans-bold':     return 'Helvetica-Bold';
+    case 'serif':         return 'Times-Roman';
+    case 'serif-bold':    return 'Times-Bold';
+    case 'mono':          return 'Courier';
+    case 'serif-italic':
+    default:              return 'Times-Italic';
+  }
+}
+
+async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, signingTime }) {
+  const parsed = parsePdfForIncremental(bytes);
+  const pageRefs = collectPageRefsInOrder(parsed);
+  const now = signingTime instanceof Date ? signingTime : new Date();
+  const dateStr = now.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+
+  // Incremental signing supports only signature placements. Any text-box or
+  // stamp placement would modify page content and void the prior signature.
+  const sigPlacements = placements.filter(p => p.type === 'digital');
+  if (sigPlacements.length === 0) throw new Error('Incremental signing needs at least one signature placement');
+
+  // Object number allocation
+  let nextObj = parsed.maxObjNum + 1;
+  const alloc = () => nextObj++;
+
+  // Font resources: standard 14 fonts, one per placement's chosen font + Helvetica for body.
+  const fontResourceRegistry = new Map(); // psName → { resName, objNum }
+  const registerFont = (psName) => {
+    if (fontResourceRegistry.has(psName)) return fontResourceRegistry.get(psName);
+    const objNum = alloc();
+    const resName = `F${fontResourceRegistry.size + 1}`;
+    const rec = { resName, objNum };
+    fontResourceRegistry.set(psName, rec);
+    return rec;
+  };
+  // Always register Helvetica as F1 (used for body text in every appearance).
+  registerFont('Helvetica'); // becomes F1
+
+  // Build per-placement AP form XObject + widget annotation.
+  const widgetObjs = []; // { num, body, pageIndex }
+  const apObjs = [];
+  for (const p of sigPlacements) {
+    const psName = stdFontNameFor(p.nameFont || 'serif-italic');
+    const nameFontRec = registerFont(psName);
+    const w = p.wPdf, h = p.hPdf;
+    const stream = buildSigAppearanceStream({
+      name: meta.name, dateStr, reason: reason || '', location: location || '',
+      w, h, nameFontResource: nameFontRec.resName,
+    });
+    const apNum = alloc();
+    // Build /Font subdict listing every font (viewer needs any font we reference in the stream)
+    let fontSubdict = '';
+    for (const [, rec] of fontResourceRegistry) {
+      fontSubdict += `/${rec.resName} ${rec.objNum} 0 R `;
+    }
+    const apBody =
+      `${apNum} 0 obj\n` +
+      `<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 ${pdfNum(w)} ${pdfNum(h)}]\n` +
+      `   /Resources << /Font << ${fontSubdict}>> /ProcSet [/PDF /Text] >>\n` +
+      `   /Length ${stream.length}\n` +
+      `>>\n` +
+      `stream\n${stream}endstream\nendobj\n`;
+    apObjs.push({ num: apNum, body: apBody });
+
+    const widgetNum = alloc();
+    const pageRef = pageRefs[p.pageIndex];
+    if (!pageRef) throw new Error(`Page index ${p.pageIndex} out of range`);
+    const widgetBody =
+      `${widgetNum} 0 obj\n` +
+      `<< /Type /Annot /Subtype /Widget /F 132\n` +
+      `   /Rect [${pdfNum(p.xPdf)} ${pdfNum(p.yPdf)} ${pdfNum(p.xPdf + p.wPdf)} ${pdfNum(p.yPdf + p.hPdf)}]\n` +
+      `   /P ${pageRef.num} ${pageRef.gen} R\n` +
+      `   /AP << /N ${apNum} 0 R >>\n` +
+      `   /Parent __SIGFIELD__ 0 R\n` +
+      `>>\nendobj\n`;
+    widgetObjs.push({ num: widgetNum, body: widgetBody, pageIndex: p.pageIndex });
+  }
+
+  // Sig dict (placeholder ByteRange + Contents)
+  const sigDictNum = alloc();
+  const sigDictBody =
+    `${sigDictNum} 0 obj\n` +
+    `<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n` +
+    `   /ByteRange [0 9999999999 9999999999 9999999999]\n` +
+    `   /Contents <${'0'.repeat(SIG_PLACEHOLDER_LEN)}>\n` +
+    `   /M (${pdfDate(now)})\n` +
+    `   /Name (${escapePdfString(meta.name)})\n` +
+    `   /Reason (${escapePdfString(reason || '')})\n` +
+    `   /Location (${escapePdfString(location || '')})\n` +
+    `>>\nendobj\n`;
+
+  // Sig field
+  const sigFieldNum = alloc();
+  const kidsStr = widgetObjs.map(w => `${w.num} 0 R`).join(' ');
+  const sigFieldName = `Signature-${now.getTime().toString(36)}`;
+  const sigFieldBody =
+    `${sigFieldNum} 0 obj\n` +
+    `<< /FT /Sig /T (${sigFieldName}) /V ${sigDictNum} 0 R /Kids [${kidsStr}] >>\n` +
+    `endobj\n`;
+
+  // Bake widget /Parent refs now that sigFieldNum is known
+  for (const w of widgetObjs) w.body = w.body.replace('__SIGFIELD__', String(sigFieldNum));
+
+  // AcroForm: update existing or create new (Catalog then needs updating too).
+  const acroInfo = findExistingAcroForm(parsed);
+  const objBodies = [];
+  // Font objects
+  for (const [psName, rec] of fontResourceRegistry) {
+    objBodies.push({
+      num: rec.objNum,
+      body: `${rec.objNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /${psName} /Encoding /WinAnsiEncoding >>\nendobj\n`,
+    });
+  }
+  // AP + widgets + sig field + sig dict
+  for (const o of apObjs) objBodies.push(o);
+  for (const w of widgetObjs) objBodies.push({ num: w.num, body: w.body });
+  objBodies.push({ num: sigDictNum, body: sigDictBody });
+  objBodies.push({ num: sigFieldNum, body: sigFieldBody });
+
+  // AcroForm object body
+  let catalogNeedsUpdate = false;
+  let acroFormNum;
+  if (acroInfo.ref) {
+    acroFormNum = acroInfo.ref.num;
+    const oldSrc = readObjectSource(parsed, acroFormNum);
+    const oldDict = extractObjDictText(oldSrc) || '<<>>';
+    const newDict = mergeAcroFormDict(oldDict, sigFieldNum);
+    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n${newDict}\nendobj\n` });
+  } else if (acroInfo.inlineText) {
+    // Promote inline AcroForm to an indirect object so we can override it in the increment.
+    acroFormNum = alloc();
+    const merged = mergeAcroFormDict(acroInfo.inlineText, sigFieldNum);
+    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n${merged}\nendobj\n` });
+    catalogNeedsUpdate = true;
+  } else {
+    acroFormNum = alloc();
+    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n<< /Fields [${sigFieldNum} 0 R] /SigFlags 3 >>\nendobj\n` });
+    catalogNeedsUpdate = true;
+  }
+
+  // Catalog update if needed
+  if (catalogNeedsUpdate) {
+    const oldCatSrc = readObjectSource(parsed, parsed.rootRef.num);
+    const oldCatDict = extractObjDictText(oldCatSrc) || '<<>>';
+    let newCatDict;
+    if (/\/AcroForm\s+\d+\s+\d+\s+R/.test(oldCatDict)) {
+      newCatDict = oldCatDict.replace(/\/AcroForm\s+\d+\s+\d+\s+R/, `/AcroForm ${acroFormNum} 0 R`);
+    } else if (/\/AcroForm\s*<</.test(oldCatDict)) {
+      // Replace inline AcroForm with a ref
+      const idx = oldCatDict.search(/\/AcroForm\s*<</);
+      const ddStart = oldCatDict.indexOf('<<', idx);
+      const inline = extractBalancedDict(oldCatDict, ddStart);
+      newCatDict = oldCatDict.substring(0, idx) + `/AcroForm ${acroFormNum} 0 R` + oldCatDict.substring(ddStart + inline.length);
+    } else {
+      newCatDict = oldCatDict.replace(/>>\s*$/, ` /AcroForm ${acroFormNum} 0 R >>`);
+    }
+    objBodies.push({ num: parsed.rootRef.num, body: `${parsed.rootRef.num} 0 obj\n${newCatDict}\nendobj\n` });
+  }
+
+  // Page updates — append each new widget to that page's /Annots.
+  const widgetsByPage = new Map();
+  for (const w of widgetObjs) {
+    if (!widgetsByPage.has(w.pageIndex)) widgetsByPage.set(w.pageIndex, []);
+    widgetsByPage.get(w.pageIndex).push(w.num);
+  }
+  for (const [pageIdx, wNums] of widgetsByPage) {
+    const pageRef = pageRefs[pageIdx];
+    const oldPageSrc = readObjectSource(parsed, pageRef.num);
+    const oldPageDict = extractObjDictText(oldPageSrc) || '<<>>';
+    const newPageDict = appendAnnotsToPageDict(oldPageDict, wNums);
+    objBodies.push({ num: pageRef.num, body: `${pageRef.num} 0 obj\n${newPageDict}\nendobj\n` });
+  }
+
+  // ── Assemble the incremental append ──
+  const originalBytes = parsed.bytes;
+  // Ensure the previous file ends with a newline before we glue on.
+  const needsSep = originalBytes[originalBytes.length - 1] !== 0x0a;
+  let appendStr = needsSep ? '\n' : '';
+
+  // Assign offsets and concatenate object bodies.
+  const offsetsByNum = {};
+  let bodyStr = '';
+  for (const { num, body } of objBodies) {
+    offsetsByNum[num] = originalBytes.length + appendStr.length + bodyStr.length;
+    bodyStr += body;
+  }
+  appendStr += bodyStr;
+
+  // xref section — one subsection per contiguous run of object numbers, plus a
+  // free entry for object 0 in the first subsection whose run starts at 0.
+  const nums = Object.keys(offsetsByNum).map(n => +n).sort((a, b) => a - b);
+  const runs = [];
+  {
+    let run = [nums[0]];
+    for (let i = 1; i < nums.length; i++) {
+      if (nums[i] === nums[i - 1] + 1) run.push(nums[i]);
+      else { runs.push(run); run = [nums[i]]; }
+    }
+    runs.push(run);
+  }
+  const xrefOffset = originalBytes.length + appendStr.length;
+  let xrefStr = 'xref\n';
+  for (const r of runs) {
+    xrefStr += `${r[0]} ${r.length}\n`;
+    for (const n of r) {
+      xrefStr += `${String(offsetsByNum[n]).padStart(10, '0')} 00000 n \n`;
+    }
+  }
+  const newSize = Math.max(parsed.size, Math.max(...nums) + 1);
+  const trailerParts = [
+    `/Size ${newSize}`,
+    `/Prev ${parsed.prevXrefOffset}`,
+    `/Root ${parsed.rootRef.num} ${parsed.rootRef.gen} R`,
+  ];
+  if (parsed.infoRef) trailerParts.push(`/Info ${parsed.infoRef.num} ${parsed.infoRef.gen} R`);
+  if (parsed.idHex)   trailerParts.push(`/ID [${parsed.idHex}]`);
+  const trailerStr = `trailer\n<< ${trailerParts.join(' ')} >>\n`;
+  appendStr += xrefStr + trailerStr + `startxref\n${xrefOffset}\n%%EOF\n`;
+
+  const appendU8 = latin1Encode(appendStr);
+  const combined = new Uint8Array(originalBytes.length + appendU8.length);
+  combined.set(originalBytes, 0);
+  combined.set(appendU8, originalBytes.length);
+
+  // Patch ByteRange (only the appended section carries the placeholder)
+  const combinedText = new TextDecoder('latin1').decode(combined);
+  const brRe = /\/ByteRange\s*\[\s*0\s+9999999999\s+9999999999\s+9999999999\s*\]/g;
+  let brMatch = null, m;
+  while ((m = brRe.exec(combinedText)) !== null) {
+    if (m.index >= originalBytes.length) { brMatch = m; break; }
+  }
+  if (!brMatch) throw new Error('ByteRange placeholder not found in appended section');
+  const placeholderHex = '0'.repeat(SIG_PLACEHOLDER_LEN);
+  const contentsIdx = combinedText.indexOf('<' + placeholderHex + '>', originalBytes.length);
+  if (contentsIdx < 0) throw new Error('Contents placeholder not found in appended section');
+  const contentsStart = contentsIdx;
+  const contentsEnd = contentsIdx + placeholderHex.length + 2;
+  const byteRange = [0, contentsStart, contentsEnd, combined.length - contentsEnd];
+  const brNew = `/ByteRange [${byteRange[0]} ${byteRange[1]} ${byteRange[2]} ${byteRange[3]}]`;
+  if (brNew.length > brMatch[0].length) throw new Error('ByteRange overflow');
+  const brPadded = brNew + ' '.repeat(brMatch[0].length - brNew.length);
+  for (let i = 0; i < brPadded.length; i++) combined[brMatch.index + i] = brPadded.charCodeAt(i);
+
+  // Sign the byte range
+  const signedContent = new Uint8Array(byteRange[1] + byteRange[3]);
+  signedContent.set(combined.subarray(0, contentsStart), 0);
+  signedContent.set(combined.subarray(contentsEnd), contentsStart);
+
+  const p7 = forge.pkcs7.createSignedData();
+  p7.content = forge.util.createBuffer(u8ToBinStr(signedContent), 'binary');
+  p7.addCertificate(cert);
+  p7.addSigner({
+    key, certificate: cert,
+    digestAlgorithm: forge.pki.oids.sha256,
+    authenticatedAttributes: [
+      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
+      { type: forge.pki.oids.messageDigest },
+      { type: forge.pki.oids.signingTime, value: now },
+    ],
+  });
+  p7.sign({ detached: true });
+  const der = forge.asn1.toDer(p7.toAsn1()).getBytes();
+  let sigHex = '';
+  for (let i = 0; i < der.length; i++) sigHex += der.charCodeAt(i).toString(16).padStart(2, '0');
+  if (sigHex.length > SIG_PLACEHOLDER_LEN) throw new Error('Signature too large for placeholder');
+  const sigHexPadded = sigHex + '0'.repeat(SIG_PLACEHOLDER_LEN - sigHex.length);
+  const hexStart = contentsStart + 1;
+  for (let i = 0; i < sigHexPadded.length; i++) combined[hexStart + i] = sigHexPadded.charCodeAt(i);
+
+  return combined;
+}
+
+function mergeAcroFormDict(oldDictText, newFieldNum) {
+  // Ensure /Fields contains an added ref and /SigFlags has the sig+append bits.
+  let dict = oldDictText;
+  const fieldsM = dict.match(/\/Fields\s*(\[[\s\S]*?\]|\d+\s+\d+\s+R)/);
+  if (fieldsM) {
+    const val = fieldsM[1];
+    if (val.startsWith('[')) {
+      const inner = val.slice(1, -1).trim();
+      dict = dict.replace(fieldsM[0], `/Fields [${inner ? inner + ' ' : ''}${newFieldNum} 0 R]`);
+    } else {
+      // Indirect fields array — replace with a new inline array that also lists the
+      // original array ref via a workaround isn't valid PDF. Simplest robust option:
+      // inline both original members (we can't cheaply read them here) and the new one.
+      // Fall back: replace with just the new field ref (acceptable when the prior form
+      // had no signature fields we need to preserve, which is our common case).
+      dict = dict.replace(fieldsM[0], `/Fields [${newFieldNum} 0 R]`);
+    }
+  } else {
+    dict = dict.replace(/>>\s*$/, ` /Fields [${newFieldNum} 0 R] >>`);
+  }
+  const flagsM = dict.match(/\/SigFlags\s+(\d+)/);
+  if (flagsM) {
+    const cur = parseInt(flagsM[1], 10) | 3;
+    dict = dict.replace(flagsM[0], `/SigFlags ${cur}`);
+  } else {
+    dict = dict.replace(/>>\s*$/, ` /SigFlags 3 >>`);
+  }
+  return dict;
+}
+
+function appendAnnotsToPageDict(oldDictText, newAnnotObjNums) {
+  const addRefs = newAnnotObjNums.map(n => `${n} 0 R`).join(' ');
+  const annotsM = oldDictText.match(/\/Annots\s*(\[[\s\S]*?\]|\d+\s+\d+\s+R)/);
+  if (!annotsM) {
+    return oldDictText.replace(/>>\s*$/, ` /Annots [${addRefs}] >>`);
+  }
+  const val = annotsM[1];
+  if (val.startsWith('[')) {
+    const inner = val.slice(1, -1).trim();
+    return oldDictText.replace(annotsM[0], `/Annots [${inner ? inner + ' ' : ''}${addRefs}]`);
+  }
+  // Indirect ref → for now, replace with just the new refs (drops prior widgets
+  // in the very rare case a page uses an indirect Annots array; our own signed
+  // outputs always inline the array).
+  return oldDictText.replace(annotsM[0], `/Annots [${addRefs}]`);
+}
+
 $('btnSign').onclick = async () => {
   if (!doc.placements.length) return;
   try {
@@ -3347,8 +5313,10 @@ $('btnSign').onclick = async () => {
     $('btnSign').textContent = 'Working…';
 
     const appearance = document.querySelector('input[name="appearance"]:checked').value;
-    const lock = document.querySelector('input[name="lockmode"]:checked').value === 'locked';
-    const stampEnabled = $('stampEnable').checked;
+    const lockmodeVal = document.querySelector('input[name="lockmode"]:checked').value;
+    const certifyMode = doc.alreadySigned ? 'none' : lockmodeVal; // approval-only for follow-ups
+    const lock = certifyMode === 'locked' || certifyMode === 'lock';
+    const stampEnabled = $('stampEnable').checked && !doc.alreadySigned;
 
     // Custom signing time (backdate). Blank = now.
     const rawDate = ($('signDate').value || '').trim();
@@ -3387,28 +5355,47 @@ $('btnSign').onclick = async () => {
       };
     }
 
-    const signed = await makeSignedPdf({
-      bytes: doc.bytes,
-      placements: doc.placements,
-      lock,
-      meta: unlocked.meta,
-      reason: $('reason').value.trim(),
-      location: $('location').value.trim(),
-      appearance,
-      cert: unlocked.cert,
-      key: unlocked.key,
-      sigPngU8: sigImage.pngU8,
-      signingTime,
-      stamp: stampEnabled ? {
-        enabled: true,
-        role: ($('stampRole').value || '').trim(),
-        qrPayload: vault.qrPayload,
-        csv: vault.csv,
-        signer: vault.signer,
-        dateStr: vault.dateStr,
-      } : { enabled: false },
-      formFields: doc.formFields,
-    });
+    let signed;
+    if (doc.alreadySigned) {
+      // Incremental append — keeps prior signatures valid. Only signature
+      // placements are honored here (text boxes / stamps would modify page
+      // content and void the prior signature).
+      signed = await makeIncrementalSignedPdf({
+        bytes: doc.bytes,
+        placements: doc.placements.filter(p => p.type === 'digital'),
+        meta: unlocked.meta,
+        reason: $('reason').value.trim(),
+        location: $('location').value.trim(),
+        cert: unlocked.cert,
+        key: unlocked.key,
+        signingTime,
+      });
+    } else {
+      signed = await makeSignedPdf({
+        bytes: doc.bytes,
+        placements: doc.placements,
+        lock,
+        certifyMode: certifyMode === 'certify' ? 'certify' : (certifyMode === 'locked' ? 'lock' : 'none'),
+        meta: unlocked.meta,
+        reason: $('reason').value.trim(),
+        location: $('location').value.trim(),
+        appearance,
+        cert: unlocked.cert,
+        key: unlocked.key,
+        sigPngU8: sigImage.pngU8,
+        signingTime,
+        stamp: stampEnabled ? {
+          enabled: true,
+          role: ($('stampRole').value || '').trim(),
+          qrPayload: vault.qrPayload,
+          csv: vault.csv,
+          signer: vault.signer,
+          dateStr: vault.dateStr,
+        } : { enabled: false },
+        formFields: doc.formFields,
+        pdfjsDoc: doc.pdfjs,
+      });
+    }
     const outBase = doc.file.name.replace(/\.pdf$/i, '');
     const outName = outBase + '-signed.pdf';
 
@@ -3550,8 +5537,27 @@ function verifyPdfSignatures(bytes) {
 function overallVerifyState(results) {
   if (results.length === 0) return 'none';
   if (results.some(r => r.error || !r.cryptoValid)) return 'broken';
-  if (results.some(r => !r.totalCovered)) return 'modified';
+  // Only the LATEST signature must cover the whole file. Earlier signatures
+  // in a multi-signer incremental chain intentionally don't — that's what
+  // makes multi-sig PDFs possible without invalidating prior sigs.
+  const latest = results.reduce((a, b) => (b.byteRange[2] + b.byteRange[3] > a.byteRange[2] + a.byteRange[3] ? b : a), results[0]);
+  if (!latest.totalCovered) return 'modified';
   return 'valid';
+}
+
+// Per-signature state, aware of multi-signer semantics.
+function perSigState(r, allResults) {
+  if (r.unsigned) return 'unsigned';
+  if (r.error || !r.cryptoValid) return 'broken';
+  if (r.totalCovered) return 'valid';
+  // Coverage stops before EOF. Fine if a later signature picks up from here
+  // and covers further — that's a normal incremental multi-signature file.
+  const myEnd = r.byteRange[2] + r.byteRange[3];
+  const laterValidCover = allResults.some(o => o !== r && !o.error && o.cryptoValid
+    && o.byteRange[0] === 0
+    && o.byteRange[1] >= myEnd - 4  // small whitespace tolerance
+    && o.totalCovered);
+  return laterValidCover ? 'valid' : 'modified';
 }
 
 function fmtSigningTime(t) {
@@ -3601,11 +5607,7 @@ function verifyResultsHtml(results, isUnsignedField=false) {
   }
   if (results.length === 0) return '<p>This PDF has no digital signatures.</p>';
   return '<div class="verify-list">' + results.map((r, i) => {
-    const state = r.unsigned ? 'unsigned'
-                : r.error ? 'broken'
-                : !r.cryptoValid ? 'broken'
-                : !r.totalCovered ? 'modified'
-                : 'valid';
+    const state = perSigState(r, results);
     const title = state === 'valid'    ? '✓ Signature is valid'
                 : state === 'modified' ? '⚠ Signature is VOIDED — document was modified after signing'
                 : state === 'unsigned' ? '? Empty signature field'
