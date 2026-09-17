@@ -1657,40 +1657,63 @@ $('btnExportId').onclick = async () => {
   if (!identity.p12U8) return;
   const rec = identities.get(identity.id);
   const hasGh = !!(rec && rec.ghVault);
-  const prefillPw = identity.password || '';
-  const body = document.createElement('div');
-  body.innerHTML = `
-    <p class="hint" style="margin-bottom:8px">
-      The bundle is encrypted with a password (PBKDF2-SHA256 · 200k iterations → AES-256-GCM).
-      Everything is included: the identity's key + certificate, signature image, saved UI settings, and (when configured) the GitHub vault config <b>with the token</b>. Without the password the file reveals nothing.
-    </p>
-    <label>Bundle password <span style="color:var(--muted); font-weight:400">(click 👁 to reveal)</span></label>
-    <div style="display:flex; gap:6px; align-items:center;">
-      <input type="password" id="bpw" autocomplete="off" value="${prefillPw.replace(/"/g,'&quot;')}" style="flex:1;">
-      <button type="button" id="bpwToggle" title="Show password" style="width:auto; padding:6px 10px;">👁</button>
-    </div>
-    <p class="hint" style="margin-top:6px">
-      ${prefillPw
-        ? 'Pre-filled with the identity password. Change it if you want a separate bundle password.'
-        : 'Pick any password. Anyone importing this bundle needs it.'}
-      GitHub vault included: <b>${hasGh ? 'yes (with token)' : 'no (none configured)'}</b>.
-    </p>
-  `;
-  // Toggle visibility so the user can eyeball the password they typed — no
-  // confirm field needed and no browser-autofill weirdness where the two
-  // fields ended up with different values.
-  setTimeout(() => {
-    const inp = body.querySelector('#bpw');
-    const btn = body.querySelector('#bpwToggle');
-    if (btn && inp) btn.onclick = () => {
-      inp.type = inp.type === 'password' ? 'text' : 'password';
-      btn.textContent = inp.type === 'password' ? '👁' : '🙈';
-    };
-  }, 0);
-  const r = await modal({ title: 'Export identity bundle', body, confirmText: 'Export' });
-  if (!r) return;
-  const pw = r.bpw || '';
-  if (pw.length < 6) return toast('Bundle password must be at least 6 characters', 'err');
+  // Loop the dialog until the user gives a valid password + matching
+  // confirm, or cancels. Autocomplete="off" on both fields and unique
+  // (non-paired-looking) ids to avoid Chrome/Firefox suggesting a strong
+  // password into one field and leaving the two mismatched.
+  const initialPrefill = identity.password || '';
+  let pw = null, prefill = initialPrefill, errorMsg = '';
+  while (true) {
+    const body = document.createElement('div');
+    body.innerHTML = `
+      <p class="hint" style="margin-bottom:8px">
+        The bundle is encrypted with a password (PBKDF2-SHA256 · 200k iterations → AES-256-GCM).
+        Everything is included: the identity's key + certificate, signature image, saved UI settings, and (when configured) the GitHub vault config <b>with the token</b>. Without the password the file reveals nothing.
+      </p>
+      ${errorMsg ? `<div style="background:rgba(200,40,25,.12); color:var(--danger); padding:6px 10px; border-radius:6px; margin-bottom:8px; font-size:13px;">${errorMsg}</div>` : ''}
+      <label>Bundle password <span style="color:var(--muted); font-weight:400">(click 👁 to reveal)</span></label>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="password" id="bpw" autocomplete="off" value="${prefill.replace(/"/g,'&quot;')}" style="flex:1;">
+        <button type="button" id="bpwToggle" title="Show password" style="width:auto; padding:6px 10px;">👁</button>
+      </div>
+      <label style="margin-top:8px">Confirm bundle password</label>
+      <input type="password" id="bpw2" autocomplete="off" value="${prefill.replace(/"/g,'&quot;')}">
+      <div id="bpwMatch" style="font-size:12px; margin-top:4px; min-height:16px;"></div>
+      <p class="hint" style="margin-top:6px">
+        ${initialPrefill
+          ? 'Pre-filled with the identity password. Change it if you want a separate bundle password.'
+          : 'Pick any password. Anyone importing this bundle needs it.'}
+        GitHub vault included: <b>${hasGh ? 'yes (with token)' : 'no (none configured)'}</b>.
+      </p>
+    `;
+    setTimeout(() => {
+      const inp1 = body.querySelector('#bpw');
+      const inp2 = body.querySelector('#bpw2');
+      const btn = body.querySelector('#bpwToggle');
+      const status = body.querySelector('#bpwMatch');
+      const check = () => {
+        const a = inp1.value, b = inp2.value;
+        if (a.length === 0 && b.length === 0) { status.textContent = ''; return; }
+        if (a.length < 6) { status.textContent = '× at least 6 characters'; status.style.color = 'var(--danger)'; return; }
+        if (a !== b) { status.textContent = '× passwords do not match'; status.style.color = 'var(--danger)'; return; }
+        status.textContent = '✓ ok'; status.style.color = 'var(--good, #1f7a3a)';
+      };
+      inp1.addEventListener('input', check);
+      inp2.addEventListener('input', check);
+      if (btn) btn.onclick = () => {
+        const shown = inp1.type === 'password';
+        inp1.type = inp2.type = shown ? 'text' : 'password';
+        btn.textContent = shown ? '🙈' : '👁';
+      };
+      check();
+    }, 0);
+    const r = await modal({ title: 'Export identity bundle', body, confirmText: 'Export' });
+    if (!r) return;
+    const a = r.bpw || '', b = r.bpw2 || '';
+    if (a.length < 6) { errorMsg = 'Bundle password must be at least 6 characters.'; prefill = a; continue; }
+    if (a !== b)     { errorMsg = 'Passwords do not match.';                         prefill = a; continue; }
+    pw = a; break;
+  }
 
   const inner = {
     meta: { name: identity.meta.name, email: identity.meta.email },
