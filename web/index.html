@@ -4374,7 +4374,6 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
 async function rasterRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects) {
   const { PDFName, PDFRawStream, PDFDict } = window.PDFLib;
   const pdfjsPage = await pdfjsDoc.getPage(pageIndex + 1);
-  const vp1 = pdfjsPage.getViewport({ scale: 1 });
   const scale = 220 / 72;
   const vp = pdfjsPage.getViewport({ scale });
   const canvas = document.createElement('canvas');
@@ -4383,12 +4382,20 @@ async function rasterRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects) {
   const ctx = canvas.getContext('2d');
   await pdfjsPage.render({ canvasContext: ctx, viewport: vp }).promise;
   ctx.fillStyle = '#000';
+  // Convert redaction rectangles from unrotated PDF space to canvas space via
+  // pdf.js's viewport, which handles /Rotate transparently. Walk the 4 corners
+  // and take the axis-aligned bounding box.
   for (const r of rects) {
-    const x = Math.round(r.xPdf * scale);
-    const y = Math.round((vp1.height - r.yPdf - r.hPdf) * scale);
-    const w = Math.round(r.wPdf * scale);
-    const h = Math.round(r.hPdf * scale);
-    ctx.fillRect(x, y, w, h);
+    const corners = [
+      vp.convertToViewportPoint(r.xPdf,          r.yPdf),
+      vp.convertToViewportPoint(r.xPdf + r.wPdf, r.yPdf),
+      vp.convertToViewportPoint(r.xPdf,          r.yPdf + r.hPdf),
+      vp.convertToViewportPoint(r.xPdf + r.wPdf, r.yPdf + r.hPdf),
+    ];
+    const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
   }
   const pngB64 = canvas.toDataURL('image/png').split(',')[1];
   const pngBytes = binStrToU8(atob(pngB64));
@@ -4687,11 +4694,14 @@ function rewriteRedactingTextOps(ops, redactedItems) {
     const M = matMul(Tm, ctm());
     return [M[4], M[5]];
   }
-  function shouldRedactAt(x, y, str) {
+  function shouldRedactAt(x, y /*, str */) {
+    // Match by pen-position only. Comparing strings is unreliable because the
+    // raw Tj bytes use the font's encoding (e.g. WinAnsi 0x97 for em-dash)
+    // while pdf.js reports it.str already decoded to Unicode (—). Position
+    // alone is unambiguous: if pdf.js says a text item lives here and our
+    // op's pen lands here, that's the redaction target.
     for (const it of redactedItems) {
-      if (Math.abs(it.x - x) <= TOL && Math.abs(it.y - y) <= TOL) {
-        if (!str || it.str === str || it.str.startsWith(str) || str.startsWith(it.str)) return true;
-      }
+      if (Math.abs(it.x - x) <= TOL && Math.abs(it.y - y) <= TOL) return true;
     }
     return false;
   }
