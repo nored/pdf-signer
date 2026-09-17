@@ -18,7 +18,7 @@ Priorities set 2026-09-17. The load-bearing use case is writing thesis review re
 
 - [ ] **Batch mode.** Drop N PDFs, apply the same placement + certify options, download N signed outputs.
 - [ ] **Sidebar page thumbnails.** Click-to-jump nav for long documents.
-- [ ] **Autosave placements per document hash.** Placements survive tab close / reload for the same PDF; stored in IndexedDB keyed by SHA-256 of the input bytes.
+- [x] **Autosave placements per document hash.** SHA-256 of the input bytes keys an IndexedDB record under `_placements/<hash>` containing the full placement snapshot (positions, typography, redaction rects, everything `snapshotPlacements` captures). Debounced 400ms save fires on every mutation via `renderPlacementList` / `commitPlacementFromDom` hooks. On open, if a record exists for that exact file, placements come back and a toast reports how many. Empty snapshot deletes the record. Skipped for already-signed and encrypted PDFs where placements wouldn't apply.
 
 ## Reliability & testing
 
