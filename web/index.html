@@ -828,6 +828,17 @@
             </div>
           </details>
 
+          <details class="collapse" style="margin-top:10px">
+            <summary>Trusted roots <span id="trustRootsCount" style="opacity:.6"></span></summary>
+            <div style="margin-top:8px">
+              <p class="hint" style="margin-bottom:6px">
+                Root CA certificates the verifier trusts when checking cert chains. Signatures whose signer cert doesn't chain to one of these show a warning banner. Add your organisation's CA (e.g. SRH), your own root, or leave empty to skip chain checking. Stored locally in your browser.
+              </p>
+              <div id="trustRootsList" style="font-size:12px; color:var(--muted); margin-bottom:6px;">No trusted roots configured.</div>
+              <button id="btnAddTrustRoot">Add root certificate (PEM)…</button>
+            </div>
+          </details>
+
           <details class="collapse" id="stampSection" style="margin-top:10px; display:none">
             <summary>Integrity stamp defaults <span id="stampHeaderNote" style="opacity:.6"></span></summary>
             <div style="margin-top:8px">
@@ -1159,6 +1170,98 @@ async function idbDel(key) {
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
+}
+
+/* ─── Trust store (user-editable root CA certificates) ────────────────
+   Persisted as an array of PEMs under a reserved key in the identity
+   store. Verifier walks each signature's cert chain against this store
+   and flags "chains to a trusted root" vs "self-signed / unknown root". */
+const TRUST_KEY = '_trust_roots';
+const trustStore = { pems: [], loaded: false, caStore: null };
+async function loadTrustStore() {
+  const raw = await idbGet(TRUST_KEY);
+  trustStore.pems = Array.isArray(raw) ? raw.slice() : [];
+  rebuildCaStore();
+  trustStore.loaded = true;
+}
+function renderTrustRoots() {
+  const list = $('trustRootsList');
+  const count = $('trustRootsCount');
+  if (!list) return;
+  if (trustStore.pems.length === 0) {
+    list.textContent = 'No trusted roots configured.';
+    if (count) count.textContent = '· 0';
+    return;
+  }
+  if (count) count.textContent = '· ' + trustStore.pems.length;
+  list.innerHTML = '';
+  trustStore.pems.forEach((pem, idx) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; gap:6px; align-items:center; padding:4px 0; border-bottom:1px solid var(--border);';
+    const label = document.createElement('span');
+    label.style.cssText = 'flex:1; color:var(--text); font-size:12px;';
+    label.textContent = trustRootSummary(pem);
+    const rm = document.createElement('button');
+    rm.textContent = '×';
+    rm.title = 'Remove';
+    rm.style.cssText = 'width:24px; padding:2px 0; font-size:14px; color:var(--muted);';
+    rm.onclick = async () => {
+      await removeTrustRoot(idx);
+      renderTrustRoots();
+      toast('Root removed', 'ok');
+    };
+    row.append(label, rm);
+    list.appendChild(row);
+  });
+}
+function rebuildCaStore() {
+  try {
+    trustStore.caStore = forge.pki.createCaStore(trustStore.pems);
+  } catch (e) {
+    console.warn('trust store build failed:', e && e.message);
+    trustStore.caStore = forge.pki.createCaStore([]);
+  }
+}
+async function addTrustRoot(pem) {
+  const trimmed = String(pem || '').trim();
+  if (!/^-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----\s*$/.test(trimmed)) {
+    throw new Error('That does not look like a PEM certificate (must be -----BEGIN CERTIFICATE----- … -----END CERTIFICATE-----)');
+  }
+  // Parse to confirm it's a real cert before saving.
+  forge.pki.certificateFromPem(trimmed);
+  trustStore.pems.push(trimmed);
+  await idbPut(TRUST_KEY, trustStore.pems);
+  rebuildCaStore();
+}
+async function removeTrustRoot(idx) {
+  if (idx < 0 || idx >= trustStore.pems.length) return;
+  trustStore.pems.splice(idx, 1);
+  await idbPut(TRUST_KEY, trustStore.pems);
+  rebuildCaStore();
+}
+function trustRootSummary(pem) {
+  try {
+    const c = forge.pki.certificateFromPem(pem);
+    const cn = c.subject.getField('CN'); const o = c.subject.getField('O');
+    const na = c.validity.notAfter && c.validity.notAfter.toISOString().slice(0, 10);
+    return `${cn ? cn.value : '(no CN)'}${o ? ' · ' + o.value : ''}${na ? ' · expires ' + na : ''}`;
+  } catch (_) { return '(unparseable PEM)'; }
+}
+// Verify a chain: given the signer cert and any intermediates from the CMS,
+// try forge.pki.verifyCertificateChain against our trust store. Returns
+// { trusted, root, reason }.
+function verifyChain(signerCert, intermediates) {
+  if (!trustStore.caStore || trustStore.pems.length === 0) {
+    return { trusted: false, reason: 'no trust store configured' };
+  }
+  const chain = [signerCert, ...intermediates.filter(c => c !== signerCert)];
+  try {
+    forge.pki.verifyCertificateChain(trustStore.caStore, chain);
+    return { trusted: true };
+  } catch (e) {
+    const reason = e && (e.message || e.error) || 'chain build failed';
+    return { trusted: false, reason };
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -2893,6 +2996,24 @@ function refreshAllPreviews() {
   for (const p of doc.placements) renderPlacementPreview(p);
 }
 document.addEventListener('DOMContentLoaded', () => {}); // reserved
+
+if ($('btnAddTrustRoot')) $('btnAddTrustRoot').onclick = async () => {
+  const body = document.createElement('div');
+  body.innerHTML = `
+    <label>Paste a root CA certificate (PEM)</label>
+    <textarea id="pemInput" rows="10" style="width:100%; font-family:ui-monospace,Menlo,monospace; font-size:11.5px;" placeholder="-----BEGIN CERTIFICATE-----&#10;MIID...&#10;-----END CERTIFICATE-----"></textarea>
+    <p class="hint" style="margin-top:6px">Must be a self-signed root or an intermediate CA that eventually chains to one you also add here. Signatures whose signer cert chains up through this cert will be marked "chains to a trusted root".</p>
+  `;
+  const r = await modal({ title: 'Add trusted root', body, confirmText: 'Add' });
+  if (!r) return;
+  try {
+    await addTrustRoot(r.pemInput);
+    renderTrustRoots();
+    toast('Trusted root added', 'ok');
+  } catch (e) {
+    toast('Failed: ' + e.message, 'err');
+  }
+};
 // Wire live-update inputs (fires when values change)
 ['reason', 'location'].forEach(id => {
   $(id).addEventListener('input', refreshAllPreviews);
@@ -5774,6 +5895,8 @@ function verifyPdfSignatures(bytes) {
       const cn = cert.subject.getField('CN');
       const em = cert.subject.getField('E') || cert.subject.getField('emailAddress');
       const certFp = certFingerprint(cert);
+      const chainInfo = verifyChain(cert, p7.certificates || []);
+      const isSelfSigned = cert.subject.hash === cert.issuer.hash;
       results.push({
         cn: cn ? cn.value : '(unknown)',
         email: em ? em.value : '',
@@ -5785,6 +5908,9 @@ function verifyPdfSignatures(bytes) {
         docLength: bytes.length,
         cryptoValid: digestMatch && rsaOk,
         certFp,
+        trusted: chainInfo.trusted,
+        trustReason: chainInfo.reason,
+        selfSigned: isSelfSigned,
       });
     } catch (e) {
       results.push({ error: e.message, byteRange: br });
@@ -5874,12 +6000,17 @@ function verifyResultsHtml(results, isUnsignedField=false) {
     const tsaLine = r.tsaTime
       ? `Trusted timestamp: <b style="color:${r.tsaOk ? 'var(--good, #1f7a3a)' : 'var(--danger)'}">${r.tsaOk ? '✓' : '✕'}</b> ${fmtSigningTime(r.tsaTime)}${r.tsaSubject ? ' · TSA: ' + r.tsaSubject : ''}<br>`
       : '';
+    const trustLine = r.selfSigned
+      ? `Certificate: <b style="color:#b57920">self-signed</b> — trust depends on how you got this signer's cert<br>`
+      : r.trusted
+        ? `Certificate: <b style="color:var(--good, #1f7a3a)">chains to a trusted root</b><br>`
+        : `Certificate: <b style="color:#b57920">chain not verified</b>${r.trustReason ? ' (' + r.trustReason + ')' : ''}<br>`;
     const details = r.error
       ? `<div class="meta">Error: ${r.error}</div>`
       : `<div class="meta">
            Signer: <b>${r.cn}</b>${r.email ? ' &lt;' + r.email + '&gt;' : ''}<br>
            Signed: ${fmtSigningTime(r.signingTime) || '(no time)'}<br>
-           ${tsaLine}Byte range: [${r.byteRange.join(', ')}] · document is ${r.docLength} bytes<br>
+           ${tsaLine}${trustLine}Byte range: [${r.byteRange.join(', ')}] · document is ${r.docLength} bytes<br>
            SHA-256 digest match: ${r.digestMatch ? 'yes' : '<b style="color:var(--danger)">NO</b>'}<br>
            RSA signature verifies: ${r.rsaOk ? 'yes' : '<b style="color:var(--danger)">NO</b>'}<br>
            Signed range covers whole file: ${r.totalCovered ? 'yes' : '<b style="color:#b57920">no</b>'}
@@ -6289,6 +6420,7 @@ try {
     const had = await loadIdentitiesFromDb();
     if (had && identity.meta) toast(`Loaded identity: ${identity.label}`);
   } catch (e) { console.warn('idb load failed', e); }
+  try { await loadTrustStore(); renderTrustRoots(); } catch (e) { console.warn('trust store load failed', e); }
   try { await ghMigrateGlobalIfAny(); } catch (e) { console.warn('gh migrate failed', e); }
   wireSettingsAutoSave();
   ghSyncFromActiveIdentity();
