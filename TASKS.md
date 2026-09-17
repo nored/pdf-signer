@@ -17,13 +17,18 @@ Priorities set 2026-09-17. The load-bearing use case is writing thesis review re
 ## Ergonomics
 
 - [ ] **Batch mode.** Drop N PDFs, apply the same placement + certify options, download N signed outputs.
-- [ ] **Sidebar page thumbnails.** Click-to-jump nav for long documents.
+- [x] **Sidebar page thumbnails.** Right-side collapsible panel with a click-to-jump list of page thumbnails. Toggle button in the toolbar (☰ Pages); open/closed state persists in localStorage. Thumbnails lazy-render at ~140px wide when they enter the panel's viewport (IntersectionObserver on the panel). A second IntersectionObserver on the main scroll area tracks which page has the largest visible ratio and highlights its thumb with an accent border, auto-scrolling the panel to keep the current thumb in view.
 - [x] **Autosave placements per document hash.** SHA-256 of the input bytes keys an IndexedDB record under `_placements/<hash>` containing the full placement snapshot (positions, typography, redaction rects, everything `snapshotPlacements` captures). Debounced 400ms save fires on every mutation via `renderPlacementList` / `commitPlacementFromDom` hooks. On open, if a record exists for that exact file, placements come back and a toast reports how many. Empty snapshot deletes the record. Skipped for already-signed and encrypted PDFs where placements wouldn't apply.
 
 ## Reliability & testing
 
 - [ ] **Playwright E2E tests.** Cover the two-supervisor flow, redact-then-sign, encrypted bundle round-trip, form-field fill, zoom-then-place.
 - [ ] **Split the ~5000-line HTML into ES modules.** `signing.js`, `redaction.js`, `verify.js`, `bundle.js`, `ui.js` — each testable in isolation. The single-file `web/index.html` remains the deploy target (concatenated at build time).
+
+## Candidates surfaced during the current round
+
+- **Let's Encrypt cert as signing identity.** The p12 importer already accepts any cert+key bundle. Add a two-file `.pem + privkey.pem` importer for the standard LE layout so users don't need `openssl pkcs12 -export` gymnastics. Caveat: LE certs identify a domain, not a person, and lack the Document Signing EKU Adobe demands; works for our own verifier and for any verifier that doesn't hard-require that EKU.
+- **Vault-hosted self-signed cert as trust anchor.** Publish the identity's self-signed cert to the GitHub vault; embed the raw URL in the signature's `/Reason` (or a custom attribute). Verifier fetches the cert from that HTTPS URL, checks its leaf matches the signature's signer, and treats it as trusted-by-vault. Not PDF-canonical trust but maps well onto the existing github.io hosting pattern; effectively makes a self-signed key usable across machines without the recipient needing to add anything to their trust store.
 
 ## Not currently in scope
 
