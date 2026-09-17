@@ -855,7 +855,8 @@
             <div style="margin-top:8px">
               <div id="ghConfigSummary" style="font-size:12px; color:var(--muted); margin-bottom:6px;">Not configured yet.</div>
               <button id="btnGhConfigure">Configure GitHub vault…</button>
-              <div class="hint">Optional. Signed PDFs are AES-encrypted and pushed to your GitHub repo; the QR embeds the raw URL so anyone with the QR can auto-fetch, decrypt and verify. Travels with the identity's export bundle.</div>
+              <div id="ghCertPublishStatus" style="font-size:12px; margin-top:6px; padding:6px 8px; border-radius:4px; background: var(--panel-2); display:none"></div>
+              <div class="hint">On sign, your identity's certificate is auto-published to <code>&lt;vault&gt;/certs/&lt;fingerprint&gt;.pem</code> once, and each signed PDF carries the raw URL. Verifiers auto-fetch it and trust the signer transitively via the vault's HTTPS chain — no manual trust setup on the recipient's side. Signed PDFs are also AES-encrypted and pushed as <code>.vault</code> files if the integrity stamp is enabled.</div>
             </div>
           </details>
 
@@ -1663,10 +1664,24 @@ function renderIdentity() {
     const selfSigned = identity.unlocked.cert.subject.hash === identity.unlocked.cert.issuer.hash;
     if (chLen > 1) fp += ` · CA-issued (chain: ${chLen})`;
     else if (selfSigned) fp += ' · self-signed';
-    // Cert capabilities: what does this cert actually let us do?
     const caps = certCapabilities(identity.unlocked.cert);
     if (caps.length) fp += ' · can sign: ' + caps.join(', ');
-    $('idFingerprint').textContent = fp;
+    $('idFingerprint').innerHTML = '';
+    $('idFingerprint').appendChild(document.createTextNode(fp));
+    // Vault-published cert URL, if we've uploaded it. This is the visible
+    // proof that the automation ran.
+    const rec = identities.get(identity.id);
+    if (rec && rec.certVaultUrl) {
+      const br = document.createElement('br');
+      const a = document.createElement('a');
+      a.href = rec.certVaultUrl;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.style.color = 'var(--accent)';
+      a.textContent = 'Cert published to vault ↗';
+      a.title = rec.certVaultUrl;
+      $('idFingerprint').append(br, a);
+    }
   }
   $('idButtons2').style.display = has ? 'flex' : 'none';
   const settingsNote = $('idSettingsNote');
@@ -4343,6 +4358,19 @@ function updateGhSummary() {
     : (hasId ? 'GitHub vault: not configured for the active identity — set it up in the Identity section above.'
              : 'GitHub vault: pick or create an identity first.');
   const sub = $('ghIdSubsection'); if (sub) sub.style.display = hasId ? '' : 'none';
+  const cps = $('ghCertPublishStatus');
+  if (cps) {
+    const rec = hasId ? identities.get(identity.id) : null;
+    if (rec && rec.certVaultUrl) {
+      cps.style.display = '';
+      cps.innerHTML = `✓ Cert published: <a href="${rec.certVaultUrl}" target="_blank" style="color:var(--accent); word-break:break-all;">${rec.certVaultUrl}</a>`;
+    } else if (c && hasId) {
+      cps.style.display = '';
+      cps.textContent = 'Cert will auto-publish on your first signature with this identity.';
+    } else {
+      cps.style.display = 'none';
+    }
+  }
   const stampSub = $('stampSection'); if (stampSub) stampSub.style.display = hasId ? '' : 'none';
   const note = $('ghHeaderNote');
   if (note) note.textContent = c ? '· ' + c.owner + '/' + c.repo : '· not configured';
@@ -4546,6 +4574,8 @@ async function ensureCertPublishedToVault(unlocked) {
   const c = ghVault.config;
   const url = `https://raw.githubusercontent.com/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.branch)}/${c.pathPrefix.replace(/^\/+|\/+$/g, '')}/${filename}`;
   await updateActiveIdentity({ certVaultUrl: url });
+  toast('Cert published to vault → recipients get transitive trust', 'ok');
+  renderIdentity();
   return url;
 }
 async function ghApi(c, path, init={}) {
