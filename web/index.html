@@ -889,6 +889,20 @@
           <div id="alreadySignedNote" class="hint" style="display:none; margin-top:6px; color:#b57920">
             This PDF already has a valid signature. Your signature will be added as an <b>approval signature</b> in an incremental update, so the existing signature stays valid. Certification / locking is not available on follow-up signatures.
           </div>
+
+          <details style="margin-top:10px">
+            <summary>Trusted timestamp (RFC 3161)</summary>
+            <div style="padding:6px 4px">
+              <label class="lock-row"><input type="checkbox" id="tsaEnable"> Ask a TSA to countersign the timestamp</label>
+              <label style="margin-top:6px">TSA URL</label>
+              <input type="text" id="tsaUrl" placeholder="https://freetsa.org/tsr" value="https://freetsa.org/tsr">
+              <p class="hint" style="margin-top:6px">
+                When enabled, the signature is countersigned by an external time-stamp authority so verifiers get a trusted "signed before &lt;time&gt;" claim that survives your certificate expiring.
+                Many public TSAs don't send CORS headers — if the call is refused by your browser, you'll need a proxy or a TSA that allows browser origins (freeTSA is usually fine).
+                <b>Suppressed automatically when "Sign as of" is set</b> — a TSA time and a backdated M would disagree, and that visibly flags the signature.
+              </p>
+            </div>
+          </details>
         </div>
       </details>
 
@@ -3323,6 +3337,260 @@ function updateSignButton() {
    ═══════════════════════════════════════════════════════════════════════ */
 const SIG_PLACEHOLDER_LEN = 16384;
 
+/* ─── RFC 3161 timestamping ──────────────────────────────────────────────
+   Add a trusted timestamp token to the CMS signature as the id-aa-
+   timeStampToken unauthenticated attribute (RFC 3161 § 5.1 / RFC 5652).
+   The TSA server receives a hash of our raw RSA signature value and
+   returns a signed proof that this signature existed before the TSA's
+   clock. Verifiers can read it back to trust the signing time even after
+   the signer's certificate expires.
+
+   The TSA URL is configurable per-identity because most public TSAs need
+   either their own CORS-friendly endpoint or a proxy — we can't universally
+   pick one that works from every browser origin. */
+
+const OID_TIMESTAMP_TOKEN = '1.2.840.113549.1.9.16.2.14';
+const OID_SHA256          = '2.16.840.1.101.3.4.2.1';
+
+function buildTsaRequest(signatureBytes /* binary string */, nonceHex /* hex string, may be null */) {
+  const asn1 = forge.asn1;
+  // Hash the signature value (SHA-256).
+  const md = forge.md.sha256.create();
+  md.update(signatureBytes);
+  const hash = md.digest().bytes();
+  const hashAlg = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(OID_SHA256).getBytes()),
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, false, ''),
+  ]);
+  const messageImprint = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
+    hashAlg,
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, hash),
+  ]);
+  const items = [
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, asn1.integerToDer(1).getBytes()),
+    messageImprint,
+  ];
+  if (nonceHex) {
+    // nonce is a large random integer; write as INTEGER from hex bytes.
+    let nonceBytes = '';
+    for (let i = 0; i < nonceHex.length; i += 2) nonceBytes += String.fromCharCode(parseInt(nonceHex.substr(i, 2), 16));
+    // Ensure positive INTEGER (prepend 0x00 if high bit set).
+    if (nonceBytes.length && (nonceBytes.charCodeAt(0) & 0x80)) nonceBytes = '\x00' + nonceBytes;
+    items.push(asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, nonceBytes));
+  }
+  // certReq = TRUE (ask the TSA to include its cert chain in the token).
+  items.push(asn1.create(asn1.Class.UNIVERSAL, asn1.Type.BOOLEAN, false, '\x01'));
+  const req = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, items);
+  return asn1.toDer(req).getBytes();
+}
+
+async function fetchTimestampToken(tsaUrl, signatureBytes) {
+  // Build request + POST it to the TSA. Fail cleanly on network / CORS.
+  const nonceBytes = new Uint8Array(16);
+  crypto.getRandomValues(nonceBytes);
+  let nonceHex = '';
+  for (const b of nonceBytes) nonceHex += b.toString(16).padStart(2, '0');
+  const req = buildTsaRequest(signatureBytes, nonceHex);
+  const reqU8 = new Uint8Array(req.length);
+  for (let i = 0; i < req.length; i++) reqU8[i] = req.charCodeAt(i) & 0xff;
+  let res;
+  try {
+    res = await fetch(tsaUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/timestamp-query', 'Accept': 'application/timestamp-reply' },
+      body: reqU8,
+    });
+  } catch (e) {
+    throw new Error(`TSA request failed (${e.message}). If this looks like a CORS issue, the TSA URL is not reachable from a browser — try a different TSA or run the request through a proxy.`);
+  }
+  if (!res.ok) throw new Error(`TSA HTTP ${res.status}`);
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  if (!ct.includes('timestamp-reply') && !ct.includes('octet-stream')) {
+    throw new Error('TSA returned unexpected Content-Type: ' + ct);
+  }
+  const buf = new Uint8Array(await res.arrayBuffer());
+  // Parse TimeStampResp = SEQUENCE { PKIStatusInfo, TimeStampToken OPTIONAL }.
+  let binStr = '';
+  for (let i = 0; i < buf.length; i++) binStr += String.fromCharCode(buf[i]);
+  const asn1 = forge.asn1;
+  const parsed = asn1.fromDer(binStr);
+  if (!parsed.value || parsed.value.length < 1) throw new Error('TSA response: empty');
+  const statusInfo = parsed.value[0];
+  const statusCode = asn1.derToInteger(statusInfo.value[0].value);
+  if (statusCode !== 0 && statusCode !== 1) {
+    let msg = 'TSA rejected the request (status ' + statusCode + ')';
+    if (statusInfo.value.length > 1) {
+      try {
+        const ft = statusInfo.value[1];
+        if (ft && ft.value && ft.value[0]) msg += ': ' + ft.value[0].value;
+      } catch (_) {}
+    }
+    throw new Error(msg);
+  }
+  if (parsed.value.length < 2) throw new Error('TSA response has no timeStampToken');
+  const token = parsed.value[1]; // ContentInfo — SignedData carrying TSTInfo
+  return token;
+}
+
+// Wrap a fully-formed p7 (already signed) so that the signer's info carries
+// an unauthenticated attribute [1] IMPLICIT SET containing the timestamp
+// token under id-aa-timeStampToken. Returns the DER bytes of the mutated CMS.
+function attachTimestampToken(p7Asn1, tokenAsn1) {
+  const asn1 = forge.asn1;
+  // p7Asn1 is a ContentInfo (SEQUENCE): { contentType, [0] EXPLICIT content }.
+  // content is a SignedData: { version, digestAlgorithms, encapContentInfo, [0] certs?, [1] crls?, signerInfos SET }.
+  // signerInfos is at the last position after the optional [0]/[1] tagged fields.
+  const contentInfo = p7Asn1;
+  const explicitContent = contentInfo.value[1];              // [0] EXPLICIT
+  const signedData = explicitContent.value[0];               // SEQUENCE SignedData
+  // Find the signerInfos SET — it's the last SET in the SignedData sequence.
+  let signerInfos = null;
+  for (let i = signedData.value.length - 1; i >= 0; i--) {
+    const v = signedData.value[i];
+    if (v.type === asn1.Type.SET && v.constructed && !v.tagClass) {
+      signerInfos = v;
+      break;
+    }
+    if (v.type === asn1.Type.SET) { signerInfos = v; break; }
+  }
+  if (!signerInfos || !signerInfos.value.length) throw new Error('signerInfos not found in CMS');
+  const signerInfo = signerInfos.value[0];
+  // SignerInfo ::= SEQUENCE {
+  //   version, sid, digestAlgorithm, signedAttrs [0]?, signatureAlgorithm,
+  //   signature (encryptedDigest), unsignedAttrs [1]? }
+  // Append the [1] IMPLICIT unsigned-attrs SET to the end.
+  const attribute = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(OID_TIMESTAMP_TOKEN).getBytes()),
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SET, true, [ tokenAsn1 ]),
+  ]);
+  // Check if an unsignedAttrs field already exists (tagged [1] IMPLICIT).
+  let unsignedAttrs = null;
+  for (const v of signerInfo.value) {
+    if (v.tagClass === asn1.Class.CONTEXT_SPECIFIC && v.type === 1) { unsignedAttrs = v; break; }
+  }
+  if (unsignedAttrs) {
+    unsignedAttrs.value.push(attribute);
+  } else {
+    signerInfo.value.push(asn1.create(asn1.Class.CONTEXT_SPECIFIC, 1, true, [attribute]));
+  }
+  return asn1.toDer(contentInfo).getBytes();
+}
+
+// Parse an RFC 3161 TimeStampToken (a CMS SignedData whose eContent is TSTInfo)
+// and check its messageImprint against our own signature bytes. Returns
+// { time: Date, ok: boolean, subject: string } or null if unparseable.
+function parseTimestampToken(tokenAsn1, sigBinaryString) {
+  const asn1 = forge.asn1;
+  // tokenAsn1 is a ContentInfo: SEQUENCE { contentType OID, [0] EXPLICIT content }.
+  const signedData = tokenAsn1.value[1].value[0];
+  // Find encapContentInfo (SEQUENCE { OID id-ct-TSTInfo, [0] EXPLICIT OCTET STRING(TSTInfo) }).
+  // It's the second element (after version + digestAlgorithms).
+  const eci = signedData.value[2];
+  if (!eci || !eci.value || !eci.value[1]) return null;
+  const tstInfoOct = eci.value[1].value[0];
+  // OCTET STRING wrapping — its .value is the DER of TSTInfo.
+  const tstInfo = asn1.fromDer(tstInfoOct.value);
+  // TSTInfo ::= SEQUENCE { version INTEGER, policy OID, messageImprint, serialNumber, genTime, ... }
+  const messageImprint = tstInfo.value[2];
+  const hashAlgOid = asn1.derToOid(messageImprint.value[0].value[0].value);
+  const stampedHash = messageImprint.value[1].value;
+  const md = hashAlgOid === OID_SHA256 ? forge.md.sha256.create()
+           : hashAlgOid === '1.3.14.3.2.26' ? forge.md.sha1.create()
+           : null;
+  let ok = false;
+  if (md) {
+    md.update(sigBinaryString);
+    ok = md.digest().bytes() === stampedHash;
+  }
+  const genTimeStr = tstInfo.value[4].value; // GENERALIZED TIME "YYYYMMDDHHMMSSZ"
+  const time = parseGeneralizedTime(genTimeStr);
+  // TSA subject (best-effort): pull the CN from the first cert in the token, if any.
+  let subject = null;
+  try {
+    const certsField = signedData.value.find(v => v.tagClass === asn1.Class.CONTEXT_SPECIFIC && v.type === 0);
+    if (certsField && certsField.value[0]) {
+      const c = forge.pki.certificateFromAsn1(certsField.value[0]);
+      const cnField = c.subject.getField('CN');
+      if (cnField) subject = cnField.value;
+    }
+  } catch (_) {}
+  return { time, ok, subject };
+}
+function parseGeneralizedTime(s) {
+  // "YYYYMMDDHHMMSS[.fff]Z" or with +hhmm offset.
+  const m = String(s).match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}\d{2})?$/);
+  if (!m) return null;
+  const [_all, Y, M, D, h, mi, se, frac, tz] = m;
+  const iso = `${Y}-${M}-${D}T${h}:${mi}:${se}${frac ? '.' + frac : ''}${tz && tz !== 'Z' ? tz.slice(0, 3) + ':' + tz.slice(3) : 'Z'}`;
+  const t = new Date(iso);
+  return isNaN(t.getTime()) ? null : t;
+}
+
+// Extract the raw RSA signature bytes (encryptedDigest) from a p7 SignerInfo.
+function extractSignerEncryptedDigest(p7) {
+  // forge exposes p7.signers[0].signature after p7.sign() as a binary string.
+  const s = p7.signers && p7.signers[0];
+  if (s && s.signature) return s.signature;
+  // Fallback: walk the ASN.1.
+  const p7asn1 = p7.toAsn1();
+  const signedData = p7asn1.value[1].value[0];
+  let signerInfos = null;
+  for (let i = signedData.value.length - 1; i >= 0; i--) {
+    if (signedData.value[i].type === forge.asn1.Type.SET) { signerInfos = signedData.value[i]; break; }
+  }
+  const si = signerInfos.value[0];
+  // signature field is the OCTET STRING near the end (last un-tagged OCTET STRING).
+  for (let i = si.value.length - 1; i >= 0; i--) {
+    if (si.value[i].type === forge.asn1.Type.OCTETSTRING && !si.value[i].tagClass) return si.value[i].value;
+  }
+  throw new Error('encryptedDigest not found in signerInfo');
+}
+
+// One-stop signer: builds the CMS over signedBytes, optionally requests a
+// timestamp from tsaUrl and embeds it, returns final DER hex-encoded padded
+// to SIG_PLACEHOLDER_LEN.
+async function signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl, backdated }) {
+  const p7 = forge.pkcs7.createSignedData();
+  p7.content = forge.util.createBuffer(u8ToBinStr(signedBytes), 'binary');
+  p7.addCertificate(cert);
+  p7.addSigner({
+    key, certificate: cert,
+    digestAlgorithm: forge.pki.oids.sha256,
+    authenticatedAttributes: [
+      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
+      { type: forge.pki.oids.messageDigest },
+      { type: forge.pki.oids.signingTime, value: now },
+    ],
+  });
+  p7.sign({ detached: true });
+
+  let derBinary;
+  if (tsaUrl && !backdated) {
+    try {
+      const sigBytes = extractSignerEncryptedDigest(p7);
+      const token = await fetchTimestampToken(tsaUrl, sigBytes);
+      derBinary = attachTimestampToken(p7.toAsn1(), token);
+    } catch (e) {
+      // Non-fatal: keep the signature without TSA, but tell the caller.
+      console.warn('TSA failed, continuing without timestamp:', e.message);
+      derBinary = forge.asn1.toDer(p7.toAsn1()).getBytes();
+      // Attach the error onto p7 for the caller to surface if they want.
+      p7._tsaError = e.message;
+    }
+  } else {
+    derBinary = forge.asn1.toDer(p7.toAsn1()).getBytes();
+  }
+
+  let sigHex = '';
+  for (let i = 0; i < derBinary.length; i++) sigHex += derBinary.charCodeAt(i).toString(16).padStart(2, '0');
+  if (sigHex.length > SIG_PLACEHOLDER_LEN) throw new Error('Signature too large for placeholder (increase SIG_PLACEHOLDER_LEN)');
+  return {
+    hexPadded: sigHex + '0'.repeat(SIG_PLACEHOLDER_LEN - sigHex.length),
+    tsaError: p7._tsaError || null,
+    tsaEmbedded: !!tsaUrl && !backdated && !p7._tsaError,
+  };
+}
+
 function wrapTextLines(text, font, size, maxWidth) {
   const paragraphs = String(text).split(/\r?\n/);
   const out = [];
@@ -4078,7 +4346,7 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   }
 }
 
-async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, sigPngU8, stamp, formFields, signingTime, pdfjsDoc}) {
+async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
@@ -4393,26 +4661,10 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   signedBytes.set(saved.subarray(0, contentsStart), 0);
   signedBytes.set(saved.subarray(contentsEnd), contentsStart);
 
-  const p7 = forge.pkcs7.createSignedData();
-  p7.content = forge.util.createBuffer(u8ToBinStr(signedBytes), 'binary');
-  p7.addCertificate(cert);
-  p7.addSigner({
-    key, certificate: cert,
-    digestAlgorithm: forge.pki.oids.sha256,
-    authenticatedAttributes: [
-      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
-      { type: forge.pki.oids.messageDigest },
-      { type: forge.pki.oids.signingTime, value: now },
-    ],
-  });
-  p7.sign({ detached: true });
-  const der = forge.asn1.toDer(p7.toAsn1()).getBytes();
-  let sigHex = '';
-  for (let i = 0; i < der.length; i++) sigHex += der.charCodeAt(i).toString(16).padStart(2, '0');
-  if (sigHex.length > SIG_PLACEHOLDER_LEN) throw new Error('Signature too large');
-  const sigHexPadded = sigHex + '0'.repeat(SIG_PLACEHOLDER_LEN - sigHex.length);
+  const sig = await signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl, backdated });
   const contentsHexStart = contentsStart + 1;
-  for (let i = 0; i < sigHexPadded.length; i++) saved[contentsHexStart + i] = sigHexPadded.charCodeAt(i);
+  for (let i = 0; i < sig.hexPadded.length; i++) saved[contentsHexStart + i] = sig.hexPadded.charCodeAt(i);
+  if (sig.tsaError) console.warn('Signed without timestamp:', sig.tsaError);
 
   return saved;
 }
@@ -5048,7 +5300,7 @@ function stdFontNameFor(key) {
   }
 }
 
-async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, signingTime }) {
+async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, signingTime, tsaUrl, backdated }) {
   const { PDFDocument, PDFName, PDFArray, PDFRef, PDFNumber } = window.PDFLib;
   const parsed = parsePdfForIncremental(bytes);
   const now = signingTime instanceof Date ? signingTime : new Date();
@@ -5277,31 +5529,15 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   const brPadded = brNew + ' '.repeat(brMatch[0].length - brNew.length);
   for (let i = 0; i < brPadded.length; i++) combined[brMatch.index + i] = brPadded.charCodeAt(i);
 
-  // Sign the byte range
+  // Sign the byte range (optionally with an RFC 3161 timestamp).
   const signedContent = new Uint8Array(byteRange[1] + byteRange[3]);
   signedContent.set(combined.subarray(0, contentsStart), 0);
   signedContent.set(combined.subarray(contentsEnd), contentsStart);
 
-  const p7 = forge.pkcs7.createSignedData();
-  p7.content = forge.util.createBuffer(u8ToBinStr(signedContent), 'binary');
-  p7.addCertificate(cert);
-  p7.addSigner({
-    key, certificate: cert,
-    digestAlgorithm: forge.pki.oids.sha256,
-    authenticatedAttributes: [
-      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
-      { type: forge.pki.oids.messageDigest },
-      { type: forge.pki.oids.signingTime, value: now },
-    ],
-  });
-  p7.sign({ detached: true });
-  const der = forge.asn1.toDer(p7.toAsn1()).getBytes();
-  let sigHex = '';
-  for (let i = 0; i < der.length; i++) sigHex += der.charCodeAt(i).toString(16).padStart(2, '0');
-  if (sigHex.length > SIG_PLACEHOLDER_LEN) throw new Error('Signature too large for placeholder');
-  const sigHexPadded = sigHex + '0'.repeat(SIG_PLACEHOLDER_LEN - sigHex.length);
+  const sig = await signAndOptionallyTimestamp({ signedBytes: signedContent, cert, key, now, tsaUrl, backdated });
   const hexStart = contentsStart + 1;
-  for (let i = 0; i < sigHexPadded.length; i++) combined[hexStart + i] = sigHexPadded.charCodeAt(i);
+  for (let i = 0; i < sig.hexPadded.length; i++) combined[hexStart + i] = sig.hexPadded.charCodeAt(i);
+  if (sig.tsaError) console.warn('Signed without timestamp:', sig.tsaError);
 
   return combined;
 }
@@ -5321,14 +5557,19 @@ $('btnSign').onclick = async () => {
 
     // Custom signing time (backdate). Blank = now.
     const rawDate = ($('signDate').value || '').trim();
-    let signingTime;
+    let signingTime, backdated = false;
     if (rawDate) {
       const t = new Date(rawDate);
       if (isNaN(t.getTime())) { toast('Sign-as-of date is not a valid datetime', 'err'); return; }
       signingTime = t;
+      backdated = true;
     } else {
       signingTime = new Date();
     }
+
+    // Trusted timestamp (RFC 3161) — mutually exclusive with backdating.
+    const tsaEnabled = $('tsaEnable') && $('tsaEnable').checked && !backdated;
+    const tsaUrl = tsaEnabled ? (($('tsaUrl') && $('tsaUrl').value.trim()) || null) : null;
 
     // Vault key + QR payload must exist BEFORE drawing the stamp, because the
     // QR is drawn into the PDF that later gets encrypted with this same key.
@@ -5369,7 +5610,7 @@ $('btnSign').onclick = async () => {
         location: $('location').value.trim(),
         cert: unlocked.cert,
         key: unlocked.key,
-        signingTime,
+        signingTime, tsaUrl, backdated,
       });
     } else {
       signed = await makeSignedPdf({
@@ -5395,6 +5636,7 @@ $('btnSign').onclick = async () => {
         } : { enabled: false },
         formFields: doc.formFields,
         pdfjsDoc: doc.pdfjs,
+        tsaUrl, backdated,
       });
     }
     const outBase = doc.file.name.replace(/\.pdf$/i, '');
@@ -5514,6 +5756,21 @@ function verifyPdfSignatures(bytes) {
       const covered = br[2] + br[3];
       const totalCovered = covered >= bytes.length - 3; // small trailing-whitespace tolerance
 
+      // 4. RFC 3161 timestamp token (unauthenticated attribute [1] IMPLICIT SET).
+      let tsaTime = null, tsaOk = false, tsaSubject = null;
+      try {
+        for (const v of signer.value) {
+          if (v.tagClass !== forge.asn1.Class.CONTEXT_SPECIFIC || v.type !== 1) continue;
+          for (const attr of v.value) {
+            const oid = forge.asn1.derToOid(attr.value[0].value);
+            if (oid !== OID_TIMESTAMP_TOKEN) continue;
+            const token = attr.value[1].value[0]; // ContentInfo (SignedData carrying TSTInfo)
+            const parsed = parseTimestampToken(token, encryptedDigest);
+            if (parsed) { tsaTime = parsed.time; tsaOk = parsed.ok; tsaSubject = parsed.subject; }
+          }
+        }
+      } catch (e) { console.warn('timestamp token parse failed:', e.message); }
+
       const cn = cert.subject.getField('CN');
       const em = cert.subject.getField('E') || cert.subject.getField('emailAddress');
       const certFp = certFingerprint(cert);
@@ -5521,6 +5778,7 @@ function verifyPdfSignatures(bytes) {
         cn: cn ? cn.value : '(unknown)',
         email: em ? em.value : '',
         signingTime: sigTime,
+        tsaTime, tsaOk, tsaSubject,
         byteRange: br,
         digestMatch, rsaOk,
         totalCovered,
@@ -5613,12 +5871,15 @@ function verifyResultsHtml(results, isUnsignedField=false) {
                 : state === 'modified' ? '⚠ Signature is VOIDED — document was modified after signing'
                 : state === 'unsigned' ? '? Empty signature field'
                 :                        '✕ Signature is INVALID — document altered';
+    const tsaLine = r.tsaTime
+      ? `Trusted timestamp: <b style="color:${r.tsaOk ? 'var(--good, #1f7a3a)' : 'var(--danger)'}">${r.tsaOk ? '✓' : '✕'}</b> ${fmtSigningTime(r.tsaTime)}${r.tsaSubject ? ' · TSA: ' + r.tsaSubject : ''}<br>`
+      : '';
     const details = r.error
       ? `<div class="meta">Error: ${r.error}</div>`
       : `<div class="meta">
            Signer: <b>${r.cn}</b>${r.email ? ' &lt;' + r.email + '&gt;' : ''}<br>
            Signed: ${fmtSigningTime(r.signingTime) || '(no time)'}<br>
-           Byte range: [${r.byteRange.join(', ')}] · document is ${r.docLength} bytes<br>
+           ${tsaLine}Byte range: [${r.byteRange.join(', ')}] · document is ${r.docLength} bytes<br>
            SHA-256 digest match: ${r.digestMatch ? 'yes' : '<b style="color:var(--danger)">NO</b>'}<br>
            RSA signature verifies: ${r.rsaOk ? 'yes' : '<b style="color:var(--danger)">NO</b>'}<br>
            Signed range covers whole file: ${r.totalCovered ? 'yes' : '<b style="color:#b57920">no</b>'}
