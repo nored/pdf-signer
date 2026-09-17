@@ -16,8 +16,8 @@ Priorities set 2026-09-17. The load-bearing use case is writing thesis review re
 
 ## Ergonomics
 
-- [ ] **Batch mode.** Drop N PDFs, apply the same placement + certify options, download N signed outputs.
 - [x] **Sidebar page thumbnails.** Right-side collapsible panel with a click-to-jump list of page thumbnails. Toggle button in the toolbar (☰ Pages); open/closed state persists in localStorage. Thumbnails lazy-render at ~140px wide when they enter the panel's viewport (IntersectionObserver on the panel). A second IntersectionObserver on the main scroll area tracks which page has the largest visible ratio and highlights its thumb with an accent border, auto-scrolling the panel to keep the current thumb in view.
+- [x] **Batch mode.** New "Sign this + N more…" button next to the main sign action. Pick multiple additional PDFs, confirm, and each is loaded through pdf.js, signed with the same placements + certify options + trusted-timestamp preference as the currently-open doc, and downloaded (`<name>-signed.pdf`). Per-item progress in the button label, per-file error handling so one bad PDF doesn't kill the batch, integrity-stamp/vault skipped in batch (needs a fresh key per file — out of scope for v1). Regressions all pass.
 - [x] **Autosave placements per document hash.** SHA-256 of the input bytes keys an IndexedDB record under `_placements/<hash>` containing the full placement snapshot (positions, typography, redaction rects, everything `snapshotPlacements` captures). Debounced 400ms save fires on every mutation via `renderPlacementList` / `commitPlacementFromDom` hooks. On open, if a record exists for that exact file, placements come back and a toast reports how many. Empty snapshot deletes the record. Skipped for already-signed and encrypted PDFs where placements wouldn't apply.
 
 ## Reliability & testing
