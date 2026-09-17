@@ -6658,10 +6658,19 @@ function renderVerifyBanner(results, isUnsignedField=false) {
   let sub = '';
   if (!isUnsignedField && results.length) {
     const first = results[0];
+    // Trust status tag mirrors the details-panel trust hierarchy.
+    let trustTag = '';
+    if (!first.error) {
+      trustTag = first.trusted ? ' · trusted CA'
+              : (first.certVaultUrl && first.vaultTrusted) ? ' · trusted via signer\'s vault'
+              : first.selfSigned ? ' · self-signed'
+              : ' · chain not verified';
+    }
     sub = first.error
       ? first.error
       : `${first.cn}${first.email ? ' <' + first.email + '>' : ''}` +
         (first.signingTime ? ' · signed ' + fmtSigningTime(first.signingTime) : '') +
+        trustTag +
         (results.length > 1 ? ` · ${results.length} signatures` : '');
   } else if (isUnsignedField) {
     sub = 'Pick the ✍ Digital sig tool and click where you want your signature.';
@@ -6689,14 +6698,17 @@ function verifyResultsHtml(results, isUnsignedField=false) {
     const tsaLine = r.tsaTime
       ? `Trusted timestamp: <b style="color:${r.tsaOk ? 'var(--good, #1f7a3a)' : 'var(--danger)'}">${r.tsaOk ? '✓' : '✕'}</b> ${fmtSigningTime(r.tsaTime)}${r.tsaSubject ? ' · TSA: ' + r.tsaSubject : ''}<br>`
       : '';
-    const trustLine = r.selfSigned
-      ? `Certificate: <b style="color:#b57920">self-signed</b> — trust depends on how you got this signer's cert<br>`
-      : r.trusted
-        ? `Certificate: <b style="color:var(--good, #1f7a3a)">chains to a trusted root</b><br>`
-        : `Certificate: <b style="color:#b57920">chain not verified</b>${r.trustReason ? ' (' + r.trustReason + ')' : ''}<br>`;
+    // Trust hierarchy: chain-to-trusted-root > vault-published-and-matches > self-signed / unverified.
+    const trustLine = r.trusted
+      ? `Certificate: <b style="color:var(--good, #1f7a3a)">chains to a trusted root</b><br>`
+      : (r.certVaultUrl && r.vaultTrusted)
+        ? `Certificate: <b style="color:var(--good, #1f7a3a)">trusted via signer's vault</b> — the cert is published at a URL the signer controls (HTTPS-attested)<br>`
+        : r.selfSigned
+          ? `Certificate: <b style="color:#b57920">self-signed</b> — trust depends on how you got this signer's cert<br>`
+          : `Certificate: <b style="color:#b57920">chain not verified</b>${r.trustReason ? ' (' + r.trustReason + ')' : ''}<br>`;
     const vaultLine = r.certVaultUrl
       ? (r.vaultTrusted
-          ? `Vault-published cert: <b style="color:var(--good, #1f7a3a)">✓ matches</b> · <a href="${r.certVaultUrl}" target="_blank" style="color:var(--accent)">${r.certVaultUrl.replace(/^https?:\/\/[^/]+\//, '…/')}</a><br>`
+          ? `Vault URL: <a href="${r.certVaultUrl}" target="_blank" style="color:var(--accent)">${r.certVaultUrl.replace(/^https?:\/\/[^/]+\//, '…/')}</a><br>`
           : `Vault-published cert: <b style="color:var(--danger)">✕ ${r.vaultTrustError || 'mismatch'}</b> · <a href="${r.certVaultUrl}" target="_blank" style="color:var(--accent)">${r.certVaultUrl}</a><br>`)
       : '';
     const details = r.error
@@ -6718,6 +6730,7 @@ $('btnVerify').onclick = async () => {
   if (!f) return;
   const buf = new Uint8Array(await f.arrayBuffer());
   const results = verifyPdfSignatures(buf);
+  try { await verifyVaultTrustAsync(results); } catch (_) {}
   const body = document.createElement('div');
   body.innerHTML = `<p style="margin-bottom:8px"><b>${f.name}</b> · ${buf.length} bytes</p>` + verifyResultsHtml(results);
   await modal({ title: 'Signature verification', body, confirmText: 'OK', cancelText: '' });
@@ -6931,6 +6944,7 @@ async function runAutoVerifyFromHash() {
 
     const plaintext = await aesGcmDecrypt(parsed.keyBytes, cipherU8);
     const results = verifyPdfSignatures(plaintext);
+    try { await verifyVaultTrustAsync(results); } catch (_) {}
     const csvOk   = parsed.csv && parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes);
     const state = results.length && results.every(r => r.cryptoValid && r.totalCovered) ? 'valid'
                 : results.length && results.every(r => r.cryptoValid) ? 'modified'
@@ -6953,6 +6967,13 @@ async function runAutoVerifyFromHash() {
         'Signer (in cert)': first.cn ? `<b>${esc(first.cn)}</b>${first.email ? ' &lt;' + esc(first.email) + '&gt;' : ''}` : '',
         'Signed at':        first.signingTime ? esc(fmtSigningTime(first.signingTime)) : '',
         'Cert SHA-1':       first.certFp ? `<code>${esc(first.certFp)}</code>` : '',
+        'Trust':            first.trusted
+                              ? '<b style="color:var(--good)">chains to a trusted root</b>'
+                              : (first.certVaultUrl && first.vaultTrusted)
+                                ? `<b style="color:var(--good)">trusted via signer's vault</b> · <a href="${esc(first.certVaultUrl)}" style="color:var(--accent)" target="_blank">cert</a>`
+                                : first.selfSigned
+                                  ? '<span style="color:#b57920">self-signed</span>'
+                                  : '<span style="color:#b57920">chain not verified</span>',
         'CSV cross-check':  csvRow,
         'Document size':    plaintext.length + ' bytes',
       },
