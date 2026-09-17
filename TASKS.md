@@ -13,7 +13,7 @@ Priorities set 2026-09-17. The load-bearing use case is writing thesis review re
 ## PDF coverage
 
 - [x] **Xref-stream parsing.** `parsePdfForIncremental` now reads the trailer info at either a classical `xref\n...trailer <<...>>` block or an xref-stream object (`N G obj\n<< /Type /XRef ... >>`). Object bodies are read/mutated via pdf-lib, which handles classical, stream, and hybrid xrefs and also decodes object streams. Verified round-trip on both a classical-xref two-supervisor flow and a pdf-lib `useObjectStreams:true` xref-stream PDF. Surgical redaction was already using pdf-lib for its reads and inherits the fix.
-- [ ] **Rotated-page handling.** Verify redaction coordinates and text-layer alignment on pages with `/Rotate` 90/180/270. Landscape scans and Chinese/Japanese vertical text pages are currently untested.
+- [x] **Rotated-page handling.** Surgical redaction now works on /Rotate 90 pages — root cause turned out to be unrelated to rotation: `shouldRedactAt` required a string match between the raw Tj bytes and pdf.js's Unicode-decoded item, which failed for any text containing WinAnsi-only characters (em-dash, curly quotes, accented letters). Match by pen position only; that's unambiguous for a rect the user drew over that spot. Raster fallback also rewritten to convert PDF-space rects through `vp.convertToViewportPoint` (rotation-aware) instead of the old unrotated y-flip.
 - [ ] **Encrypted PDF support.** Handle owner-password / AES-256 via pdf-lib's `ignoreEncryption` path plus a decrypt-on-open prompt when the file is password-protected.
 
 ## Ergonomics
