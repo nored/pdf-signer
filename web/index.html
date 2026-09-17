@@ -3689,8 +3689,29 @@ const SIG_PLACEHOLDER_LEN = 16384;
    either their own CORS-friendly endpoint or a proxy — we can't universally
    pick one that works from every browser origin. */
 
-const OID_TIMESTAMP_TOKEN = '1.2.840.113549.1.9.16.2.14';
-const OID_SHA256          = '2.16.840.1.101.3.4.2.1';
+const OID_TIMESTAMP_TOKEN     = '1.2.840.113549.1.9.16.2.14';
+const OID_SIGNING_CERT_V2     = '1.2.840.113549.1.9.16.2.47';   // RFC 5035
+const OID_SHA256              = '2.16.840.1.101.3.4.2.1';
+
+// Build the SigningCertificateV2 attribute value (an ASN.1 tree, not yet wrapped
+// in the SEQUENCE { OID, SET { … } } that forge does for authenticated
+// attributes). Required for PAdES-B-B: binds the signer's cert identity into
+// the signed attributes so it can't be swapped out at verify time.
+function buildSigningCertV2Value(cert) {
+  const asn1 = forge.asn1;
+  const certDer = asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
+  const certHash = forge.md.sha256.create().update(certDer).digest().bytes();
+  const essCertIDv2 = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
+    // hashAlgorithm SHA-256 (default per RFC 5035 but state it explicitly for strict verifiers)
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
+      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(OID_SHA256).getBytes()),
+      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, false, ''),
+    ]),
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, certHash),
+  ]);
+  const seqOfCerts = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [essCertIDv2]);
+  return asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [seqOfCerts]);
+}
 
 function buildTsaRequest(signatureBytes /* binary string */, nonceHex /* hex string, may be null */) {
   const asn1 = forge.asn1;
@@ -3903,6 +3924,9 @@ async function signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl,
       { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
       { type: forge.pki.oids.messageDigest },
       { type: forge.pki.oids.signingTime, value: now },
+      // SigningCertificateV2 — PAdES-B-B baseline. Binds the signer's cert
+      // identity into the signed attributes so it can't be swapped out.
+      { type: OID_SIGNING_CERT_V2, value: buildSigningCertV2Value(cert) },
     ],
   });
   p7.sign({ detached: true });
@@ -4942,7 +4966,10 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   const sigDictShape = {
     Type: 'Sig',
     Filter: 'Adobe.PPKLite',
-    SubFilter: 'adbe.pkcs7.detached',
+    // PAdES-B-B baseline SubFilter (ETSI EN 319 142). Adobe recognises this
+    // as a PAdES signature and unlocks the proper trust checks; older
+    // adbe.pkcs7.detached triggers a "legacy" downgrade in Adobe's UI.
+    SubFilter: 'ETSI.CAdES.detached',
     ByteRange: [PDFNumber.of(0), PDFNumber.of(9999999999),
                 PDFNumber.of(9999999999), PDFNumber.of(9999999999)],
     Contents: PDFHexString.of('0'.repeat(SIG_PLACEHOLDER_LEN)),
@@ -5778,7 +5805,7 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // Sig dict + sig field bodies.
   const certUrlLine = certVaultUrl ? `   /PdfsignerCertUrl (${escapePdfString(certVaultUrl)})\n` : '';
   objBodies.push({ num: sigDictNum, body:
-    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n` +
+    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached\n` +
     `   /ByteRange [0 9999999999 9999999999 9999999999]\n` +
     `   /Contents <${'0'.repeat(SIG_PLACEHOLDER_LEN)}>\n` +
     `   /M (${pdfDate(now)})\n   /Name (${escapePdfString(meta.name)})\n` +
