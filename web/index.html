@@ -954,6 +954,9 @@
     </div>
     <div id="verifyBanner" style="display:none"></div>
     <div id="formFieldsBanner" style="display:none; padding:8px 14px; background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); border-bottom:1px solid var(--border); font-size:12.5px;"></div>
+    <div id="encryptedBanner" style="display:none; padding:8px 14px; background:rgba(200,40,25,.12); color:var(--danger); border-bottom:1px solid var(--border); font-size:12.5px;">
+      🔒 This PDF is password-protected. You can view and verify it, but signing or redacting encrypted PDFs isn't supported yet — save an unencrypted copy first (in Preview: File → Export as PDF, uncheck the encryption box; or in another tool).
+    </div>
     <div class="scroll-area" id="scrollArea">
       <div class="empty" id="emptyState">
         <div style="font-size:40px; margin-bottom: 4px;">📄</div>
@@ -1967,8 +1970,11 @@ function closeDoc() {
   doc.file = null; doc.bytes = null; doc.pdfjs = null; doc.numPages = 0;
   doc.placements = []; doc.pageMeta = []; doc.formFields = {}; doc.selectedPlacementId = null;
   doc.alreadySigned = false;
+  doc.isEncrypted = false;
+  doc.pdfPassword = null;
   textEditingPlacementId = null;
   reflectAlreadySignedInUi();
+  reflectEncryptedInUi();
   $('pageList').innerHTML = '';
   $('placementList').innerHTML = '';
   $('toolbar').style.display = 'none';
@@ -1989,7 +1995,31 @@ $('scrollArea').addEventListener('drop', async e => {
 async function openPdf(file) {
   doc.file = file;
   doc.bytes = new Uint8Array(await file.arrayBuffer());
-  doc.pdfjs = await pdfjsLib.getDocument({ data: doc.bytes.slice() }).promise;
+  // Password-protected PDFs: pdf.js throws PasswordException. Prompt and
+  // retry until the user cancels or gets it right.
+  let password = null;
+  while (true) {
+    try {
+      const opts = { data: doc.bytes.slice() };
+      if (password != null) opts.password = password;
+      doc.pdfjs = await pdfjsLib.getDocument(opts).promise;
+      break;
+    } catch (e) {
+      const isPwErr = e && (e.name === 'PasswordException' || /password/i.test(e.message || ''));
+      if (!isPwErr) throw e;
+      const body = document.createElement('div');
+      body.innerHTML = `
+        <p class="hint" style="margin-bottom:6px">This PDF is password-protected.${password != null ? ' The password you entered was rejected.' : ''}</p>
+        <label>PDF password</label>
+        <input type="password" id="pdfPw" autocomplete="off">
+      `;
+      const r = await modal({ title: 'Password required', body, confirmText: 'Open' });
+      if (!r) { closeDoc(); return; }
+      password = r.pdfPw || '';
+    }
+  }
+  doc.pdfPassword = password;
+  doc.isEncrypted = password != null;
   doc.numPages = doc.pdfjs.numPages;
   // Compute the fit-width scale before the first page-list build so pages
   // are rendered at the right size the first time and we don't need a second
@@ -2031,6 +2061,7 @@ async function openPdf(file) {
   // go via the incremental-append path or it will void the existing one.
   doc.alreadySigned = verifyResults.some(r => !r.error && r.cryptoValid);
   reflectAlreadySignedInUi();
+  reflectEncryptedInUi();
   renderVerifyBanner(verifyResults, hasSigField && !hasSigPayload && verifyResults.length === 0);
   await buildPageList();
   await addSignatureStatusOverlays(verifyResults, hasSigPayload, hasSigField && !hasSigPayload);
@@ -2067,6 +2098,20 @@ function reflectAlreadySignedInUi() {
     const t = document.querySelector('input[name="appearance"][value="text"]');
     if (t) t.checked = true;
   }
+}
+
+// Password-protected PDFs: we can view + verify them today, but signing
+// them while preserving encryption is out of scope. Show a banner and
+// disable every tool that would produce a broken output.
+function reflectEncryptedInUi() {
+  const on = !!doc.isEncrypted;
+  const banner = $('encryptedBanner');
+  if (banner) banner.style.display = on ? '' : 'none';
+  const sigBtn  = $('btnPlaceSig');    if (sigBtn)    { sigBtn.disabled    = sigBtn.disabled    || on; }
+  const textBtn = $('btnPlaceText');   if (textBtn)   { textBtn.disabled   = textBtn.disabled   || on; }
+  const stampBtn= $('btnPlaceStamp');  if (stampBtn)  { stampBtn.disabled  = stampBtn.disabled  || on; }
+  const redBtn  = $('btnPlaceRedact'); if (redBtn)    { redBtn.disabled    = redBtn.disabled    || on; }
+  const btn     = $('btnSign');        if (btn && on) { btn.disabled = true; btn.title = 'Signing an encrypted PDF isn\'t supported. Save an unencrypted copy first.'; }
 }
 
 // Render editable overlays over every interactive form widget on every page.
@@ -3262,8 +3307,15 @@ function updateSignButton() {
   const hasSig = doc.placements.some(p => p.type !== 'text');
   const has = doc.pdfjs && hasSig && identity.meta;
   const needsImage = doc.placements.some(p => p.type !== 'text' && (p.appearance === 'image' || p.appearance === 'both')) && !sigImage.pngU8;
-  $('btnSign').disabled = !has || needsImage;
-  $('btnSign').textContent = doc.alreadySigned ? 'Add signature (keeps existing valid) & Download' : 'Sign & Download';
+  const btn = $('btnSign');
+  btn.disabled = !has || needsImage || !!doc.isEncrypted;
+  if (doc.isEncrypted) {
+    btn.textContent = 'Signing encrypted PDFs isn\'t supported';
+    btn.title = 'Save an unencrypted copy of this PDF first.';
+  } else {
+    btn.textContent = doc.alreadySigned ? 'Add signature (keeps existing valid) & Download' : 'Sign & Download';
+    btn.title = '';
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
