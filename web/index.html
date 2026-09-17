@@ -1247,6 +1247,49 @@ function trustRootSummary(pem) {
     return `${cn ? cn.value : '(no CN)'}${o ? ' · ' + o.value : ''}${na ? ' · expires ' + na : ''}`;
   } catch (_) { return '(unparseable PEM)'; }
 }
+/* ─── Placement autosave (per document hash) ─────────────────────────
+   Keyed by SHA-256 of the PDF bytes, so closing the tab and reopening
+   the same file later restores every placement (position, type,
+   typography, everything in snapshotPlacements). */
+const PLACEMENT_KEY_PREFIX = '_placements/';
+let _autosaveTimer = null;
+function scheduleAutosavePlacements() {
+  if (!doc.hash) return;
+  clearTimeout(_autosaveTimer);
+  _autosaveTimer = setTimeout(saveAutosavedPlacementsNow, 400);
+}
+async function saveAutosavedPlacementsNow() {
+  if (!doc.hash) return;
+  try {
+    const snap = snapshotPlacements();
+    if (snap.length === 0) {
+      await idbDel(PLACEMENT_KEY_PREFIX + doc.hash);
+    } else {
+      await idbPut(PLACEMENT_KEY_PREFIX + doc.hash, {
+        placements: snap,
+        updatedAt: new Date().toISOString(),
+        docName: doc.file?.name || '',
+      });
+    }
+  } catch (e) { console.warn('placement autosave failed', e); }
+}
+async function loadAutosavedPlacements() {
+  if (!doc.hash) return 0;
+  try {
+    const rec = await idbGet(PLACEMENT_KEY_PREFIX + doc.hash);
+    if (!rec || !Array.isArray(rec.placements) || rec.placements.length === 0) return 0;
+    for (const snap of rec.placements) {
+      const p = { ...snap, id: placementIdSeq++ };
+      // Skip placements whose pageIndex now sits out of range.
+      if (p.pageIndex >= doc.pageMeta.length) continue;
+      doc.placements.push(p);
+      attachPlacementToPage(p);
+    }
+    renderPlacementList();
+    return rec.placements.length;
+  } catch (e) { console.warn('placement autosave load failed', e); return 0; }
+}
+
 // Verify a chain: given the signer cert and any intermediates from the CMS,
 // try forge.pki.verifyCertificateChain against our trust store. Returns
 // { trusted, root, reason }.
@@ -2114,6 +2157,7 @@ function closeDoc() {
   doc.alreadySigned = false;
   doc.isEncrypted = false;
   doc.pdfPassword = null;
+  doc.hash = null;
   textEditingPlacementId = null;
   reflectAlreadySignedInUi();
   reflectEncryptedInUi();
@@ -2163,6 +2207,8 @@ async function openPdf(file) {
   doc.pdfPassword = password;
   doc.isEncrypted = password != null;
   doc.numPages = doc.pdfjs.numPages;
+  // Hash the bytes so we can restore autosaved placements for this exact file.
+  try { doc.hash = await sha256Hex(doc.bytes); } catch (_) { doc.hash = null; }
   // Compute the fit-width scale before the first page-list build so pages
   // are rendered at the right size the first time and we don't need a second
   // pass.
@@ -2209,6 +2255,11 @@ async function openPdf(file) {
   await addSignatureStatusOverlays(verifyResults, hasSigPayload, hasSigField && !hasSigPayload);
   await renderFormFieldOverlays();
   if ($('stampEnable').checked && !doc.alreadySigned) autoSeedStampsIfNone();
+  // Restore any placements the user had on this exact file before.
+  if (!doc.alreadySigned && !doc.isEncrypted) {
+    const restored = await loadAutosavedPlacements();
+    if (restored > 0) toast(`Restored ${restored} placement${restored > 1 ? 's' : ''} from your previous session`, 'ok');
+  }
   updateSignButton();
 }
 
@@ -3135,6 +3186,7 @@ function commitPlacementFromDom(p) {
   p.yPdf = Math.min(y1, y2);
   p.wPdf = Math.abs(x2 - x1);
   p.hPdf = Math.abs(y2 - y1);
+  scheduleAutosavePlacements();
 }
 
 function wireDragResize(p, handle) {
@@ -3461,6 +3513,7 @@ function renderPlacementList() {
     };
     list.appendChild(row);
   }
+  scheduleAutosavePlacements();
 }
 
 function updateSignButton() {
