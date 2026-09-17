@@ -4386,6 +4386,126 @@ function ghRawUrl(c, filename) {
   return `https://raw.githubusercontent.com/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.branch)}/${c.pathPrefix.replace(/^\/+|\/+$/g, '')}/${encodeURIComponent(filename)}`;
 }
 
+/* ─── OCSP client + PAdES-B-LT / DSS embedding ────────────────────────
+   Fetch OCSP responses for the signer + intermediates from each cert's
+   Authority Information Access (AIA) extension, bundle them into a
+   Document Security Store (DSS) dict that lives at the catalog level.
+   Result: Adobe shows the "LTV enabled" badge and verifiers can check
+   revocation status without live network calls even years later.
+   Best-effort: if OCSP fails (self-signed cert, CORS, offline), sign
+   without DSS and continue. */
+
+const OID_OCSP_ACCESS_METHOD = '1.3.6.1.5.5.7.48.1'; // id-ad-ocsp
+
+function ocspUrlFromCert(cert) {
+  try {
+    const aia = cert.getExtension && cert.getExtension('authorityInfoAccess');
+    if (!aia) return null;
+    // forge parses AIA into aia.accessDescriptions or leaves raw depending on version.
+    // Fall back to parsing the extension's raw value.
+    if (aia.accessDescriptions) {
+      for (const ad of aia.accessDescriptions) {
+        if (ad.accessMethod === OID_OCSP_ACCESS_METHOD || ad.accessMethod === 'ocsp') {
+          const loc = ad.accessLocation;
+          if (typeof loc === 'string') return loc;
+          if (loc && loc.value) return loc.value;
+        }
+      }
+    }
+    if (aia.value) {
+      // aia.value can be a raw ASN.1 tree.
+      const asn1 = forge.asn1;
+      const tree = typeof aia.value === 'string' ? asn1.fromDer(aia.value) : aia.value;
+      // AccessSyntax ::= SEQUENCE SIZE (1..MAX) OF AccessDescription
+      // AccessDescription ::= SEQUENCE { accessMethod OID, accessLocation GeneralName }
+      const iter = tree.value || [];
+      for (const ad of iter) {
+        if (!ad.value || ad.value.length < 2) continue;
+        const method = asn1.derToOid(ad.value[0].value);
+        if (method !== OID_OCSP_ACCESS_METHOD) continue;
+        const loc = ad.value[1];
+        // GeneralName [6] URI is a string with implicit context tag.
+        if (loc.tagClass === asn1.Class.CONTEXT_SPECIFIC && loc.type === 6) {
+          return loc.value; // an IA5String
+        }
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+function buildOcspRequest(cert, issuer) {
+  const asn1 = forge.asn1;
+  // CertID ::= SEQUENCE { hashAlgorithm SHA-1, issuerNameHash, issuerKeyHash, serialNumber INTEGER }
+  // SHA-1 is required by many OCSP responders (RFC 5019 §2.1.1).
+  const issuerNameDer = asn1.toDer(forge.pki.distinguishedNameToAsn1(issuer.subject)).getBytes();
+  const issuerNameHash = forge.md.sha1.create().update(issuerNameDer).digest().bytes();
+  // Issuer public key hash = SHA-1 of the subjectPublicKey BIT STRING contents
+  // (without the ASN.1 tag/length, without the leading unused-bits byte).
+  const spkiAsn1 = forge.pki.publicKeyToAsn1(issuer.publicKey);
+  // spkiAsn1 = SubjectPublicKeyInfo SEQUENCE { AlgId, BIT STRING publicKey }
+  const bitStr = spkiAsn1.value[1];
+  let keyBytes = bitStr.value;
+  if (keyBytes.charCodeAt(0) === 0) keyBytes = keyBytes.substring(1); // strip unused-bits byte
+  const issuerKeyHash = forge.md.sha1.create().update(keyBytes).digest().bytes();
+  const serialHex = cert.serialNumber; // hex string per forge
+  let serialBytes = '';
+  for (let i = 0; i < serialHex.length; i += 2) serialBytes += String.fromCharCode(parseInt(serialHex.substr(i, 2), 16));
+  // Ensure positive INTEGER.
+  if (serialBytes.length && (serialBytes.charCodeAt(0) & 0x80)) serialBytes = '\x00' + serialBytes;
+
+  const certID = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
+    // hashAlgorithm SHA-1
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
+      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer('1.3.14.3.2.26').getBytes()),
+      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, false, ''),
+    ]),
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, issuerNameHash),
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, issuerKeyHash),
+    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, serialBytes),
+  ]);
+  const request = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [certID]);
+  const requestList = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [request]);
+  const tbsRequest = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [requestList]);
+  const ocspRequest = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [tbsRequest]);
+  return asn1.toDer(ocspRequest).getBytes();
+}
+
+async function fetchOcspResponse(cert, issuer) {
+  const url = ocspUrlFromCert(cert);
+  if (!url) return null;
+  const req = buildOcspRequest(cert, issuer);
+  const reqU8 = new Uint8Array(req.length);
+  for (let i = 0; i < req.length; i++) reqU8[i] = req.charCodeAt(i) & 0xff;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/ocsp-request', 'Accept': 'application/ocsp-response' },
+      body: reqU8,
+    });
+    if (!res.ok) return null;
+    const buf = new Uint8Array(await res.arrayBuffer());
+    return buf;
+  } catch (e) {
+    console.warn('OCSP fetch failed for', url, e.message);
+    return null;
+  }
+}
+
+// Given the full cert chain (leaf → root order), fetch every OCSP response we
+// can. Returns an array of Uint8Arrays; skips certs that have no responder or
+// whose fetch fails.
+async function fetchChainOcsp(chain) {
+  const responses = [];
+  for (let i = 0; i < chain.length - 1; i++) {
+    const cert = chain[i];
+    const issuer = chain[i + 1];
+    const r = await fetchOcspResponse(cert, issuer);
+    if (r) responses.push({ cert, ocsp: r });
+  }
+  return responses;
+}
+
 // Introspect a parsed X.509 cert and report what it can be used for. Reads
 // keyUsage + extendedKeyUsage; returns a short list of human labels so the
 // identity panel can tell the user whether Adobe / S/MIME will accept it.
@@ -5054,6 +5174,38 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   }
 
   if (mdp === 'lock' || mdp === 'certify') pdfDoc.catalog.set(PDFName.of('Perms'), context.obj({ DocMDP: sigRef }));
+
+  // ── PAdES-B-LT: fetch OCSP responses for the cert chain and embed a DSS
+  // (Document Security Store) at the catalog level. Adobe reads this and
+  // shows the "LTV enabled" badge; verifiers can check revocation status
+  // offline for the life of the signed doc. Best-effort — if fetching OCSP
+  // fails (self-signed cert, no responder, CORS), skip DSS and continue.
+  try {
+    const chainForOcsp = Array.isArray(chain) && chain.length ? chain : [cert];
+    const ocspResults = await fetchChainOcsp(chainForOcsp);
+    if (ocspResults.length > 0) {
+      const { PDFRawStream, PDFDict } = window.PDFLib;
+      const certRefs = chainForOcsp.map(c => {
+        const der = forge.asn1.toDer(forge.pki.certificateToAsn1(c)).getBytes();
+        const bytes = new Uint8Array(der.length);
+        for (let i = 0; i < der.length; i++) bytes[i] = der.charCodeAt(i) & 0xff;
+        const sd = PDFDict.withContext(context);
+        sd.set(PDFName.of('Length'), PDFNumber.of(bytes.length));
+        return context.register(PDFRawStream.of(sd, bytes));
+      });
+      const ocspRefs = ocspResults.map(r => {
+        const sd = PDFDict.withContext(context);
+        sd.set(PDFName.of('Length'), PDFNumber.of(r.ocsp.length));
+        return context.register(PDFRawStream.of(sd, r.ocsp));
+      });
+      const dss = context.obj({
+        Type: 'DSS',
+        Certs: certRefs,
+        OCSPs: ocspRefs,
+      });
+      pdfDoc.catalog.set(PDFName.of('DSS'), context.register(dss));
+    }
+  } catch (e) { console.warn('DSS embedding skipped:', e && e.message); }
 
   let saved = await pdfDoc.save({ useObjectStreams: false, addDefaultPage: false });
   saved = new Uint8Array(saved);
