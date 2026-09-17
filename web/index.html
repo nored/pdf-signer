@@ -4859,6 +4859,36 @@ function drawQrCode(page, payload, x, y, size) {
   }
 }
 
+// Overlay a clickable Link annotation on top of a rectangle. Only useful when
+// qrPayload is an http(s) URL (i.e., a verifierUrl was configured). No-op
+// otherwise. Same rectangle as the printed QR, so desktop viewers navigate
+// on click and phones scan as before.
+function addUriLinkAnnotation(page, rect, uri) {
+  if (!uri || !/^https?:\/\//i.test(uri)) return;
+  try {
+    const { PDFName, PDFString, PDFArray } = window.PDFLib;
+    const doc = page.doc;
+    const context = doc.context;
+    const linkAnnot = context.obj({
+      Type: 'Annot',
+      Subtype: 'Link',
+      Rect: rect,
+      Border: [0, 0, 0],
+      F: 4,                          // print + noZoom + noRotate off
+      A: {
+        Type: 'Action',
+        S: 'URI',
+        URI: PDFString.of(uri),
+      },
+    });
+    const linkRef = context.register(linkAnnot);
+    let annots = page.node.get(PDFName.of('Annots'));
+    if (annots && typeof annots.push !== 'function') annots = context.lookup(annots);
+    if (!annots) page.node.set(PDFName.of('Annots'), context.obj([linkRef]));
+    else annots.push(linkRef);
+  } catch (e) { console.warn('link annot failed', e); }
+}
+
 function drawIntegrityStamp(page, pageIndex, totalPages, fonts, opts) {
   const { rgb, degrees } = window.PDFLib;
   const { csv, signer, role, dateStr, qrPayload, pos, orientation } = opts;
@@ -4900,6 +4930,7 @@ function drawIntegrityStamp(page, pageIndex, totalPages, fonts, opts) {
     page.drawLine({ start: { x: textRight,    y: stripY + 2 }, end: { x: textRight,    y: stripY + stripH }, thickness: 0.4, color: rgb(0.55, 0.55, 0.55) });
 
     drawQrCode(page, qrPayload, qrX, qrY, qrSize);
+    addUriLinkAnnotation(page, [qrX, qrY, qrX + qrSize, qrY + qrSize], qrPayload);
 
     // Middle text: signer + CSV
     const line1 = 'Digitally signed by: ' + signer;
@@ -4939,6 +4970,7 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   const qrX = x + (w - qrSize) / 2;
   const qrY = y + pad;
   drawQrCode(page, qrPayload, qrX, qrY, qrSize);
+  addUriLinkAnnotation(page, [qrX, qrY, qrX + qrSize, qrY + qrSize], qrPayload);
 
   // Text drawn rotated 90° CCW so it reads bottom-to-top up the strip.
   // Anchor: place the text baseline at x + w - pad, starting just above the QR.
