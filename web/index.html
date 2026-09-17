@@ -1759,6 +1759,13 @@ async function ensureUnlocked() {
     try {
       identity.unlocked = unlockP12(identity.p12U8, r.pw || '');
       identity.password = r.pw || '';
+      // First unlock of a pre-existing identity: retroactively auto-trust its
+      // root so signatures produced from now on show "chains to a trusted
+      // root" without the user manually clicking anything.
+      try {
+        const added = await autoTrustRootFromChain(identity.unlocked.chain || [identity.unlocked.cert]);
+        if (added) renderTrustRoots();
+      } catch (e) { console.warn('unlock auto-trust failed', e); }
       renderIdentity();
       return identity.unlocked;
     } catch (e) {
