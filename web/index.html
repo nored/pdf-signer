@@ -1306,23 +1306,41 @@ function unlockP12(p12U8, password) {
   const p12Der = u8ToBinStr(p12U8);
   const p12Asn1 = forge.asn1.fromDer(p12Der);
   const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, password);
-  let cert = null, key = null;
+  // Collect ALL certs in the p12 (a real BYO p12 usually carries the leaf
+  // plus its intermediates). Then pick the leaf: the cert whose subject
+  // does NOT match any other cert's issuer — i.e. nobody in the p12 is
+  // signed by it. Fall back to the first cert if that's ambiguous.
+  const certs = [];
+  let key = null;
   for (const sc of p12.safeContents) {
     for (const bag of sc.safeBags) {
-      if (bag.type === forge.pki.oids.certBag && !cert) cert = bag.cert;
+      if (bag.type === forge.pki.oids.certBag && bag.cert) certs.push(bag.cert);
       else if ((bag.type === forge.pki.oids.pkcs8ShroudedKeyBag || bag.type === forge.pki.oids.keyBag) && !key) key = bag.key;
     }
   }
-  if (!cert || !key) throw new Error('P12 missing cert or key');
-  const s = cert.subject.getField('CN');
-  const e = cert.subject.getField('E') || cert.subject.getField('emailAddress');
+  if (certs.length === 0 || !key) throw new Error('P12 missing cert or key');
+  let leaf = certs.find(c => !certs.some(other => other !== c && other.issuer.hash === c.subject.hash)) || certs[0];
+  // Order the chain leaf → issuer → root by walking .issuer.hash within the bundle.
+  const chain = [leaf];
+  let next = leaf;
+  while (true) {
+    const parent = certs.find(c => c !== next && c.subject.hash === next.issuer.hash);
+    if (!parent || chain.includes(parent)) break;
+    chain.push(parent);
+    next = parent;
+    if (parent.subject.hash === parent.issuer.hash) break; // self-signed root
+  }
+  const s = leaf.subject.getField('CN');
+  const e = leaf.subject.getField('E') || leaf.subject.getField('emailAddress');
   return {
-    cert, key,
+    cert: leaf, key, chain,
     meta: {
       name: s ? s.value : '(unnamed)',
       email: e ? e.value : '',
-      notBefore: cert.validity.notBefore.toISOString(),
-      notAfter: cert.validity.notAfter.toISOString(),
+      notBefore: leaf.validity.notBefore.toISOString(),
+      notAfter: leaf.validity.notAfter.toISOString(),
+      chainLength: chain.length,
+      selfSigned: leaf.subject.hash === leaf.issuer.hash,
     },
   };
 }
@@ -1547,7 +1565,14 @@ function renderIdentity() {
   $('idEmail').textContent = has ? identity.meta.email : '';
   $('idFingerprint').textContent = '';
   // Fingerprint is only available after unlock — show it opportunistically if we've unlocked before.
-  if (has && identity.unlocked?.cert) $('idFingerprint').textContent = 'SHA-1: ' + certFingerprint(identity.unlocked.cert);
+  if (has && identity.unlocked?.cert) {
+    let fp = 'SHA-1: ' + certFingerprint(identity.unlocked.cert);
+    const chLen = identity.unlocked.chain?.length || 1;
+    const selfSigned = identity.unlocked.cert.subject.hash === identity.unlocked.cert.issuer.hash;
+    if (chLen > 1) fp += ` · CA-issued (chain: ${chLen})`;
+    else if (selfSigned) fp += ' · self-signed';
+    $('idFingerprint').textContent = fp;
+  }
   $('idButtons2').style.display = has ? 'flex' : 'none';
   const settingsNote = $('idSettingsNote');
   if (settingsNote) settingsNote.textContent = has ? '· ' + identity.label : '';
@@ -3670,10 +3695,13 @@ function extractSignerEncryptedDigest(p7) {
 // One-stop signer: builds the CMS over signedBytes, optionally requests a
 // timestamp from tsaUrl and embeds it, returns final DER hex-encoded padded
 // to SIG_PLACEHOLDER_LEN.
-async function signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl, backdated }) {
+async function signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl, backdated, chain }) {
   const p7 = forge.pkcs7.createSignedData();
   p7.content = forge.util.createBuffer(u8ToBinStr(signedBytes), 'binary');
-  p7.addCertificate(cert);
+  // Embed the full chain (leaf + any intermediates) so verifiers can walk
+  // up to a root they trust. Falls back to just the leaf if no chain given.
+  const certs = Array.isArray(chain) && chain.length ? chain : [cert];
+  for (const c of certs) p7.addCertificate(c);
   p7.addSigner({
     key, certificate: cert,
     digestAlgorithm: forge.pki.oids.sha256,
@@ -4467,7 +4495,7 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   }
 }
 
-async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated}) {
+async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
@@ -4782,7 +4810,7 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   signedBytes.set(saved.subarray(0, contentsStart), 0);
   signedBytes.set(saved.subarray(contentsEnd), contentsStart);
 
-  const sig = await signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl, backdated });
+  const sig = await signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl, backdated, chain });
   const contentsHexStart = contentsStart + 1;
   for (let i = 0; i < sig.hexPadded.length; i++) saved[contentsHexStart + i] = sig.hexPadded.charCodeAt(i);
   if (sig.tsaError) console.warn('Signed without timestamp:', sig.tsaError);
@@ -5421,7 +5449,7 @@ function stdFontNameFor(key) {
   }
 }
 
-async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, signingTime, tsaUrl, backdated }) {
+async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated }) {
   const { PDFDocument, PDFName, PDFArray, PDFRef, PDFNumber } = window.PDFLib;
   const parsed = parsePdfForIncremental(bytes);
   const now = signingTime instanceof Date ? signingTime : new Date();
@@ -5655,7 +5683,7 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   signedContent.set(combined.subarray(0, contentsStart), 0);
   signedContent.set(combined.subarray(contentsEnd), contentsStart);
 
-  const sig = await signAndOptionallyTimestamp({ signedBytes: signedContent, cert, key, now, tsaUrl, backdated });
+  const sig = await signAndOptionallyTimestamp({ signedBytes: signedContent, cert, key, now, tsaUrl, backdated, chain });
   const hexStart = contentsStart + 1;
   for (let i = 0; i < sig.hexPadded.length; i++) combined[hexStart + i] = sig.hexPadded.charCodeAt(i);
   if (sig.tsaError) console.warn('Signed without timestamp:', sig.tsaError);
@@ -5731,6 +5759,7 @@ $('btnSign').onclick = async () => {
         location: $('location').value.trim(),
         cert: unlocked.cert,
         key: unlocked.key,
+        chain: unlocked.chain,
         signingTime, tsaUrl, backdated,
       });
     } else {
@@ -5745,6 +5774,7 @@ $('btnSign').onclick = async () => {
         appearance,
         cert: unlocked.cert,
         key: unlocked.key,
+        chain: unlocked.chain,
         sigPngU8: sigImage.pngU8,
         signingTime,
         stamp: stampEnabled ? {
