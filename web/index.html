@@ -4883,127 +4883,60 @@ function extractObjDictText(objSource) {
 function parsePdfForIncremental(bytes) {
   const text = new TextDecoder('latin1').decode(bytes);
 
-  // 1. Last startxref
+  // 1. Last startxref — this becomes the /Prev of our new incremental xref.
   const lastSxr = text.lastIndexOf('startxref');
   if (lastSxr < 0) throw new Error('startxref not found');
   const sxrMatch = text.substring(lastSxr).match(/startxref\s+(\d+)/);
   if (!sxrMatch) throw new Error('startxref value not parsable');
   const prevXrefOffset = parseInt(sxrMatch[1], 10);
 
-  // 2. Classical xref only (this app writes non-stream xrefs).
-  const xrefHead = text.substring(prevXrefOffset, prevXrefOffset + 4);
-  if (xrefHead !== 'xref') {
-    throw new Error('This PDF uses cross-reference streams. Re-save the input from a tool that emits classical xref sections (this app does, for example) before adding a follow-up signature.');
+  // 2. Parse the trailer info at each cross-reference in the revision chain,
+  //    for both classical xrefs (`xref\n... trailer <<...>>`) and xref-stream
+  //    objects (`N G obj\n<< /Type /XRef ... >> stream ...`). We only need
+  //    /Prev (to follow the chain), /Root, /Info, /ID and /Size — pdf-lib
+  //    handles the actual object-body reads.
+  function trailerDictAt(offset) {
+    const head = text.substring(offset, offset + 4);
+    if (head === 'xref') {
+      const tIdx = text.indexOf('trailer', offset);
+      if (tIdx < 0) return null;
+      const ds = text.indexOf('<<', tIdx);
+      if (ds < 0) return null;
+      return extractBalancedDict(text, ds);
+    }
+    // xref-stream object: "N G obj\n<< ... >>\nstream\n..."
+    const objIdx = text.indexOf('obj', offset);
+    if (objIdx < 0) return null;
+    const ds = text.indexOf('<<', objIdx);
+    if (ds < 0) return null;
+    return extractBalancedDict(text, ds);
   }
-  const trailerIdx = text.indexOf('trailer', prevXrefOffset);
-  if (trailerIdx < 0) throw new Error('trailer not found after xref');
 
-  // 3. Walk BOTH the current xref section AND any /Prev xrefs so we resolve
-  //    every live object number in the whole revision chain.
-  const xrefEntries = {}; // objNum → { offset, gen, inUse } (later revisions override earlier)
-  let seenSize = 0;
+  let seenSize = 0, latestDict = null;
   const seen = new Set();
-  const walkXref = (offset) => {
-    if (seen.has(offset)) return;
-    seen.add(offset);
-    if (text.substring(offset, offset + 4) !== 'xref') {
-      throw new Error('This PDF has a cross-reference stream in its revision chain. Multi-signer signing requires classical xref sections throughout.');
-    }
-    const tIdx = text.indexOf('trailer', offset);
-    if (tIdx < 0) return;
-    const body = text.substring(offset + 4, tIdx).trim();
-    const lines = body.split(/\r?\n/);
-    let li = 0;
-    while (li < lines.length) {
-      const hdr = lines[li].trim().split(/\s+/);
-      if (hdr.length < 2 || !/^\d+$/.test(hdr[0])) break;
-      const first = parseInt(hdr[0], 10), count = parseInt(hdr[1], 10);
-      li++;
-      for (let j = 0; j < count && li < lines.length; j++, li++) {
-        const parts = lines[li].trim().split(/\s+/);
-        if (parts.length < 3) continue;
-        const num = first + j;
-        if (xrefEntries[num] == null) {
-          xrefEntries[num] = { offset: parseInt(parts[0], 10), gen: parseInt(parts[1], 10), inUse: parts[2] === 'n' };
-        }
-      }
-    }
-    // Trailer dict
-    const dictText = extractBalancedDict(text, text.indexOf('<<', tIdx));
-    if (!dictText) return;
-    const sizeM = dictText.match(/\/Size\s+(\d+)/);
+  const walk = (off) => {
+    if (seen.has(off)) return;
+    seen.add(off);
+    const d = trailerDictAt(off);
+    if (!d) return;
+    if (!latestDict) latestDict = d;
+    const sizeM = d.match(/\/Size\s+(\d+)/);
     if (sizeM) seenSize = Math.max(seenSize, parseInt(sizeM[1], 10));
-    const prevM = dictText.match(/\/Prev\s+(\d+)/);
-    if (prevM) walkXref(parseInt(prevM[1], 10));
+    const prevM = d.match(/\/Prev\s+(\d+)/);
+    if (prevM) walk(parseInt(prevM[1], 10));
   };
-  walkXref(prevXrefOffset);
+  walk(prevXrefOffset);
+  if (!latestDict) throw new Error('could not parse trailer / xref-stream dict at startxref');
 
-  // 4. Trailer dict of the LATEST revision (for Root/Info/ID)
-  const dictStart = text.indexOf('<<', trailerIdx);
-  const trailerDictText = extractBalancedDict(text, dictStart);
-  if (!trailerDictText) throw new Error('trailer dict not parsable');
-  const rootM = trailerDictText.match(/\/Root\s+(\d+)\s+(\d+)\s+R/);
-  if (!rootM) throw new Error('/Root not found in trailer');
+  const rootM = latestDict.match(/\/Root\s+(\d+)\s+(\d+)\s+R/);
+  if (!rootM) throw new Error('/Root not found in latest trailer');
   const rootRef = { num: +rootM[1], gen: +rootM[2] };
-  const infoM = trailerDictText.match(/\/Info\s+(\d+)\s+(\d+)\s+R/);
+  const infoM = latestDict.match(/\/Info\s+(\d+)\s+(\d+)\s+R/);
   const infoRef = infoM ? { num: +infoM[1], gen: +infoM[2] } : null;
-  // ID array — may span two hex strings <..> <..>
-  const idM = trailerDictText.match(/\/ID\s*\[([\s\S]*?)\]/);
+  const idM = latestDict.match(/\/ID\s*\[([\s\S]*?)\]/);
   const idHex = idM ? idM[1].trim() : null;
 
-  const maxObjNum = Math.max(seenSize - 1, ...Object.keys(xrefEntries).map(n => +n));
-
-  return { text, bytes, prevXrefOffset, xrefEntries, rootRef, infoRef, idHex, size: seenSize, maxObjNum };
-}
-
-function readObjectSource(parsed, num) {
-  const entry = parsed.xrefEntries[num];
-  if (!entry || !entry.inUse) throw new Error(`object ${num} not found in xref (revision chain)`);
-  const start = entry.offset;
-  const endObjIdx = parsed.text.indexOf('endobj', start);
-  if (endObjIdx < 0) throw new Error(`endobj for object ${num} not found`);
-  return parsed.text.substring(start, endObjIdx + 6);
-}
-
-function collectPageRefsInOrder(parsed) {
-  // Read Catalog → /Pages → walk /Kids depth-first. Returns array of {num, gen}.
-  const catSrc = readObjectSource(parsed, parsed.rootRef.num);
-  const catDict = extractObjDictText(catSrc);
-  const pagesM = catDict && catDict.match(/\/Pages\s+(\d+)\s+(\d+)\s+R/);
-  if (!pagesM) throw new Error('/Pages ref not found in Catalog');
-  const out = [];
-  const walk = (num, gen) => {
-    const src = readObjectSource(parsed, num);
-    const dict = extractObjDictText(src) || '';
-    const typeM = dict.match(/\/Type\s*\/(Page|Pages)\b/);
-    const type = typeM ? typeM[1] : null;
-    if (type === 'Page' || (!type && !/\/Kids\s*\[/.test(dict))) {
-      out.push({ num, gen });
-      return;
-    }
-    const kidsM = dict.match(/\/Kids\s*\[([\s\S]*?)\]/);
-    if (!kidsM) return;
-    const re = /(\d+)\s+(\d+)\s+R/g;
-    let m;
-    while ((m = re.exec(kidsM[1])) !== null) walk(+m[1], +m[2]);
-  };
-  walk(+pagesM[1], +pagesM[2]);
-  return out;
-}
-
-function findExistingAcroForm(parsed) {
-  const catSrc = readObjectSource(parsed, parsed.rootRef.num);
-  const catDict = extractObjDictText(catSrc);
-  if (!catDict) return { ref: null, inlineText: null, catalogDictText: catDict };
-  const refM = catDict.match(/\/AcroForm\s+(\d+)\s+(\d+)\s+R/);
-  if (refM) return { ref: { num: +refM[1], gen: +refM[2] }, inlineText: null, catalogDictText: catDict };
-  const inlineIdx = catDict.search(/\/AcroForm\s*<</);
-  if (inlineIdx >= 0) {
-    const ddStart = catDict.indexOf('<<', inlineIdx);
-    const inline = extractBalancedDict(catDict, ddStart);
-    return { ref: null, inlineText: inline, catalogDictText: catDict };
-  }
-  return { ref: null, inlineText: null, catalogDictText: catDict };
+  return { text, bytes, prevXrefOffset, rootRef, infoRef, idHex, size: seenSize };
 }
 
 function buildSigAppearanceStream({ name, dateStr, reason, location, w, h, nameFontResource }) {
@@ -5054,8 +4987,8 @@ function stdFontNameFor(key) {
 }
 
 async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, signingTime }) {
+  const { PDFDocument, PDFName, PDFArray, PDFRef, PDFNumber } = window.PDFLib;
   const parsed = parsePdfForIncremental(bytes);
-  const pageRefs = collectPageRefsInOrder(parsed);
   const now = signingTime instanceof Date ? signingTime : new Date();
   const dateStr = now.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
 
@@ -5064,8 +4997,20 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   const sigPlacements = placements.filter(p => p.type === 'digital');
   if (sigPlacements.length === 0) throw new Error('Incremental signing needs at least one signature placement');
 
-  // Object number allocation
-  let nextObj = parsed.maxObjNum + 1;
+  // Load with pdf-lib so we can read objects regardless of the xref form
+  // (classical, stream, or hybrid) and regardless of whether individual
+  // objects live inside object streams. We only WRITE our incremental
+  // append as raw text — the standards allow either form there.
+  const pdfDoc = await PDFDocument.load(bytes);
+  const ctx = pdfDoc.context;
+  const pages = pdfDoc.getPages();
+
+  // Next-available object number: use /Size from the latest trailer (per
+  // PDF spec = 1 + highest object number in use), sanity-max with pdf-lib's
+  // known objects.
+  let indirectMax = 0;
+  ctx.indirectObjects.forEach((_v, ref) => { if (ref.objectNumber > indirectMax) indirectMax = ref.objectNumber; });
+  let nextObj = Math.max(parsed.size || 0, indirectMax + 1);
   const alloc = () => nextObj++;
 
   // Font resources: standard 14 fonts, one per placement's chosen font + Helvetica for body.
@@ -5078,142 +5023,126 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     fontResourceRegistry.set(psName, rec);
     return rec;
   };
-  // Always register Helvetica as F1 (used for body text in every appearance).
-  registerFont('Helvetica'); // becomes F1
+  registerFont('Helvetica');
 
-  // Build per-placement AP form XObject + widget annotation.
-  const widgetObjs = []; // { num, body, pageIndex }
-  const apObjs = [];
+  // Pre-allocate the sig-dict and sig-field numbers so widgets can point at
+  // the field via /Parent. Then build appearance XObjects and widgets.
+  const objBodies = []; // { num, body }
+  const widgetObjs = []; // { num, pageIndex }
+
   for (const p of sigPlacements) {
-    const psName = stdFontNameFor(p.nameFont || 'serif-italic');
-    const nameFontRec = registerFont(psName);
+    registerFont(stdFontNameFor(p.nameFont || 'serif-italic'));
+  }
+  const sigDictNum = alloc();
+  const sigFieldNum = alloc();
+
+  for (const p of sigPlacements) {
+    const nameFontRec = fontResourceRegistry.get(stdFontNameFor(p.nameFont || 'serif-italic'));
     const w = p.wPdf, h = p.hPdf;
     const stream = buildSigAppearanceStream({
       name: meta.name, dateStr, reason: reason || '', location: location || '',
       w, h, nameFontResource: nameFontRec.resName,
     });
     const apNum = alloc();
-    // Build /Font subdict listing every font (viewer needs any font we reference in the stream)
     let fontSubdict = '';
-    for (const [, rec] of fontResourceRegistry) {
-      fontSubdict += `/${rec.resName} ${rec.objNum} 0 R `;
-    }
-    const apBody =
-      `${apNum} 0 obj\n` +
-      `<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 ${pdfNum(w)} ${pdfNum(h)}]\n` +
+    for (const [, rec] of fontResourceRegistry) fontSubdict += `/${rec.resName} ${rec.objNum} 0 R `;
+    objBodies.push({ num: apNum, body:
+      `${apNum} 0 obj\n<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 ${pdfNum(w)} ${pdfNum(h)}]\n` +
       `   /Resources << /Font << ${fontSubdict}>> /ProcSet [/PDF /Text] >>\n` +
-      `   /Length ${stream.length}\n` +
-      `>>\n` +
-      `stream\n${stream}endstream\nendobj\n`;
-    apObjs.push({ num: apNum, body: apBody });
+      `   /Length ${stream.length}\n>>\nstream\n${stream}endstream\nendobj\n`
+    });
 
     const widgetNum = alloc();
-    const pageRef = pageRefs[p.pageIndex];
-    if (!pageRef) throw new Error(`Page index ${p.pageIndex} out of range`);
-    const widgetBody =
-      `${widgetNum} 0 obj\n` +
-      `<< /Type /Annot /Subtype /Widget /F 132\n` +
+    const page = pages[p.pageIndex];
+    if (!page) throw new Error(`Page index ${p.pageIndex} out of range`);
+    const pageRef = page.ref;
+    objBodies.push({ num: widgetNum, body:
+      `${widgetNum} 0 obj\n<< /Type /Annot /Subtype /Widget /F 132\n` +
       `   /Rect [${pdfNum(p.xPdf)} ${pdfNum(p.yPdf)} ${pdfNum(p.xPdf + p.wPdf)} ${pdfNum(p.yPdf + p.hPdf)}]\n` +
-      `   /P ${pageRef.num} ${pageRef.gen} R\n` +
-      `   /AP << /N ${apNum} 0 R >>\n` +
-      `   /Parent __SIGFIELD__ 0 R\n` +
-      `>>\nendobj\n`;
-    widgetObjs.push({ num: widgetNum, body: widgetBody, pageIndex: p.pageIndex });
+      `   /P ${pageRef.objectNumber} ${pageRef.generationNumber} R\n` +
+      `   /AP << /N ${apNum} 0 R >>\n   /Parent ${sigFieldNum} 0 R\n>>\nendobj\n`
+    });
+    widgetObjs.push({ num: widgetNum, pageIndex: p.pageIndex });
   }
 
-  // Sig dict (placeholder ByteRange + Contents)
-  const sigDictNum = alloc();
-  const sigDictBody =
-    `${sigDictNum} 0 obj\n` +
-    `<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n` +
+  // Font objects.
+  for (const [psName, rec] of fontResourceRegistry) {
+    objBodies.push({ num: rec.objNum, body:
+      `${rec.objNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /${psName} /Encoding /WinAnsiEncoding >>\nendobj\n` });
+  }
+
+  // Sig dict + sig field bodies.
+  objBodies.push({ num: sigDictNum, body:
+    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n` +
     `   /ByteRange [0 9999999999 9999999999 9999999999]\n` +
     `   /Contents <${'0'.repeat(SIG_PLACEHOLDER_LEN)}>\n` +
-    `   /M (${pdfDate(now)})\n` +
-    `   /Name (${escapePdfString(meta.name)})\n` +
-    `   /Reason (${escapePdfString(reason || '')})\n` +
-    `   /Location (${escapePdfString(location || '')})\n` +
-    `>>\nendobj\n`;
-
-  // Sig field
-  const sigFieldNum = alloc();
+    `   /M (${pdfDate(now)})\n   /Name (${escapePdfString(meta.name)})\n` +
+    `   /Reason (${escapePdfString(reason || '')})\n   /Location (${escapePdfString(location || '')})\n>>\nendobj\n`
+  });
   const kidsStr = widgetObjs.map(w => `${w.num} 0 R`).join(' ');
   const sigFieldName = `Signature-${now.getTime().toString(36)}`;
-  const sigFieldBody =
-    `${sigFieldNum} 0 obj\n` +
-    `<< /FT /Sig /T (${sigFieldName}) /V ${sigDictNum} 0 R /Kids [${kidsStr}] >>\n` +
-    `endobj\n`;
+  objBodies.push({ num: sigFieldNum, body:
+    `${sigFieldNum} 0 obj\n<< /FT /Sig /T (${sigFieldName}) /V ${sigDictNum} 0 R /Kids [${kidsStr}] >>\nendobj\n`
+  });
 
-  // Bake widget /Parent refs now that sigFieldNum is known
-  for (const w of widgetObjs) w.body = w.body.replace('__SIGFIELD__', String(sigFieldNum));
-
-  // AcroForm: update existing or create new (Catalog then needs updating too).
-  const acroInfo = findExistingAcroForm(parsed);
-  const objBodies = [];
-  // Font objects
-  for (const [psName, rec] of fontResourceRegistry) {
-    objBodies.push({
-      num: rec.objNum,
-      body: `${rec.objNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /${psName} /Encoding /WinAnsiEncoding >>\nendobj\n`,
-    });
-  }
-  // AP + widgets + sig field + sig dict
-  for (const o of apObjs) objBodies.push(o);
-  for (const w of widgetObjs) objBodies.push({ num: w.num, body: w.body });
-  objBodies.push({ num: sigDictNum, body: sigDictBody });
-  objBodies.push({ num: sigFieldNum, body: sigFieldBody });
-
-  // AcroForm object body
-  let catalogNeedsUpdate = false;
-  let acroFormNum;
-  if (acroInfo.ref) {
-    acroFormNum = acroInfo.ref.num;
-    const oldSrc = readObjectSource(parsed, acroFormNum);
-    const oldDict = extractObjDictText(oldSrc) || '<<>>';
-    const newDict = mergeAcroFormDict(oldDict, sigFieldNum);
-    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n${newDict}\nendobj\n` });
-  } else if (acroInfo.inlineText) {
-    // Promote inline AcroForm to an indirect object so we can override it in the increment.
+  // AcroForm — read via pdf-lib, mutate, emit a new revision. Catalog gets a
+  // new revision too if AcroForm didn't exist yet or was inline.
+  const acroFormKey = PDFName.of('AcroForm');
+  const fieldsKey   = PDFName.of('Fields');
+  const sigFlagsKey = PDFName.of('SigFlags');
+  const annotsKey   = PDFName.of('Annots');
+  let acroFormEntry = pdfDoc.catalog.get(acroFormKey);
+  let acroFormObj = null, acroFormNum = null, catalogNeedsUpdate = false;
+  if (acroFormEntry instanceof PDFRef) {
+    acroFormObj = ctx.lookup(acroFormEntry);
+    acroFormNum = acroFormEntry.objectNumber;
+  } else if (acroFormEntry) {
+    acroFormObj = acroFormEntry;                // inline dict
     acroFormNum = alloc();
-    const merged = mergeAcroFormDict(acroInfo.inlineText, sigFieldNum);
-    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n${merged}\nendobj\n` });
     catalogNeedsUpdate = true;
   } else {
     acroFormNum = alloc();
-    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n<< /Fields [${sigFieldNum} 0 R] /SigFlags 3 >>\nendobj\n` });
     catalogNeedsUpdate = true;
   }
-
-  // Catalog update if needed
-  if (catalogNeedsUpdate) {
-    const oldCatSrc = readObjectSource(parsed, parsed.rootRef.num);
-    const oldCatDict = extractObjDictText(oldCatSrc) || '<<>>';
-    let newCatDict;
-    if (/\/AcroForm\s+\d+\s+\d+\s+R/.test(oldCatDict)) {
-      newCatDict = oldCatDict.replace(/\/AcroForm\s+\d+\s+\d+\s+R/, `/AcroForm ${acroFormNum} 0 R`);
-    } else if (/\/AcroForm\s*<</.test(oldCatDict)) {
-      // Replace inline AcroForm with a ref
-      const idx = oldCatDict.search(/\/AcroForm\s*<</);
-      const ddStart = oldCatDict.indexOf('<<', idx);
-      const inline = extractBalancedDict(oldCatDict, ddStart);
-      newCatDict = oldCatDict.substring(0, idx) + `/AcroForm ${acroFormNum} 0 R` + oldCatDict.substring(ddStart + inline.length);
-    } else {
-      newCatDict = oldCatDict.replace(/>>\s*$/, ` /AcroForm ${acroFormNum} 0 R >>`);
+  if (acroFormObj) {
+    let fields = acroFormObj.get(fieldsKey);
+    if (fields instanceof PDFRef) fields = ctx.lookup(fields);
+    if (!(fields instanceof PDFArray)) {
+      fields = ctx.obj([]);
+      acroFormObj.set(fieldsKey, fields);
     }
-    objBodies.push({ num: parsed.rootRef.num, body: `${parsed.rootRef.num} 0 obj\n${newCatDict}\nendobj\n` });
+    fields.push(PDFRef.of(sigFieldNum, 0));
+    const flagsObj = acroFormObj.get(sigFlagsKey);
+    const curFlags = flagsObj && typeof flagsObj.value === 'function' ? flagsObj.value()
+                   : flagsObj && typeof flagsObj.numberValue === 'number' ? flagsObj.numberValue : 0;
+    acroFormObj.set(sigFlagsKey, PDFNumber.of(curFlags | 3));
+    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n${acroFormObj.toString()}\nendobj\n` });
+  } else {
+    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n<< /Fields [${sigFieldNum} 0 R] /SigFlags 3 >>\nendobj\n` });
+  }
+  if (catalogNeedsUpdate) {
+    pdfDoc.catalog.set(acroFormKey, PDFRef.of(acroFormNum, 0));
+    objBodies.push({ num: parsed.rootRef.num, body: `${parsed.rootRef.num} 0 obj\n${pdfDoc.catalog.toString()}\nendobj\n` });
   }
 
-  // Page updates — append each new widget to that page's /Annots.
+  // Page updates — append widget refs to each affected page's /Annots.
   const widgetsByPage = new Map();
   for (const w of widgetObjs) {
     if (!widgetsByPage.has(w.pageIndex)) widgetsByPage.set(w.pageIndex, []);
     widgetsByPage.get(w.pageIndex).push(w.num);
   }
   for (const [pageIdx, wNums] of widgetsByPage) {
-    const pageRef = pageRefs[pageIdx];
-    const oldPageSrc = readObjectSource(parsed, pageRef.num);
-    const oldPageDict = extractObjDictText(oldPageSrc) || '<<>>';
-    const newPageDict = appendAnnotsToPageDict(oldPageDict, wNums);
-    objBodies.push({ num: pageRef.num, body: `${pageRef.num} 0 obj\n${newPageDict}\nendobj\n` });
+    const page = pages[pageIdx];
+    const pageObj = page.node;
+    let annots = pageObj.get(annotsKey);
+    if (annots instanceof PDFRef) annots = ctx.lookup(annots);
+    if (!(annots instanceof PDFArray)) {
+      annots = ctx.obj([]);
+      pageObj.set(annotsKey, annots);
+    }
+    for (const wNum of wNums) annots.push(PDFRef.of(wNum, 0));
+    const pageRef = page.ref;
+    objBodies.push({ num: pageRef.objectNumber, body: `${pageRef.objectNumber} 0 obj\n${pageObj.toString()}\nendobj\n` });
   }
 
   // ── Assemble the incremental append ──
@@ -5313,53 +5242,6 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   for (let i = 0; i < sigHexPadded.length; i++) combined[hexStart + i] = sigHexPadded.charCodeAt(i);
 
   return combined;
-}
-
-function mergeAcroFormDict(oldDictText, newFieldNum) {
-  // Ensure /Fields contains an added ref and /SigFlags has the sig+append bits.
-  let dict = oldDictText;
-  const fieldsM = dict.match(/\/Fields\s*(\[[\s\S]*?\]|\d+\s+\d+\s+R)/);
-  if (fieldsM) {
-    const val = fieldsM[1];
-    if (val.startsWith('[')) {
-      const inner = val.slice(1, -1).trim();
-      dict = dict.replace(fieldsM[0], `/Fields [${inner ? inner + ' ' : ''}${newFieldNum} 0 R]`);
-    } else {
-      // Indirect fields array — replace with a new inline array that also lists the
-      // original array ref via a workaround isn't valid PDF. Simplest robust option:
-      // inline both original members (we can't cheaply read them here) and the new one.
-      // Fall back: replace with just the new field ref (acceptable when the prior form
-      // had no signature fields we need to preserve, which is our common case).
-      dict = dict.replace(fieldsM[0], `/Fields [${newFieldNum} 0 R]`);
-    }
-  } else {
-    dict = dict.replace(/>>\s*$/, ` /Fields [${newFieldNum} 0 R] >>`);
-  }
-  const flagsM = dict.match(/\/SigFlags\s+(\d+)/);
-  if (flagsM) {
-    const cur = parseInt(flagsM[1], 10) | 3;
-    dict = dict.replace(flagsM[0], `/SigFlags ${cur}`);
-  } else {
-    dict = dict.replace(/>>\s*$/, ` /SigFlags 3 >>`);
-  }
-  return dict;
-}
-
-function appendAnnotsToPageDict(oldDictText, newAnnotObjNums) {
-  const addRefs = newAnnotObjNums.map(n => `${n} 0 R`).join(' ');
-  const annotsM = oldDictText.match(/\/Annots\s*(\[[\s\S]*?\]|\d+\s+\d+\s+R)/);
-  if (!annotsM) {
-    return oldDictText.replace(/>>\s*$/, ` /Annots [${addRefs}] >>`);
-  }
-  const val = annotsM[1];
-  if (val.startsWith('[')) {
-    const inner = val.slice(1, -1).trim();
-    return oldDictText.replace(annotsM[0], `/Annots [${inner ? inner + ' ' : ''}${addRefs}]`);
-  }
-  // Indirect ref → for now, replace with just the new refs (drops prior widgets
-  // in the very rare case a page uses an indirect Annots array; our own signed
-  // outputs always inline the array).
-  return oldDictText.replace(annotsM[0], `/Annots [${addRefs}]`);
 }
 
 $('btnSign').onclick = async () => {
