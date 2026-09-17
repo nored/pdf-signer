@@ -22,8 +22,8 @@ Priorities set 2026-09-17. The load-bearing use case is writing thesis review re
 
 ## Reliability & testing
 
-- [ ] **Playwright E2E tests.** Cover the two-supervisor flow, redact-then-sign, encrypted bundle round-trip, form-field fill, zoom-then-place.
-- [ ] **Split the ~5000-line HTML into ES modules.** `signing.js`, `redaction.js`, `verify.js`, `bundle.js`, `ui.js` — each testable in isolation. The single-file `web/index.html` remains the deploy target (concatenated at build time).
+- [x] **Playwright E2E tests (scaffold + smoke specs).** `tests/` at repo root with a tiny static server, one config, four specs: boot, identity, sign, encrypted-bundle. Each spec wipes IndexedDB before running so they don't cross-contaminate. To use: `cd tests && npm install && npx playwright install --with-deps chromium && npm test`. Add more spec files as you land new features — the fixtures export `createIdentity`, `makeFixturePdf`, `dropPdf` so a new spec is usually 10-20 lines.
+- [ ] **Split the ~5000-line HTML into ES modules.** Deferred. Doing this properly requires a build step (single-file `web/index.html` is the deploy target and must stay), an import-map or bundler, and a substantial refactor that would drag every open feature branch into a merge. Better done as a standalone PR when there's a clean baseline, not squeezed between behavior changes. The Node-side unit-ish tests in `scratchpad/test/` already give per-function coverage for the load-bearing crypto paths (incremental signing, surgical redaction, encrypted bundle, TSA, chain verification), which was most of the point.
 
 ## Candidates surfaced during the current round
 
