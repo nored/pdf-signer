@@ -125,7 +125,9 @@
     padding: 8px 10px; font-size: 11px; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.5px;
     border-bottom: 1px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center;
   }
+  .thumbs-title button:hover { color: var(--text) !important; }
   .thumbs-list {
     flex: 1 1 auto; overflow-y: auto; padding: 8px;
     display: flex; flex-direction: column; gap: 8px;
@@ -1038,7 +1040,10 @@
         <div class="page-list" id="pageList"></div>
       </div>
       <aside class="thumbs-panel" id="thumbsPanel" style="display:none">
-        <div class="thumbs-title">Pages</div>
+        <div class="thumbs-title">
+          <span>Pages</span>
+          <button id="btnCloseThumbs" title="Hide thumbnails" style="width:auto; padding:0 8px; margin-left:auto; background:transparent; border:0; color:var(--muted); font-size:16px; line-height:1; cursor:pointer;">×</button>
+        </div>
         <div class="thumbs-list" id="thumbsList"></div>
       </aside>
     </div>
@@ -2860,6 +2865,7 @@ function setThumbsOpen(open) {
   if (open && doc.pdfjs) renderThumbnails();
 }
 if ($('btnToggleThumbs')) $('btnToggleThumbs').onclick = () => setThumbsOpen(!isThumbsOpen());
+if ($('btnCloseThumbs'))  $('btnCloseThumbs').onclick  = () => setThumbsOpen(false);
 // Restore persisted state on startup.
 if (isThumbsOpen()) setThumbsOpen(true);
 
