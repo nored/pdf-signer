@@ -1666,7 +1666,7 @@ $('btnExportId').onclick = async () => {
     </p>
     <label>Bundle password <span style="color:var(--muted); font-weight:400">(click 👁 to reveal)</span></label>
     <div style="display:flex; gap:6px; align-items:center;">
-      <input type="password" id="bpw" name="pdfsigner-bundle-pw" autocomplete="off" value="${prefillPw.replace(/"/g,'&quot;')}" style="flex:1;">
+      <input type="password" id="bpw" autocomplete="off" value="${prefillPw.replace(/"/g,'&quot;')}" style="flex:1;">
       <button type="button" id="bpwToggle" title="Show password" style="width:auto; padding:6px 10px;">👁</button>
     </div>
     <p class="hint" style="margin-top:6px">
