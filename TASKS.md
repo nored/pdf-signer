@@ -27,7 +27,8 @@ Priorities set 2026-09-17. The load-bearing use case is writing thesis review re
 
 ## Follow-up candidates
 
-- **PAdES-B-LT (LTV / DSS).** Fetch OCSP responses (and CRLs) for the signer cert and every intermediate at sign time, bundle them into a Document Security Store dict, plus a VRI entry per signature. Result: verifiers 5 years later don't need live network calls and Adobe shows "signature LTV enabled". Bigger project than B-B — needs OCSP request builders, CORS-friendly OCSP endpoints or a proxy (same pattern as TSA), and the DSS dict shape in the PDF.
+- [x] **PAdES-B-LT (LTV / DSS) — rewrite path.** OCSP request builder (RFC 6960 CertID with SHA-1 issuer name / key hashes + serial), fetcher (POST to the responder from each cert's AIA extension), and DSS emission (Type /DSS, Certs [], OCSPs []) into the catalog. Best-effort — if the cert has no responder or fetching fails (self-signed, CORS, offline), sign continues without DSS. Adobe unlocks the LTV badge when the DSS carries an OCSP for the signer cert.
+- **PAdES-B-LT — incremental path.** Same DSS emission for the append-based signer. Bigger because DSS objects need to be emitted as new incremental objects and the catalog needs a new revision that carries /DSS. Follow-up.
 - **CSC / cloud signing client (sign-me and others).** OAuth2 flow to a CSC-compliant QTSP, SAD (Signature Authorization Data) via 2FA push, POST hash to `credentials/authorize` + `signatures/signHash`, embed the returned RSA sig in the CMS exactly like a local sign. Adds a "Sign via cloud QES" identity type alongside the local p12 identities. ~half a day once real credentials are available to test against.
 
 ## Candidates surfaced during the current round
