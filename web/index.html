@@ -7655,8 +7655,13 @@ function verifyPdfSignatures(bytes) {
     // in a fully-written signed PDF. Skip if any range value is a leftover placeholder.
     if (br[1] === 9999999999) continue;
     // Find the /Contents <hex> that belongs to this signature (nearest around the ByteRange).
+    // Window must be large enough to contain the ENTIRE hex payload including
+    // the closing >, or the regex fails silently and verifyPdfSignatures
+    // returns no results. Use the actual byteRange gap size as a hint —
+    // that's the exact size of the /Contents hex value.
     const winStart = Math.max(0, m.index - 200);
-    const winEnd = Math.min(text.length, m.index + 20000);
+    const contentsSpan = Math.max(0, br[2] - br[1]);   // BR[2] - BR[1] = "<..hex..>" length
+    const winEnd = Math.min(text.length, m.index + 200 + contentsSpan + 4096);
     const window = text.substring(winStart, winEnd);
     const contentsRe = /\/Contents\s*<([0-9a-fA-F]+)>/g;
     // Position within window closest (following) to (m.index - winStart)
