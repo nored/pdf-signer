@@ -945,8 +945,8 @@
             <label title="DocMDP P=1: no further changes, no further signatures. Use when you are the final signer.">
               <input type="radio" name="lockmode" value="locked"> Lock document <span class="info-hint" title="DocMDP P=1: no further changes, no further signatures. Use when you are the final signer.">ⓘ</span>
             </label>
-            <label title="DocMDP P=3: allows form-fill, annotations, and further signatures. Only safe when every downstream tool restricts itself to those. Adobe Reader / DocuSign / 3-Heights and most web-based signing services stamp onto page content, which violates P=3 and will invalidate this signature.">
-              <input type="radio" name="lockmode" value="certify"> Certify (P=3) <span class="info-hint" title="DocMDP P=3: only safe when every downstream signer uses a tool that limits itself to annotations and signatures. Most third-party PDF tools stamp onto page content and will invalidate this signature.">ⓘ</span>
+            <label title="Certify the document (DocMDP P=3) but leave room for further signatures, annotations, and form-fill. Only safe when every downstream tool restricts itself to those operations. Most third-party PDF tools (Apple Preview, iLovePDF, 3-Heights) rewrite the file or stamp onto page content and will invalidate this signature.">
+              <input type="radio" name="lockmode" value="certify"> Certify, allow further signatures <span class="info-hint" title="DocMDP P=3: certifies the document but permits form-fill, annotations, and further signatures downstream. Anything else invalidates this signature. Most consumer PDF tools rewrite the file and will break it.">ⓘ</span>
             </label>
           </div>
           <div id="alreadySignedNote" class="hint" style="display:none; margin-top:6px; color:#b57920">
