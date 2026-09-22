@@ -22,6 +22,36 @@ Open <https://nored.github.io/pdf-signer/web/>, generate an identity (name + pas
 
 Long-press the theme toggle (◐, top-right) to see which commit your browser is on and whether it's the latest.
 
+## Privacy
+
+Everything runs in the browser tab.
+
+- Documents never leave your machine unless you explicitly configure a GitHub vault, and even then they leave as AES-256-GCM ciphertext keyed by a byte string that lives only in the QR you print on the signed PDF. Without that QR, the vault contents are opaque even to whoever hosts them (including GitHub and any downstream mirror).
+- Identity keys (RSA private key, PKCS#12 blob, signature image, GitHub token if you configured one) live in your browser's IndexedDB, encrypted at rest with your identity password. They're unlocked in memory for one signing session and discarded when you close the tab.
+- No telemetry, no analytics, no third-party JS beacons. The only outbound requests during normal use are: PDF renderer / crypto libraries from `cdnjs.cloudflare.com` on first page load (then browser-cached), an optional TSA countersignature request to the TSA URL you set (default `rfc3161.ai.moda`), an optional GitHub API call to publish your public cert and upload the encrypted vault (only if you configured a GitHub vault), and an optional Ghostscript-WASM download from `cdn.jsdelivr.net` (only if you turn on PDF normalization and open a source PDF that needs it).
+- On verify, the verifier fetches the vault file (from wherever the QR points), fetches OCSP responses if the AIA extension in the signer cert is browser-reachable, and does a single unauthenticated GitHub API call to detect whether the browser has the latest commit. Everything else is local.
+- The verifier is a URL, not a service. A recipient scans the QR, lands on the same static HTML you signed with, decrypts and verifies in their own tab. Nothing hits a server you or they don't control.
+
+If any of that is a step too many, disable the vault, disable the trusted timestamp, and sign offline. The signature is still a valid PAdES-B-B CMS; only the QR verification round-trip goes away.
+
+## Setup
+
+Zero install for the common case. For the recommended full experience, three optional steps:
+
+**1. Create your identity.** Sidebar → **New identity…**, enter your name (goes into the cert CN and the visible signature), your email (goes into the cert subjectAltName), and a password of at least 6 characters. Generates a 2048-bit RSA keypair, self-signs a 10-year cert, encrypts the p12 with your password, and stores it in IndexedDB. Downloads an encrypted backup bundle (`.pdfsigner.json`) immediately. Keep that file somewhere safe; it's the only way to move the identity to another browser.
+
+Alternatively **Import…** an existing p12 from any CA (D-Trust, Bundesdruckerei, Certum, GlobalSign, sign-me, corporate CA). The importer walks the p12's chain leaf → intermediates → root and self-trusts the root so it becomes visible to the verifier.
+
+**2. Configure a GitHub vault (optional).** If you want the QR-based public verification, sidebar → **GitHub vault → Configure…**. You'll need a personal access token with `repo` scope. The app creates a public repo named `pdf-signer-vault` (customizable), publishes your cert to `vault/certs/<sha1>.pem`, and uploads one encrypted `.vault` file per signed PDF. The signed PDF carries the raw HTTPS URL of the vault plus (in the QR) the AES key.
+
+Without a vault, signing still works. Signed PDFs are valid; the verifier just needs the `.vault` file handed over locally (drag-and-drop) instead of fetched from a URL.
+
+**3. Turn on trusted timestamping (optional).** Under **Trusted timestamp (RFC 3161)** in the signing sidebar, tick the checkbox. Default TSA is `https://rfc3161.ai.moda` (a Sectigo relay that accepts browser CORS). Every signed PDF then carries a countersigned timestamp that survives your certificate expiring.
+
+**4. Turn on PDF normalization (optional).** Under **PDF normalization** in identity settings, tick **Normalize source PDFs before signing** if you regularly sign Office / Word / Google-Docs PDFs. Lazy-loads Ghostscript-WASM on first use (~5 MB gzipped, browser-cached thereafter, only fetched when a source PDF has the structural markers Adobe rejects post-sign).
+
+Every setting is per-identity. Export the identity bundle and every setting travels with it.
+
 ## How signatures work here
 
 - Each identity is a 2048-bit RSA keypair with a self-signed X.509 (10-year validity), stored as an encrypted PKCS#12 inside IndexedDB. Password-protected. Never leaves your machine except in the export bundle.
