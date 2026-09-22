@@ -2388,6 +2388,30 @@ $('scrollArea').addEventListener('drop', async e => {
 async function openPdf(file) {
   doc.file = file;
   doc.bytes = new Uint8Array(await file.arrayBuffer());
+
+  // Detect source-PDF quirks Adobe rejects post-sign ("document was
+  // modified"): catalog carries a legacy /Version pin OR trailer size
+  // exceeds live-object count (fragmented xref with free slots). If
+  // detected AND the user has opted in to Ghostscript normalization,
+  // replace doc.bytes with a normalized copy BEFORE pdf.js parses it,
+  // so the viewer, placements, and sign flow all run against the same
+  // clean bytes. This mirrors what iLovePDF does for the user manually.
+  const normOn = document.getElementById('gsNormalize')?.checked;
+  if (normOn) {
+    try {
+      const needs = await detectSourceNeedsNormalization(doc.bytes);
+      if (needs) {
+        toast('Source PDF needs normalization (Adobe-compat) — running Ghostscript…');
+        const before = doc.bytes.length;
+        doc.bytes = await normalizePdfViaGhostscript(doc.bytes);
+        doc.normalizedFromSource = true;
+        toast('Normalized: ' + before + ' → ' + doc.bytes.length + ' bytes', 'ok');
+      }
+    } catch (e) {
+      toast('Ghostscript normalization skipped: ' + e.message, 'err');
+    }
+  }
+
   // Password-protected PDFs: pdf.js throws PasswordException. Prompt and
   // retry until the user cancels or gets it right.
   let password = null;
@@ -5468,6 +5492,35 @@ async function loadGhostscript() {
   return _gsModulePromise;
 }
 
+// Cheap byte-level detection of source-PDF quirks that trigger Adobe's
+// "document was modified" rejection after our sign. Two markers, both
+// present in the Ayush.pdf class of failing sources, both absent in
+// wazze-style working sources:
+//   1. /Version /1.X in the catalog dict (Office-generated PDFs pin
+//      to /1.4 and pdf-lib preserves it through save; effective PDF
+//      version drops below what /ETSI.CAdES.detached needs)
+//   2. Fragmented xref — multiple subsections, meaning the source has
+//      free/deleted object slots. Adobe seems to interpret those as
+//      "objects were deleted" and blames the sig.
+// Returns true if EITHER marker is present.
+async function detectSourceNeedsNormalization(bytes) {
+  const text = new TextDecoder('latin1').decode(bytes.subarray(0, Math.min(bytes.length, 2 * 1024 * 1024)));
+  // 1) Any /Version /X.Y in the catalog. Cheap grep — anywhere in the
+  // first 2 MB is a strong enough signal for the trigger cases we've seen.
+  if (/\/Version\s*\/\d\.\d/.test(text)) return true;
+  // 2) Fragmented xref — look at ALL xref sections' subsection count.
+  //    Working files have 1 subsection (0 N); broken ones have many.
+  const xrefIdx = text.lastIndexOf('\nxref\n');
+  if (xrefIdx >= 0) {
+    const trlIdx = text.indexOf('\ntrailer', xrefIdx);
+    if (trlIdx > xrefIdx) {
+      const subs = text.substring(xrefIdx, trlIdx).match(/\n(\d+)\s+(\d+)\n/g);
+      if (subs && subs.length > 1) return true;
+    }
+  }
+  return false;
+}
+
 // Run source PDF bytes through Ghostscript's pdfwrite to produce a clean,
 // Adobe-friendly structure: contiguous xref, no legacy /Version pin,
 // proper /Metadata, single revision. Fixes Adobe's "document was
@@ -5496,18 +5549,6 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
   } = window.PDFLib;
-
-  // Optional: normalize the source PDF through Ghostscript-WASM first.
-  // Enabled per-identity in Setup ("PDF normalization" section).
-  const gsEnabled = document.getElementById('gsNormalize')?.checked;
-  if (gsEnabled) {
-    try {
-      toast('Normalizing PDF via Ghostscript…');
-      bytes = await normalizePdfViaGhostscript(bytes);
-    } catch (e) {
-      toast('Ghostscript normalization failed: ' + e.message + ' — signing raw source', 'err');
-    }
-  }
 
   const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: false });
   const fonts = {
