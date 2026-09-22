@@ -5276,6 +5276,10 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
         P: PDFNumber.of(mdp === 'lock' ? 1 : 3),
         V: PDFName.of('1.2'),
       }),
+      // DigestMethod defaults to /SHA1 per spec. Modern Adobe expects it to
+      // match the CMS digest (SHA-256); the mismatch triggers strict-mode
+      // rejection on DocMDP validation in current Reader versions.
+      DigestMethod: PDFName.of('SHA256'),
     });
     sigDict.set(PDFName.of('Reference'), context.obj([sigRefEntry]));
   }
