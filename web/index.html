@@ -5817,6 +5817,21 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
 
   let saved = await pdfDoc.save({ useObjectStreams: false, addDefaultPage: false });
   saved = new Uint8Array(saved);
+  // Patch the file header if it declares a PDF version below 1.7. pdf-lib
+  // usually emits %PDF-1.7 but preserves an older source header on some
+  // builds; ETSI.CAdES.detached needs 1.7+ or Adobe rejects the sig as
+  // "document was modified" (spec-wise the catalog /Version we already
+  // bumped should win, but some Adobe builds appear to trust the header).
+  // Bytes 0..7 are the header "%PDF-x.y". Overwrite in place — same length.
+  if (saved[0] === 0x25 && saved[1] === 0x50 && saved[2] === 0x44 && saved[3] === 0x46 && saved[4] === 0x2D) {
+    const major = saved[5] - 0x30;
+    const minor = saved[7] - 0x30;
+    if (major < 1 || (major === 1 && minor < 7)) {
+      // Overwrite "%PDF-1.x" with "%PDF-1.7" — same 8 bytes.
+      const target = '%PDF-1.7';
+      for (let i = 0; i < target.length; i++) saved[i] = target.charCodeAt(i);
+    }
+  }
   const text = dec.decode(saved);
 
   const placeholderHex = '0'.repeat(SIG_PLACEHOLDER_LEN);
