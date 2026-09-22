@@ -5612,16 +5612,17 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   const sigDictShape = {
     Type: 'Sig',
     Filter: 'Adobe.PPKLite',
-    // NOTE: hand-rolled buildCmsSignedData emits a real SigningCertificateV2
-    // per PAdES-B-B, and the CMS is structurally valid (forge parses,
-    // openssl parses, messageDigest matches). But strict CAdES validation
-    // in Adobe still rejects with "document was modified" for reasons we
-    // haven't isolated yet — possibly a subtle DocMDP+CAdES interaction.
-    // Legacy /adbe.pkcs7.detached routes Adobe through the plain PKCS#7
-    // validator which accepts the same CMS cleanly and (per user testing)
-    // recognises Sectigo TSA countersignatures. Follow-up: figure out what
-    // strict CAdES actually wants and revert.
-    SubFilter: 'adbe.pkcs7.detached',
+    // PAdES-B-B baseline. Under legacy /adbe.pkcs7.detached Adobe seems to
+    // reject a SignerInfo carrying SigningCertificateV2 (an "unexpected"
+    // signed attribute for a legacy-mode signature), with a confusing
+    // "document was modified" error. Under /ETSI.CAdES.detached Adobe
+    // uses its CAdES validator which expects (and tolerates) that
+    // attribute. A verified reference file — RecomLetter_Nicola signed
+    // Sep 21 2026 — has SubFilter /ETSI.CAdES.detached with an EMPTY
+    // SigningCertificateV2 SET, and Adobe accepted it silently (yellow
+    // unknown-identity warning only). Ours emits a POPULATED
+    // ESSCertIDv2 which is per-spec correct.
+    SubFilter: 'ETSI.CAdES.detached',
     ByteRange: [PDFNumber.of(0), PDFNumber.of(9999999999),
                 PDFNumber.of(9999999999), PDFNumber.of(9999999999)],
     Contents: PDFHexString.of('0'.repeat(SIG_PLACEHOLDER_LEN)),
@@ -6967,7 +6968,7 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // Sig dict + sig field bodies.
   const certUrlLine = certVaultUrl ? `   /PdfsignerCertUrl (${escapePdfString(certVaultUrl)})\n` : '';
   objBodies.push({ num: sigDictNum, body:
-    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n` +
+    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached\n` +
     `   /ByteRange [0 9999999999 9999999999 9999999999]\n` +
     `   /Contents <${'0'.repeat(SIG_PLACEHOLDER_LEN)}>\n` +
     `   /M (${pdfDate(now)})\n   /Name (${escapePdfString(meta.name)})\n` +
