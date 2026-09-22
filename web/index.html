@@ -932,6 +932,18 @@
             </div>
           </details>
 
+          <details class="collapse" style="margin-top:10px">
+            <summary>PDF normalization <span class="info-hint" title="Uses Ghostscript-WASM (loaded on demand from jsDelivr, ~5 MB gzipped, AGPL) to rewrite the source through a clean pdfwrite pass before signing.">ⓘ</span></summary>
+            <div style="margin-top:8px">
+              <label class="lock-row"><input type="checkbox" id="gsNormalize"> Normalize source PDFs before signing</label>
+              <div class="hint">
+                Runs the source through Ghostscript before signing, producing a clean, contiguous, Adobe-friendly structure. Fixes the "document has been modified" rejection Adobe throws on Office/Word-generated PDFs (Ayush.pdf-style sources) while other validators say the signature is fine.
+                <br><br>
+                Ghostscript-WASM (~5 MB gzipped) is loaded on demand from jsDelivr the first time you sign a PDF that needs it — no local install. It's <a href="https://github.com/okathira/ghostpdl-wasm" target="_blank" rel="noopener">AGPL-3.0</a>, upstream Artifex build, unmodified; pdf-signer itself stays MIT. Turn off if you don't want the runtime CDN dependency.
+              </div>
+            </div>
+          </details>
+
           <details class="collapse" id="stampSection" style="margin-top:10px; display:none">
             <summary>Integrity stamp defaults <span id="stampHeaderNote" style="opacity:.6"></span></summary>
             <div style="margin-top:8px">
@@ -4769,6 +4781,7 @@ const SETTINGS_KEYS = [
   { id: 'vaultKeepLocal', type: 'checked' },
   { id: 'tsaEnable',      type: 'checked' },
   { id: 'tsaUrl',         type: 'value' },
+  { id: 'gsNormalize',    type: 'checked' },
 ];
 const RADIO_KEYS = ['appearance', 'lockmode', 'vaultHost'];
 
@@ -5426,11 +5439,80 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   }
 }
 
+// Lazy-load Ghostscript-WASM from jsDelivr on first use. Only fires if the
+// user has enabled the "normalize before signing" toggle. ~5 MB gzipped,
+// AGPL-3.0-or-later (upstream Artifex build, unmodified — pdf-signer stays
+// MIT because we don't ship it, only reference it via <script>).
+let _gsModulePromise = null;
+async function loadGhostscript() {
+  if (_gsModulePromise) return _gsModulePromise;
+  const CDN = 'https://cdn.jsdelivr.net/npm/@okathira/ghostpdl-wasm@1.1.0/dist';
+  _gsModulePromise = (async () => {
+    // The package's dist/gs.js is an Emscripten UMD module. Load it via
+    // dynamic <script> so we don't need a build step.
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = CDN + '/gs.js';
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Failed to load Ghostscript-WASM from ' + s.src));
+      document.head.appendChild(s);
+    });
+    // Emscripten's UMD default: window.Module factory function. Its name
+    // may vary; try common exports.
+    const factory = window.GhostPDL || window.Module || window.gs || window.default;
+    if (typeof factory !== 'function') throw new Error('Ghostscript-WASM loader did not expose a factory function');
+    const Module = await factory({
+      // Tell Emscripten where to find the .wasm file (same CDN).
+      locateFile: (name) => name.endsWith('.wasm') ? CDN + '/' + name : name,
+      print: () => {},          // silence stdout
+      printErr: () => {},       // silence stderr (Ghostscript is chatty)
+      noInitialRun: true,
+    });
+    return Module;
+  })();
+  return _gsModulePromise;
+}
+
+// Run source PDF bytes through Ghostscript's pdfwrite to produce a clean,
+// Adobe-friendly structure: contiguous xref, no legacy /Version pin,
+// proper /Metadata, single revision. Fixes Adobe's "document was
+// modified" rejection on Office/Word-generated source PDFs where the
+// underlying structural quirks survive pdf-lib's rewrite.
+async function normalizePdfViaGhostscript(inputBytes) {
+  const Module = await loadGhostscript();
+  const inName = 'in_' + Date.now() + '.pdf';
+  const outName = 'out_' + Date.now() + '.pdf';
+  Module.FS.writeFile(inName, inputBytes);
+  const rc = Module.callMain([
+    '-dNOPAUSE', '-dBATCH', '-dQUIET',
+    '-sDEVICE=pdfwrite',
+    '-dCompatibilityLevel=1.7',
+    '-sOutputFile=' + outName,
+    inName,
+  ]);
+  if (rc !== 0) throw new Error('Ghostscript exited with code ' + rc);
+  const out = Module.FS.readFile(outName);
+  try { Module.FS.unlink(inName); Module.FS.unlink(outName); } catch (_) {}
+  return new Uint8Array(out);
+}
+
 async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated, certVaultUrl, sigFieldMap}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
   } = window.PDFLib;
+
+  // Optional: normalize the source PDF through Ghostscript-WASM first.
+  // Enabled per-identity in Setup ("PDF normalization" section).
+  const gsEnabled = document.getElementById('gsNormalize')?.checked;
+  if (gsEnabled) {
+    try {
+      toast('Normalizing PDF via Ghostscript…');
+      bytes = await normalizePdfViaGhostscript(bytes);
+    } catch (e) {
+      toast('Ghostscript normalization failed: ' + e.message + ' — signing raw source', 'err');
+    }
+  }
 
   const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: false });
   const fonts = {
