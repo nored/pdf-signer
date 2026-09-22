@@ -5925,6 +5925,259 @@ function extractObjDictText(objSource) {
   return extractBalancedDict(objSource, openIdx);
 }
 
+// Full byte-level xref parse: classical and xref-stream, with FlateDecode +
+// PNG predictor for stream bodies. Returns per-object entries the caller can
+// use to slice out an object's ORIGINAL bytes verbatim. Byte-preserving
+// splicing is what makes DocMDP-P=3 validation in Adobe survive an
+// incremental update — re-serialising the AcroForm/Page dict via a
+// third-party layer changes the object's byte layout in ways Adobe's
+// strict verifier flags as "document modified".
+async function decompressDeflate(bytes) {
+  try {
+    const buf = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer();
+    return new Uint8Array(buf);
+  } catch (_) {}
+  try {
+    const buf = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+    return new Uint8Array(buf);
+  } catch (_) { return null; }
+}
+function undoPngPredictor(data, columns) {
+  if (!(columns > 0)) return data;
+  const rowLen = columns + 1;
+  const rows = Math.floor(data.length / rowLen);
+  const out = new Uint8Array(rows * columns);
+  let prevRow = new Uint8Array(columns);
+  for (let r = 0; r < rows; r++) {
+    const tag = data[r * rowLen];
+    const row = data.subarray(r * rowLen + 1, r * rowLen + rowLen);
+    const outRow = out.subarray(r * columns, (r + 1) * columns);
+    switch (tag) {
+      case 0: outRow.set(row); break;                                                   // None
+      case 1: for (let c = 0; c < columns; c++) outRow[c] = (row[c] + (c ? outRow[c-1] : 0)) & 0xff; break;                                                   // Sub
+      case 2: for (let c = 0; c < columns; c++) outRow[c] = (row[c] + prevRow[c]) & 0xff; break;                                                              // Up
+      case 3: for (let c = 0; c < columns; c++) { const l = c ? outRow[c-1] : 0, u = prevRow[c]; outRow[c] = (row[c] + Math.floor((l + u) / 2)) & 0xff; } break; // Avg
+      case 4: for (let c = 0; c < columns; c++) {                                                                                                             // Paeth
+        const l = c ? outRow[c-1] : 0, u = prevRow[c], ul = c ? prevRow[c-1] : 0;
+        const p = l + u - ul, pa = Math.abs(p - l), pb = Math.abs(p - u), pc = Math.abs(p - ul);
+        outRow[c] = (row[c] + (pa <= pb && pa <= pc ? l : pb <= pc ? u : ul)) & 0xff;
+      } break;
+      default: outRow.set(row);
+    }
+    prevRow = outRow;
+  }
+  return out;
+}
+function readBigEndianField(bytes, off, len) {
+  if (len === 0) return 0;
+  let v = 0;
+  for (let i = 0; i < len; i++) v = (v << 8) | bytes[off + i];
+  return v >>> 0;
+}
+
+async function readXrefFully(bytes) {
+  const text = new TextDecoder('latin1').decode(bytes);
+  const entries = new Map(); // num -> {type,offset,gen} | {type:2,streamNum,indexInStream} | {type:0}
+  const seen = new Set();
+  let size = 0;
+  let hasStreams = false;
+  const lastSxr = text.lastIndexOf('startxref');
+  if (lastSxr < 0) return { entries, size, hasStreams };
+  const sxrMatch = text.substring(lastSxr).match(/startxref\s+(\d+)/);
+  if (!sxrMatch) return { entries, size, hasStreams };
+  async function walk(offset) {
+    if (seen.has(offset)) return;
+    seen.add(offset);
+    const head = text.substring(offset, offset + 4);
+    if (head === 'xref') {
+      const tIdx = text.indexOf('trailer', offset);
+      if (tIdx < 0) return;
+      const body = text.substring(offset + 4, tIdx).trim();
+      const lines = body.split(/\r?\n/);
+      let li = 0;
+      while (li < lines.length) {
+        const hdr = lines[li].trim().split(/\s+/);
+        if (hdr.length < 2 || !/^\d+$/.test(hdr[0])) break;
+        const first = parseInt(hdr[0], 10), count = parseInt(hdr[1], 10);
+        li++;
+        for (let j = 0; j < count && li < lines.length; j++, li++) {
+          const parts = lines[li].trim().split(/\s+/);
+          if (parts.length < 3) continue;
+          const num = first + j;
+          if (!entries.has(num)) {
+            if (parts[2] === 'n') entries.set(num, { type: 1, offset: parseInt(parts[0], 10), gen: parseInt(parts[1], 10) });
+            else entries.set(num, { type: 0 });
+          }
+        }
+      }
+      const dictStart = text.indexOf('<<', tIdx);
+      const dictText = extractBalancedDict(text, dictStart);
+      if (dictText) {
+        const sM = dictText.match(/\/Size\s+(\d+)/); if (sM) size = Math.max(size, +sM[1]);
+        const prevM = dictText.match(/\/Prev\s+(\d+)/); if (prevM) await walk(parseInt(prevM[1], 10));
+      }
+    } else {
+      hasStreams = true;
+      const objIdx = text.indexOf('obj', offset);
+      if (objIdx < 0) return;
+      const dictStart = text.indexOf('<<', objIdx);
+      const dictText = extractBalancedDict(text, dictStart);
+      if (!dictText) return;
+      const sM = dictText.match(/\/Size\s+(\d+)/); if (sM) size = Math.max(size, +sM[1]);
+      const wM = dictText.match(/\/W\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s*\]/); if (!wM) return;
+      const w = [+wM[1], +wM[2], +wM[3]];
+      const idxM = dictText.match(/\/Index\s*\[([\d\s]+)\]/);
+      const indexRanges = idxM
+        ? (() => { const n = idxM[1].trim().split(/\s+/).map(Number); const r = []; for (let i = 0; i < n.length; i += 2) r.push([n[i], n[i+1]]); return r; })()
+        : [[0, sM ? +sM[1] : 0]];
+      const streamIdx = text.indexOf('stream', dictStart + dictText.length);
+      if (streamIdx < 0) return;
+      let dataStart = streamIdx + 6;
+      if (bytes[dataStart] === 13) dataStart++;
+      if (bytes[dataStart] === 10) dataStart++;
+      const endIdx = text.indexOf('endstream', dataStart);
+      let dataEnd = endIdx;
+      while (dataEnd > dataStart && (bytes[dataEnd - 1] === 10 || bytes[dataEnd - 1] === 13)) dataEnd--;
+      let dataBytes = bytes.subarray(dataStart, dataEnd);
+      const filterM = dictText.match(/\/Filter\s*(\/\w+|\[\s*\/\w+\s*\])/);
+      if (filterM && /FlateDecode/.test(filterM[1])) {
+        dataBytes = await decompressDeflate(dataBytes);
+        if (!dataBytes) return;
+        const dpM = dictText.match(/\/DecodeParms\s*<<([\s\S]*?)>>/);
+        if (dpM) {
+          const pM = dpM[1].match(/\/Predictor\s+(\d+)/);
+          const cM = dpM[1].match(/\/Columns\s+(\d+)/);
+          const predictor = pM ? +pM[1] : 1;
+          const columns = cM ? +cM[1] : 1;
+          if (predictor >= 10 && predictor <= 15) dataBytes = undoPngPredictor(dataBytes, columns);
+        }
+      }
+      const entrySize = w[0] + w[1] + w[2];
+      let cursor = 0;
+      for (const [first, count] of indexRanges) {
+        for (let k = 0; k < count; k++) {
+          const num = first + k;
+          const type = w[0] === 0 ? 1 : readBigEndianField(dataBytes, cursor, w[0]);
+          const f1 = readBigEndianField(dataBytes, cursor + w[0], w[1]);
+          const f2 = readBigEndianField(dataBytes, cursor + w[0] + w[1], w[2]);
+          cursor += entrySize;
+          if (!entries.has(num)) {
+            if (type === 0) entries.set(num, { type: 0 });
+            else if (type === 1) entries.set(num, { type: 1, offset: f1, gen: f2 });
+            else if (type === 2) entries.set(num, { type: 2, streamNum: f1, indexInStream: f2 });
+          }
+        }
+      }
+      const prevM = dictText.match(/\/Prev\s+(\d+)/); if (prevM) await walk(parseInt(prevM[1], 10));
+    }
+  }
+  await walk(parseInt(sxrMatch[1], 10));
+  return { entries, size, hasStreams };
+}
+
+// Return the exact bytes of object N (from "N G obj" through "endobj\n") if
+// it's a top-level entry; return null if it lives in an object stream (which
+// requires re-composing the whole stream — falls back to pdf-lib).
+async function readOriginalObjectBytes(bytes, entries, num) {
+  const e = entries.get(num);
+  if (!e || e.type !== 1) return null;
+  const text = new TextDecoder('latin1').decode(bytes);
+  const start = e.offset;
+  const endIdx = text.indexOf('endobj', start);
+  if (endIdx < 0) return null;
+  let stop = endIdx + 6;
+  // Include trailing LF if present.
+  if (bytes[stop] === 10) stop++;
+  else if (bytes[stop] === 13) { stop++; if (bytes[stop] === 10) stop++; }
+  return bytes.subarray(start, stop);
+}
+
+// Splice new element refs into an existing /<field> array inside an object's
+// bytes. Preserves EVERY other byte. Handles three shapes:
+//   /<field> [ existing ]     — insert before the closing ]
+//   /<field> N G R            — indirect reference; caller resolves + splices target
+//   missing                    — insert /<field> [refs] before closing >>
+// Returns { bytes | null, indirectTarget: null | {num, gen} }.
+function spliceArrayField(objBytes, fieldName, refStrings) {
+  const text = new TextDecoder('latin1').decode(objBytes);
+  const nameRe = new RegExp('/' + fieldName + '(?=[\\s/\\[<])', 'g');
+  // Find the dict's outer <<...>>; we only match inside it.
+  const outerStart = text.indexOf('<<');
+  if (outerStart < 0) return { bytes: null, indirectTarget: null };
+  const outerDict = extractBalancedDict(text, outerStart);
+  if (!outerDict) return { bytes: null, indirectTarget: null };
+  const outerEnd = outerStart + outerDict.length;
+  let m;
+  while ((m = nameRe.exec(text)) !== null) {
+    if (m.index < outerStart || m.index >= outerEnd) continue;
+    // Only match a TOP-LEVEL field of the outer dict. depth == 1 means
+    // we're inside the outer <<...>> but not nested any deeper.
+    let depth = 0;
+    for (let i = outerStart; i < m.index; i++) {
+      if (text[i] === '<' && text[i + 1] === '<') { depth++; i++; }
+      else if (text[i] === '>' && text[i + 1] === '>') { depth--; i++; }
+    }
+    if (depth !== 1) continue;                             // not at top level of the outer dict
+    // Skip whitespace after the name to find the value shape.
+    let j = m.index + m[0].length;
+    while (j < text.length && isWs(text[j])) j++;
+    if (text[j] === '[') {
+      // Find matching ']', respecting nesting.
+      let bd = 0;
+      for (let i = j; i < text.length; i++) {
+        if (text[i] === '[') bd++;
+        else if (text[i] === ']') { bd--; if (bd === 0) {
+          const before = text.substring(0, i);
+          const after = text.substring(i);
+          const sep = /\S/.test(text[i - 1]) ? ' ' : '';
+          const inject = sep + refStrings.join(' ');
+          return { bytes: new TextEncoder().encode(before + inject + after), indirectTarget: null };
+        } }
+      }
+      return { bytes: null, indirectTarget: null };
+    }
+    // Indirect ref "N G R"?
+    const refM = text.substring(j).match(/^(\d+)\s+(\d+)\s+R\b/);
+    if (refM) return { bytes: null, indirectTarget: { num: +refM[1], gen: +refM[2] } };
+    return { bytes: null, indirectTarget: null };
+  }
+  // Field absent — insert before the closing >>.
+  const closingRel = outerDict.lastIndexOf('>>');
+  if (closingRel < 0) return { bytes: null, indirectTarget: null };
+  const closingAbs = outerStart + closingRel;
+  const before = text.substring(0, closingAbs);
+  const after = text.substring(closingAbs);
+  const sep = /\S/.test(text[closingAbs - 1]) ? ' ' : '';
+  const inject = `${sep}/${fieldName} [${refStrings.join(' ')}] `;
+  return { bytes: new TextEncoder().encode(before + inject + after), indirectTarget: null };
+}
+
+// Ensure /SigFlags integer is at least the given bits; splice in place if the
+// digit width lets us; otherwise emit a byte-appended replacement respecting
+// the outer dict layout. Returns the (possibly new) bytes.
+function ensureSigFlags(objBytes, requiredBits) {
+  const text = new TextDecoder('latin1').decode(objBytes);
+  const m = text.match(/\/SigFlags\s+(\d+)/);
+  if (m) {
+    const cur = parseInt(m[1], 10);
+    const next = cur | requiredBits;
+    if (cur === next) return objBytes;
+    const oldStr = m[0];
+    const newStr = '/SigFlags ' + next;
+    // If digits differ in width, we might shift bytes — that's OK, we're
+    // still doing a minimal semantic change (updating a single value).
+    return new TextEncoder().encode(text.replace(oldStr, newStr));
+  }
+  // Missing — add /SigFlags requiredBits before closing >>.
+  const outerStart = text.indexOf('<<');
+  const outerDict = extractBalancedDict(text, outerStart);
+  if (!outerDict) return objBytes;
+  const closingAbs = outerStart + outerDict.lastIndexOf('>>');
+  const before = text.substring(0, closingAbs);
+  const after = text.substring(closingAbs);
+  return new TextEncoder().encode(before + ` /SigFlags ${requiredBits} ` + after);
+}
+
 function parsePdfForIncremental(bytes) {
   const text = new TextDecoder('latin1').decode(bytes);
 
@@ -6042,13 +6295,18 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   const sigPlacements = placements.filter(p => p.type === 'digital');
   if (sigPlacements.length === 0) throw new Error('Incremental signing needs at least one signature placement');
 
-  // Load with pdf-lib so we can read objects regardless of the xref form
-  // (classical, stream, or hybrid) and regardless of whether individual
-  // objects live inside object streams. We only WRITE our incremental
-  // append as raw text — the standards allow either form there.
+  // Load with pdf-lib for object graph lookups (chain-of-refs, page tree,
+  // AcroForm entry) — works regardless of xref form or object-stream use.
   const pdfDoc = await PDFDocument.load(bytes);
   const ctx = pdfDoc.context;
   const pages = pdfDoc.getPages();
+
+  // ALSO parse the raw xref so we can read back an object's ORIGINAL bytes
+  // and byte-preserve-splice into its /Fields / /Annots array. That's what
+  // makes DocMDP P=3 survive Adobe's strict verifier — a re-serialised
+  // AcroForm/Page dict changes byte layout in ways that read as
+  // "document modified" even when the modification is semantically an append.
+  const xref = await readXrefFully(bytes);
 
   // Next-available object number: use /Size from the latest trailer (per
   // PDF spec = 1 + highest object number in use), sanity-max with pdf-lib's
@@ -6133,47 +6391,110 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     `${sigFieldNum} 0 obj\n<< /FT /Sig /T (${sigFieldName}) /V ${sigDictNum} 0 R /Kids [${kidsStr}] >>\nendobj\n`
   });
 
-  // AcroForm — read via pdf-lib, mutate, emit a new revision. Catalog gets a
-  // new revision too if AcroForm didn't exist yet or was inline.
+  // AcroForm update — byte-preserving splice first, pdf-lib re-serialise as
+  // a fallback for objects we couldn't slice out of the original bytes
+  // (unusual xref/stream layouts). The splice path is what keeps DocMDP
+  // P=3 valid under Adobe strict verification.
   const acroFormKey = PDFName.of('AcroForm');
   const fieldsKey   = PDFName.of('Fields');
   const sigFlagsKey = PDFName.of('SigFlags');
   const annotsKey   = PDFName.of('Annots');
-  let acroFormEntry = pdfDoc.catalog.get(acroFormKey);
-  let acroFormObj = null, acroFormNum = null, catalogNeedsUpdate = false;
-  if (acroFormEntry instanceof PDFRef) {
-    acroFormObj = ctx.lookup(acroFormEntry);
-    acroFormNum = acroFormEntry.objectNumber;
-  } else if (acroFormEntry) {
-    acroFormObj = acroFormEntry;                // inline dict
-    acroFormNum = alloc();
-    catalogNeedsUpdate = true;
-  } else {
-    acroFormNum = alloc();
-    catalogNeedsUpdate = true;
-  }
-  if (acroFormObj) {
-    let fields = acroFormObj.get(fieldsKey);
-    if (fields instanceof PDFRef) fields = ctx.lookup(fields);
-    if (!(fields instanceof PDFArray)) {
-      fields = ctx.obj([]);
-      acroFormObj.set(fieldsKey, fields);
+
+  async function emitByteSplicedFieldsAppend(objNum, fieldRefStrings) {
+    // Try to splice new field refs into this object's /Fields array without
+    // touching any other byte. If /Fields is an indirect ref to a separate
+    // array object, resolve it and splice INTO that array object instead
+    // (leaving the AcroForm dict entirely untouched — perfectly DocMDP-safe).
+    const orig = await readOriginalObjectBytes(bytes, xref.entries, objNum);
+    if (!orig) return null;
+    const spliced = spliceArrayField(orig, 'Fields', fieldRefStrings);
+    if (spliced.bytes) {
+      // Also ensure /SigFlags |= 3 in the SAME object; splice minimally.
+      const finalBytes = ensureSigFlags(spliced.bytes, 3);
+      return finalBytes;
     }
-    fields.push(PDFRef.of(sigFieldNum, 0));
-    const flagsObj = acroFormObj.get(sigFlagsKey);
-    const curFlags = flagsObj && typeof flagsObj.value === 'function' ? flagsObj.value()
-                   : flagsObj && typeof flagsObj.numberValue === 'number' ? flagsObj.numberValue : 0;
-    acroFormObj.set(sigFlagsKey, PDFNumber.of(curFlags | 3));
-    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n${acroFormObj.toString()}\nendobj\n` });
-  } else {
-    objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n<< /Fields [${sigFieldNum} 0 R] /SigFlags 3 >>\nendobj\n` });
-  }
-  if (catalogNeedsUpdate) {
-    pdfDoc.catalog.set(acroFormKey, PDFRef.of(acroFormNum, 0));
-    objBodies.push({ num: parsed.rootRef.num, body: `${parsed.rootRef.num} 0 obj\n${pdfDoc.catalog.toString()}\nendobj\n` });
+    if (spliced.indirectTarget) {
+      const targetNum = spliced.indirectTarget.num;
+      const targetOrig = await readOriginalObjectBytes(bytes, xref.entries, targetNum);
+      if (!targetOrig) return null;
+      // The target object is "N G obj\n[ ... ]\nendobj". Splice INTO its inner array.
+      const targetText = new TextDecoder('latin1').decode(targetOrig);
+      // Find outer [...] within.
+      const bracketOpen = targetText.indexOf('[');
+      const bracketClose = targetText.lastIndexOf(']');
+      if (bracketOpen < 0 || bracketClose < 0 || bracketOpen >= bracketClose) return null;
+      const before = targetText.substring(0, bracketClose);
+      const after = targetText.substring(bracketClose);
+      const sep = /\S/.test(targetText[bracketClose - 1]) ? ' ' : '';
+      const newTargetBytes = new TextEncoder().encode(before + sep + fieldRefStrings.join(' ') + after);
+      // Emit BOTH: the untouched AcroForm dict (no change → we DON'T re-emit
+      // it) and the modified fields-array object.
+      return { splitEmission: { targetNum, targetBytes: newTargetBytes } };
+    }
+    return null;
   }
 
-  // Page updates — append widget refs to each affected page's /Annots.
+  let acroFormEntry = pdfDoc.catalog.get(acroFormKey);
+  let acroFormNum = null, catalogNeedsUpdate = false;
+  const newFieldRefs = [`${sigFieldNum} 0 R`];
+  let byteSpliceUsed = false;
+
+  if (acroFormEntry instanceof PDFRef) {
+    acroFormNum = acroFormEntry.objectNumber;
+    const spliceResult = await emitByteSplicedFieldsAppend(acroFormNum, newFieldRefs);
+    if (spliceResult instanceof Uint8Array) {
+      // Splice succeeded on the AcroForm dict itself.
+      objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n${new TextDecoder('latin1').decode(spliceResult).replace(/^\s*\d+\s+\d+\s+obj\s*/, '').replace(/\s*endobj\s*$/, '')}\nendobj\n` });
+      byteSpliceUsed = true;
+    } else if (spliceResult && spliceResult.splitEmission) {
+      // Splice succeeded on the target /Fields array object.
+      const { targetNum, targetBytes } = spliceResult.splitEmission;
+      const inner = new TextDecoder('latin1').decode(targetBytes).replace(/^\s*\d+\s+\d+\s+obj\s*/, '').replace(/\s*endobj\s*$/, '');
+      objBodies.push({ num: targetNum, body: `${targetNum} 0 obj\n${inner}\nendobj\n` });
+      // AcroForm dict itself may still need /SigFlags update — but a
+      // properly-authored PDF that has a certification sig already has
+      // /SigFlags ≥ 3, so leave it alone unless we have to.
+      byteSpliceUsed = true;
+    }
+  }
+
+  if (!byteSpliceUsed) {
+    // Fallback: pdf-lib re-serialise (breaks DocMDP P=3 in strict Adobe
+    // verification, but keeps the sig otherwise valid for viewers that
+    // don't strict-check DocMDP).
+    let acroFormObj = null;
+    if (acroFormEntry instanceof PDFRef) {
+      acroFormObj = ctx.lookup(acroFormEntry);
+      acroFormNum = acroFormEntry.objectNumber;
+    } else if (acroFormEntry) {
+      acroFormObj = acroFormEntry;
+      acroFormNum = alloc();
+      catalogNeedsUpdate = true;
+    } else {
+      acroFormNum = alloc();
+      catalogNeedsUpdate = true;
+    }
+    if (acroFormObj) {
+      let fields = acroFormObj.get(fieldsKey);
+      if (fields instanceof PDFRef) fields = ctx.lookup(fields);
+      if (!(fields instanceof PDFArray)) { fields = ctx.obj([]); acroFormObj.set(fieldsKey, fields); }
+      fields.push(PDFRef.of(sigFieldNum, 0));
+      const flagsObj = acroFormObj.get(sigFlagsKey);
+      const curFlags = flagsObj && typeof flagsObj.value === 'function' ? flagsObj.value()
+                     : flagsObj && typeof flagsObj.numberValue === 'number' ? flagsObj.numberValue : 0;
+      acroFormObj.set(sigFlagsKey, PDFNumber.of(curFlags | 3));
+      objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n${acroFormObj.toString()}\nendobj\n` });
+    } else {
+      objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n<< /Fields [${sigFieldNum} 0 R] /SigFlags 3 >>\nendobj\n` });
+    }
+    if (catalogNeedsUpdate) {
+      pdfDoc.catalog.set(acroFormKey, PDFRef.of(acroFormNum, 0));
+      objBodies.push({ num: parsed.rootRef.num, body: `${parsed.rootRef.num} 0 obj\n${pdfDoc.catalog.toString()}\nendobj\n` });
+    }
+  }
+
+  // Page updates — append widget refs to each affected page's /Annots via
+  // the same byte-splice-first, pdf-lib-fallback pattern.
   const widgetsByPage = new Map();
   for (const w of widgetObjs) {
     if (!widgetsByPage.has(w.pageIndex)) widgetsByPage.set(w.pageIndex, []);
@@ -6181,16 +6502,43 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   }
   for (const [pageIdx, wNums] of widgetsByPage) {
     const page = pages[pageIdx];
-    const pageObj = page.node;
-    let annots = pageObj.get(annotsKey);
-    if (annots instanceof PDFRef) annots = ctx.lookup(annots);
-    if (!(annots instanceof PDFArray)) {
-      annots = ctx.obj([]);
-      pageObj.set(annotsKey, annots);
-    }
-    for (const wNum of wNums) annots.push(PDFRef.of(wNum, 0));
     const pageRef = page.ref;
-    objBodies.push({ num: pageRef.objectNumber, body: `${pageRef.objectNumber} 0 obj\n${pageObj.toString()}\nendobj\n` });
+    const widgetRefs = wNums.map(n => `${n} 0 R`);
+    let pageSpliced = false;
+    const orig = await readOriginalObjectBytes(bytes, xref.entries, pageRef.objectNumber);
+    if (orig) {
+      const spliced = spliceArrayField(orig, 'Annots', widgetRefs);
+      if (spliced.bytes) {
+        const inner = new TextDecoder('latin1').decode(spliced.bytes).replace(/^\s*\d+\s+\d+\s+obj\s*/, '').replace(/\s*endobj\s*$/, '');
+        objBodies.push({ num: pageRef.objectNumber, body: `${pageRef.objectNumber} 0 obj\n${inner}\nendobj\n` });
+        pageSpliced = true;
+      } else if (spliced.indirectTarget) {
+        // /Annots is an indirect array — splice into it.
+        const targetOrig = await readOriginalObjectBytes(bytes, xref.entries, spliced.indirectTarget.num);
+        if (targetOrig) {
+          const targetText = new TextDecoder('latin1').decode(targetOrig);
+          const bracketClose = targetText.lastIndexOf(']');
+          if (bracketClose > 0) {
+            const before = targetText.substring(0, bracketClose);
+            const after = targetText.substring(bracketClose);
+            const sep = /\S/.test(targetText[bracketClose - 1]) ? ' ' : '';
+            const newTargetBytes = before + sep + widgetRefs.join(' ') + after;
+            const inner = newTargetBytes.replace(/^\s*\d+\s+\d+\s+obj\s*/, '').replace(/\s*endobj\s*$/, '');
+            objBodies.push({ num: spliced.indirectTarget.num, body: `${spliced.indirectTarget.num} 0 obj\n${inner}\nendobj\n` });
+            pageSpliced = true;
+          }
+        }
+      }
+    }
+    if (!pageSpliced) {
+      // Fallback: pdf-lib re-serialise of the whole page dict.
+      const pageObj = page.node;
+      let annots = pageObj.get(annotsKey);
+      if (annots instanceof PDFRef) annots = ctx.lookup(annots);
+      if (!(annots instanceof PDFArray)) { annots = ctx.obj([]); pageObj.set(annotsKey, annots); }
+      for (const wNum of wNums) annots.push(PDFRef.of(wNum, 0));
+      objBodies.push({ num: pageRef.objectNumber, body: `${pageRef.objectNumber} 0 obj\n${pageObj.toString()}\nendobj\n` });
+    }
   }
 
   // ── Assemble the incremental append ──
