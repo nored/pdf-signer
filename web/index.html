@@ -4278,14 +4278,6 @@ function extractSignerEncryptedDigest(p7) {
 //
 // Returns { cmsAsn1, sigBytesForTsa } — the ASN.1 tree of the outer
 // ContentInfo plus the raw RSA signature bytes (for timestamping).
-// Number of bytes a DER length header occupies given the encoded string:
-// 1 for short-form (< 128), 2..5 for long-form (0x81..0x84 + length bytes).
-function derLenHeaderBytes(encoded) {
-  const b0 = encoded.charCodeAt(1);
-  if (b0 < 0x80) return 1;
-  return 1 + (b0 & 0x7f);
-}
-
 function buildCmsSignedData({ signedBytes, cert, key, now, chain }) {
   const asn1 = forge.asn1;
   const Class = asn1.Class, Type = asn1.Type;
@@ -4373,10 +4365,16 @@ function buildCmsSignedData({ signedBytes, cert, key, now, chain }) {
   const issuerAsn1 = tbs.value[idx + 2];     // Name (SEQUENCE OF RDN)
   const sid = seq([ issuerAsn1, serialAsn1 ]);
 
-  // Wrap the pre-computed inner bytes as an asn1 node with composed:false
-  // so forge emits them verbatim (no re-serialisation, no re-sorting).
-  const innerBytes = attrsSetDer.slice(1 + derLenHeaderBytes(attrsSetDer));
-  const signedAttrsField = { tagClass: Class.CONTEXT_SPECIFIC, type: 0, constructed: true, composed: false, value: innerBytes };
+  // Build the [0] IMPLICIT signedAttrs field with the SAME inner bytes as the
+  // SET we hashed — flip the leading tag from 0x31 (UNIVERSAL SET
+  // constructed) to 0xA0 (CONTEXT-SPECIFIC [0] constructed), then re-parse
+  // via forge.asn1.fromDer so we get a properly-tagged constructed asn1
+  // node. This guarantees byte-identity between hash-input and on-wire
+  // field. (An earlier attempt used a composed:false raw-value node, but
+  // forge emitted its tag as 0x80 primitive instead of 0xA0 constructed —
+  // Adobe rejected the sig with "signature contains errors".)
+  const signedAttrsFieldDer = '\xa0' + attrsSetDer.slice(1);
+  const signedAttrsField = asn1.fromDer(signedAttrsFieldDer);
 
   const signerInfo = seq([
     intVal(1),          // version
