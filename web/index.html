@@ -4216,17 +4216,23 @@ function parseTimestampToken(tokenAsn1, sigBinaryString) {
   }
   const genTimeStr = tstInfo.value[4].value; // GENERALIZED TIME "YYYYMMDDHHMMSSZ"
   const time = parseGeneralizedTime(genTimeStr);
-  // TSA subject (best-effort): pull the CN from the first cert in the token, if any.
+  // TSA cert chain (best-effort): pull ALL certs from the token so the
+  // verifier can drill down. Leaf first, then intermediates, then root.
   let subject = null;
+  let chainCerts = [];
   try {
     const certsField = signedData.value.find(v => v.tagClass === asn1.Class.CONTEXT_SPECIFIC && v.type === 0);
-    if (certsField && certsField.value[0]) {
-      const c = forge.pki.certificateFromAsn1(certsField.value[0]);
-      const cnField = c.subject.getField('CN');
-      if (cnField) subject = cnField.value;
+    if (certsField && certsField.value.length) {
+      for (const cAsn1 of certsField.value) {
+        try { chainCerts.push(forge.pki.certificateFromAsn1(cAsn1)); } catch (_) {}
+      }
+      if (chainCerts[0]) {
+        const cnField = chainCerts[0].subject.getField('CN');
+        if (cnField) subject = cnField.value;
+      }
     }
   } catch (_) {}
-  return { time, ok, subject };
+  return { time, ok, subject, chainCerts };
 }
 function parseGeneralizedTime(s) {
   // "YYYYMMDDHHMMSS[.fff]Z" or with +hhmm offset.
@@ -7414,7 +7420,7 @@ function verifyPdfSignatures(bytes) {
       const totalCovered = covered >= bytes.length - 3; // small trailing-whitespace tolerance
 
       // 4. RFC 3161 timestamp token (unauthenticated attribute [1] IMPLICIT SET).
-      let tsaTime = null, tsaOk = false, tsaSubject = null;
+      let tsaTime = null, tsaOk = false, tsaSubject = null, tsaChainCerts = [];
       try {
         for (const v of signer.value) {
           if (v.tagClass !== forge.asn1.Class.CONTEXT_SPECIFIC || v.type !== 1) continue;
@@ -7423,7 +7429,10 @@ function verifyPdfSignatures(bytes) {
             if (oid !== OID_TIMESTAMP_TOKEN) continue;
             const token = attr.value[1].value[0]; // ContentInfo (SignedData carrying TSTInfo)
             const parsed = parseTimestampToken(token, encryptedDigest);
-            if (parsed) { tsaTime = parsed.time; tsaOk = parsed.ok; tsaSubject = parsed.subject; }
+            if (parsed) {
+              tsaTime = parsed.time; tsaOk = parsed.ok; tsaSubject = parsed.subject;
+              tsaChainCerts = parsed.chainCerts || [];
+            }
           }
         }
       } catch (e) { console.warn('timestamp token parse failed:', e.message); }
@@ -7437,7 +7446,7 @@ function verifyPdfSignatures(bytes) {
         cn: cn ? cn.value : '(unknown)',
         email: em ? em.value : '',
         signingTime: sigTime,
-        tsaTime, tsaOk, tsaSubject,
+        tsaTime, tsaOk, tsaSubject, tsaChainCerts,
         byteRange: br,
         digestMatch, rsaOk,
         totalCovered,
@@ -7597,17 +7606,26 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
     return out.length ? out : [''];
   };
 
+  // While y is above the QR bottom (only on page 1), shrink the text width
+  // so headings and titles don't run into the top-right QR block.
+  let qrExclusion = null;   // set once QR is drawn: { yBottom, leftEdge }
   const drawLine = (text, opts = {}) => {
     const font = opts.bold ? helvB : (opts.mono ? mono : helv);
     const size = opts.size || 11;
     const color = opts.color || rgb(0.1, 0.1, 0.1);
-    const maxW = pageW - marginX * 2;
-    const lines = wrapLines(text, font, size, maxW);
     const step = size * 1.35;
-    for (const l of lines) {
+    for (;;) {
+      const inQr = qrExclusion && y > qrExclusion.yBottom;
+      const maxW = inQr ? (qrExclusion.leftEdge - marginX - 8) : (pageW - marginX * 2);
+      const lines = wrapLines(text, font, size, maxW);
+      // Draw one line at a time so we recompute maxW as y crosses the QR bottom.
+      const first = lines[0];
       ensureRoom(step);
-      page.drawText(l, { x: marginX, y, size, font, color });
+      page.drawText(first, { x: marginX, y, size, font, color });
       y -= step;
+      if (lines.length <= 1) return;
+      // Re-wrap remaining text against the (possibly larger) new maxW.
+      text = lines.slice(1).join(' ');
     }
   };
   const gap = (n = 8) => { y -= n; };
@@ -7620,7 +7638,8 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
     const keyStr = String(k) + ':';
     const keyW = Math.max(kf.widthOfTextAtSize(keyStr, size) + 8, 140);
     const valX = marginX + keyW;
-    const valMaxW = pageW - marginX - valX;
+    const rightEdge = (qrExclusion && y > qrExclusion.yBottom) ? qrExclusion.leftEdge - 8 : pageW - marginX;
+    const valMaxW = rightEdge - valX;
     const lines = wrapLines(v == null ? '' : v, vf, size, valMaxW);
     ensureRoom(step * lines.length);
     page.drawText(keyStr, { x: marginX, y, size, font: kf, color: rgb(0.35, 0.35, 0.35) });
@@ -7629,6 +7648,24 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
       y -= step;
     }
   };
+
+  // Top-right QR pointing back at the verifier URL. A scanner sends the
+  // recipient right to the live verifier — so a printed receipt is not a
+  // dead artifact, it's a paper handle on the live check.
+  const qrSize = 90;
+  const qrX = pageW - marginX - qrSize;
+  const qrY = pageH - marginY - qrSize;
+  try {
+    drawQrCode(page, verifierUrl, qrX, qrY, qrSize);
+    // Clickable link on the QR rectangle for desktop viewers.
+    addUriLinkAnnotation(page, [qrX, qrY, qrX + qrSize, qrY + qrSize], verifierUrl);
+    // Small caption below.
+    page.drawText('Scan to re-verify live', {
+      x: qrX, y: qrY - 10, size: 8, font: helv, color: rgb(0.4, 0.4, 0.4),
+    });
+    // Reserve the QR area so text above it doesn't overrun.
+    qrExclusion = { yBottom: qrY - 18, leftEdge: qrX };
+  } catch (_) { /* QR is nice-to-have; skip on failure */ }
 
   drawLine('Verification receipt', { bold: true, size: 20 });
   drawLine('pdf-signer', { size: 9, color: rgb(0.5, 0.5, 0.5) });
@@ -8163,6 +8200,15 @@ async function runAutoVerifyFromHash() {
                     : '';
     const trustCell = `${trustBase}${ocspBadge}<br><a href="#" id="chainDrilldown" style="color:var(--accent); font-size:11px; text-decoration:none">→ inspect certificate chain (${(first.chainCerts||[]).length} cert${(first.chainCerts||[]).length===1?'':'s'})</a>`;
 
+    const tsaCell = first.tsaTime
+      ? `<b>${esc(fmtSigningTime(first.tsaTime))}</b>` +
+        (first.tsaOk ? ' <span style="color:var(--good)">(hash matches)</span>' : ' <span style="color:var(--danger)">(hash MISMATCH)</span>') +
+        (first.tsaSubject ? '<br><span style="color:var(--muted); font-size:11px">TSA: ' + esc(first.tsaSubject) + '</span>' : '') +
+        (first.tsaChainCerts && first.tsaChainCerts.length
+          ? `<br><a href="#" id="tsaChainDrilldown" style="color:var(--accent); font-size:11px; text-decoration:none">→ inspect TSA chain (${first.tsaChainCerts.length} cert${first.tsaChainCerts.length===1?'':'s'})</a>`
+          : '')
+      : '<span style="color:var(--muted)">(none — signing time is only self-claimed)</span>';
+
     const fileHash = await sha256Hex(plaintext);
 
     render(state, {
@@ -8171,6 +8217,7 @@ async function runAutoVerifyFromHash() {
         'Result':          `<b style="color:${state === 'valid' ? 'var(--good)' : state === 'modified' ? '#b57920' : 'var(--danger)'};">${state === 'modified' ? 'VOIDED' : state.toUpperCase()}</b>`,
         'Signer (in cert)': first.cn ? `<b>${esc(first.cn)}</b>${first.email ? ' &lt;' + esc(first.email) + '&gt;' : ''}` : '',
         'Signed at':        first.signingTime ? esc(fmtSigningTime(first.signingTime)) : '',
+        'TSA (trusted time)': tsaCell,
         'Cert SHA-1':       first.certFp ? `<code>${esc(first.certFp)}</code>` : '',
         'Trust':            trustCell,
         'CSV cross-check':  csvRow,
@@ -8208,6 +8255,11 @@ async function runAutoVerifyFromHash() {
         // Trust cell drilldown.
         const chainLink = r.querySelector('#chainDrilldown');
         if (chainLink) chainLink.onclick = ev => { ev.preventDefault(); showCertChainModal(first); };
+        const tsaChainLink = r.querySelector('#tsaChainDrilldown');
+        if (tsaChainLink) tsaChainLink.onclick = ev => {
+          ev.preventDefault();
+          showCertChainModal({ chainCerts: first.tsaChainCerts });
+        };
 
         // Multi-sig timeline + per-sig diff buttons.
         if (results.length > 1) {
