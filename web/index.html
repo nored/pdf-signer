@@ -623,12 +623,16 @@
   .modal p { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
   .modal .buttons { display: flex; gap: 8px; margin-top: 14px; }
   .modal .buttons button { margin-top: 0; }
-  .toast {
+  #toastStack {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column-reverse; align-items: center;
+    gap: 6px; z-index: 200; pointer-events: none; max-width: 80%;
+  }
+  .toast {
     background: var(--panel); border: 1px solid var(--border);
     padding: 10px 16px; border-radius: 8px;
     box-shadow: var(--shadow); font-size: 13px;
-    z-index: 200; max-width: 80%; text-align: center;
+    text-align: center; pointer-events: auto;
   }
   .toast.err { border-color: var(--danger); color: var(--danger); }
   .toast.ok  { border-color: var(--good); color: var(--good); }
@@ -1082,10 +1086,16 @@ const $ = id => document.getElementById(id);
 const dec = new TextDecoder('latin1');
 
 function toast(msg, kind='') {
+  let stack = document.getElementById('toastStack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'toastStack';
+    document.body.appendChild(stack);
+  }
   const el = document.createElement('div');
   el.className = 'toast ' + kind;
   el.textContent = msg;
-  document.body.appendChild(el);
+  stack.appendChild(el);
   setTimeout(() => el.remove(), 4200);
 }
 function u8ToBinStr(u8) {
@@ -4040,13 +4050,16 @@ async function signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl,
   p7.addSigner({
     key, certificate: cert,
     digestAlgorithm: forge.pki.oids.sha256,
+    // NOTE: forge.pkcs7's _attributeToAsn1 only serializes contentType,
+    // messageDigest, and signingTime. For any other OID (including
+    // SigningCertificateV2) it emits an empty SET, which breaks strict
+    // CAdES/PAdES validation in Adobe. Until we hand-roll SignerInfo,
+    // stay on plain PKCS#7 so Adobe validates as a legacy sig and
+    // recognises TSA countersignatures properly.
     authenticatedAttributes: [
       { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
       { type: forge.pki.oids.messageDigest },
       { type: forge.pki.oids.signingTime, value: now },
-      // SigningCertificateV2 — PAdES-B-B baseline. Binds the signer's cert
-      // identity into the signed attributes so it can't be swapped out.
-      { type: OID_SIGNING_CERT_V2, value: buildSigningCertV2Value(cert) },
     ],
   });
   p7.sign({ detached: true });
@@ -5255,10 +5268,13 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   const sigDictShape = {
     Type: 'Sig',
     Filter: 'Adobe.PPKLite',
-    // PAdES-B-B baseline SubFilter (ETSI EN 319 142). Adobe recognises this
-    // as a PAdES signature and unlocks the proper trust checks; older
-    // adbe.pkcs7.detached triggers a "legacy" downgrade in Adobe's UI.
-    SubFilter: 'ETSI.CAdES.detached',
+    // Plain PKCS#7 detached — Adobe validates this cleanly and correctly
+    // reads a Sectigo/DigiCert TSA countersignature. Switching to
+    // /ETSI.CAdES.detached would claim strict PAdES/CAdES compliance,
+    // which requires a valid SigningCertificateV2 attribute; forge's
+    // pkcs7 module can't emit that, so the CAdES claim would be broken
+    // and Adobe would reject both the signature and its timestamp.
+    SubFilter: 'adbe.pkcs7.detached',
     ByteRange: [PDFNumber.of(0), PDFNumber.of(9999999999),
                 PDFNumber.of(9999999999), PDFNumber.of(9999999999)],
     Contents: PDFHexString.of('0'.repeat(SIG_PLACEHOLDER_LEN)),
@@ -6393,7 +6409,7 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // Sig dict + sig field bodies.
   const certUrlLine = certVaultUrl ? `   /PdfsignerCertUrl (${escapePdfString(certVaultUrl)})\n` : '';
   objBodies.push({ num: sigDictNum, body:
-    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached\n` +
+    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n` +
     `   /ByteRange [0 9999999999 9999999999 9999999999]\n` +
     `   /Contents <${'0'.repeat(SIG_PLACEHOLDER_LEN)}>\n` +
     `   /M (${pdfDate(now)})\n   /Name (${escapePdfString(meta.name)})\n` +
