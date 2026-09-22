@@ -931,9 +931,9 @@
           <input type="datetime-local" id="signDate" step="1">
           <label>After signing</label>
           <div class="radio-group" id="lockmodeGroup">
-            <label><input type="radio" name="lockmode" value="certify" checked> Certify — allow further signatures (recommended for the first signer in a multi-signer flow)</label>
+            <label><input type="radio" name="lockmode" value="void" checked> No certification — approval signature (recommended for multi-party workflows where downstream signers may use other PDF tools)</label>
             <label><input type="radio" name="lockmode" value="locked"> Lock document (no further changes, no further signatures)</label>
-            <label><input type="radio" name="lockmode" value="void"> No certification (any edit voids the signature)</label>
+            <label><input type="radio" name="lockmode" value="certify"> Certify with room for further signatures (DocMDP P=3) — only safe when every downstream tool limits itself to annotations and signatures. Adobe / DocuSign / 3-Heights and most web-based signing services stamp onto page content, which violates P=3 and will invalidate this signature.</label>
           </div>
           <div id="alreadySignedNote" class="hint" style="display:none; margin-top:6px; color:#b57920">
             This PDF already has a valid signature. Your signature will be added as an <b>approval signature</b> in an incremental update, so the existing signature stays valid. Certification / locking is not available on follow-up signatures.
