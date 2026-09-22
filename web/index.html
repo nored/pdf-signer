@@ -696,6 +696,14 @@
   details.collapse[open] > summary::before { content: "▾"; }
   .lock-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 13px; }
   .lock-row input { width: auto; }
+  .info-hint {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; border-radius: 50%;
+    background: var(--muted); color: #fff;
+    font-size: 10px; font-style: normal; font-weight: 700;
+    cursor: help; user-select: none; flex-shrink: 0;
+  }
+  .info-hint:hover { background: var(--accent); }
 
   /* Clean, focused verifier landing (shown when the URL carries #v=…) */
   .verifier-root {
@@ -931,24 +939,32 @@
           <input type="datetime-local" id="signDate" step="1">
           <label>After signing</label>
           <div class="radio-group" id="lockmodeGroup">
-            <label><input type="radio" name="lockmode" value="void" checked> No certification — approval signature (recommended for multi-party workflows where downstream signers may use other PDF tools)</label>
-            <label><input type="radio" name="lockmode" value="locked"> Lock document (no further changes, no further signatures)</label>
-            <label><input type="radio" name="lockmode" value="certify"> Certify with room for further signatures (DocMDP P=3) — only safe when every downstream tool limits itself to annotations and signatures. Adobe / DocuSign / 3-Heights and most web-based signing services stamp onto page content, which violates P=3 and will invalidate this signature.</label>
+            <label title="Plain approval signature, no DocMDP. Recommended for multi-party workflows where downstream signers may use other PDF tools. Each signature covers its own byte range independently.">
+              <input type="radio" name="lockmode" value="void" checked> No certification <span class="info-hint" title="Plain approval signature, no DocMDP. Recommended for multi-party workflows where downstream signers may use other PDF tools.">ⓘ</span>
+            </label>
+            <label title="DocMDP P=1: no further changes, no further signatures. Use when you are the final signer.">
+              <input type="radio" name="lockmode" value="locked"> Lock document <span class="info-hint" title="DocMDP P=1: no further changes, no further signatures. Use when you are the final signer.">ⓘ</span>
+            </label>
+            <label title="DocMDP P=3: allows form-fill, annotations, and further signatures. Only safe when every downstream tool restricts itself to those. Adobe Reader / DocuSign / 3-Heights and most web-based signing services stamp onto page content, which violates P=3 and will invalidate this signature.">
+              <input type="radio" name="lockmode" value="certify"> Certify (P=3) <span class="info-hint" title="DocMDP P=3: only safe when every downstream signer uses a tool that limits itself to annotations and signatures. Most third-party PDF tools stamp onto page content and will invalidate this signature.">ⓘ</span>
+            </label>
           </div>
           <div id="alreadySignedNote" class="hint" style="display:none; margin-top:6px; color:#b57920">
-            This PDF already has a valid signature. Your signature will be added as an <b>approval signature</b> in an incremental update, so the existing signature stays valid. Certification / locking is not available on follow-up signatures.
+            PDF already signed. Adding your signature as an incremental approval sig — certification/locking unavailable on follow-ups.
           </div>
 
           <details style="margin-top:10px">
             <summary>Trusted timestamp (RFC 3161)</summary>
             <div style="padding:6px 4px">
-              <label class="lock-row"><input type="checkbox" id="tsaEnable"> Ask a TSA to countersign the timestamp</label>
+              <label class="lock-row">
+                <input type="checkbox" id="tsaEnable"> Countersign with a TSA
+                <span class="info-hint" title="External time-stamp authority countersigns the signature so verifiers get a trusted 'signed before &lt;time&gt;' claim that survives your certificate expiring. Suppressed when 'Sign as of' is backdated.">ⓘ</span>
+              </label>
               <label style="margin-top:6px">TSA URL</label>
               <input type="text" id="tsaUrl" placeholder="https://freetsa.org/tsr" value="https://freetsa.org/tsr">
-              <p class="hint" style="margin-top:6px">
-                When enabled, the signature is countersigned by an external time-stamp authority so verifiers get a trusted "signed before &lt;time&gt;" claim that survives your certificate expiring.
-                Many public TSAs don't send CORS headers — if the call is refused by your browser, you'll need a proxy or a TSA that allows browser origins (freeTSA is usually fine).
-                <b>Suppressed automatically when "Sign as of" is set</b> — a TSA time and a backdated M would disagree, and that visibly flags the signature.
+              <p class="hint" style="margin-top:4px; font-size:11px;">
+                Adobe silent-green only with a commercial TSA on its trust list (e.g. <code>http://timestamp.digicert.com</code>).
+                Browser CORS may block some public TSAs — a failure toast will name the URL that refused.
               </p>
             </div>
           </details>
@@ -4377,6 +4393,8 @@ const SETTINGS_KEYS = [
   { id: 'stampEnable',    type: 'checked' },
   { id: 'stampRole',      type: 'value' },
   { id: 'vaultKeepLocal', type: 'checked' },
+  { id: 'tsaEnable',      type: 'checked' },
+  { id: 'tsaUrl',         type: 'value' },
 ];
 const RADIO_KEYS = ['appearance', 'lockmode', 'vaultHost'];
 
@@ -5397,7 +5415,10 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   const sig = await signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl, backdated, chain });
   const contentsHexStart = contentsStart + 1;
   for (let i = 0; i < sig.hexPadded.length; i++) saved[contentsHexStart + i] = sig.hexPadded.charCodeAt(i);
-  if (sig.tsaError) console.warn('Signed without timestamp:', sig.tsaError);
+  if (tsaUrl && !backdated) {
+    if (sig.tsaEmbedded) toast('Trusted timestamp embedded from ' + tsaUrl, 'ok');
+    else if (sig.tsaError) toast('TSA failed — signed WITHOUT trusted timestamp: ' + sig.tsaError, 'err');
+  }
 
   return saved;
 }
@@ -6621,7 +6642,10 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   const sig = await signAndOptionallyTimestamp({ signedBytes: signedContent, cert, key, now, tsaUrl, backdated, chain });
   const hexStart = contentsStart + 1;
   for (let i = 0; i < sig.hexPadded.length; i++) combined[hexStart + i] = sig.hexPadded.charCodeAt(i);
-  if (sig.tsaError) console.warn('Signed without timestamp:', sig.tsaError);
+  if (tsaUrl && !backdated) {
+    if (sig.tsaEmbedded) toast('Trusted timestamp embedded from ' + tsaUrl, 'ok');
+    else if (sig.tsaError) toast('TSA failed — signed WITHOUT trusted timestamp: ' + sig.tsaError, 'err');
+  }
 
   return combined;
 }
