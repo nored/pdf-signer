@@ -4214,57 +4214,146 @@ function extractSignerEncryptedDigest(p7) {
   throw new Error('encryptedDigest not found in signerInfo');
 }
 
+// Hand-rolled CMS SignedData builder — replaces forge.pkcs7 so we can emit
+// a proper SigningCertificateV2 attribute (forge's _attributeToAsn1 only
+// knows how to serialize contentType/messageDigest/signingTime; every
+// other OID becomes an empty SET). This is the PAdES-B-B baseline: strict
+// CAdES verifiers (Adobe) now accept our /ETSI.CAdES.detached claim.
+//
+// Returns { cmsAsn1, sigBytesForTsa } — the ASN.1 tree of the outer
+// ContentInfo plus the raw RSA signature bytes (for timestamping).
+function buildCmsSignedData({ signedBytes, cert, key, now, chain }) {
+  const asn1 = forge.asn1;
+  const Class = asn1.Class, Type = asn1.Type;
+  const seq = (v) => asn1.create(Class.UNIVERSAL, Type.SEQUENCE, true, v);
+  const set = (v) => asn1.create(Class.UNIVERSAL, Type.SET, true, v);
+  const oid = (s) => asn1.create(Class.UNIVERSAL, Type.OID, false, asn1.oidToDer(s).getBytes());
+  const nullVal = () => asn1.create(Class.UNIVERSAL, Type.NULL, false, '');
+  const octet = (b) => asn1.create(Class.UNIVERSAL, Type.OCTETSTRING, false, b);
+  const intVal = (n) => asn1.create(Class.UNIVERSAL, Type.INTEGER, false, asn1.integerToDer(n).getBytes());
+  const intFromHex = (hex) => asn1.create(Class.UNIVERSAL, Type.INTEGER, false,
+    forge.util.hexToBytes(hex.length % 2 ? '0' + hex : hex));
+  const utcTime = (d) => asn1.create(Class.UNIVERSAL, Type.UTCTIME, false, asn1.dateToUtcTime(d));
+  const ctxImplicit = (tag, values) => asn1.create(Class.CONTEXT_SPECIFIC, tag, true, values);
+
+  const OID_DATA = '1.2.840.113549.1.7.1';
+  const OID_SIGNED_DATA = '1.2.840.113549.1.7.2';
+  const OID_SHA256_ALG = '2.16.840.1.101.3.4.2.1';
+  const OID_RSA_ENC = '1.2.840.113549.1.1.1';
+  const OID_CT = '1.2.840.113549.1.9.3';
+  const OID_MD = '1.2.840.113549.1.9.4';
+  const OID_ST = '1.2.840.113549.1.9.5';
+  const OID_SC_V2 = '1.2.840.113549.1.9.16.2.47';
+
+  const digestAlgSha256 = seq([oid(OID_SHA256_ALG), nullVal()]);
+  const sigAlgRsa = seq([oid(OID_RSA_ENC), nullVal()]);
+
+  // 1. messageDigest = SHA-256(signedBytes)
+  const contentMd = forge.md.sha256.create();
+  contentMd.update(u8ToBinStr(signedBytes));
+  const messageDigest = contentMd.digest().bytes();
+
+  // 2. SigningCertificateV2 value: SEQUENCE { SEQUENCE OF ESSCertIDv2 }
+  const certDer = asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
+  const certHash = forge.md.sha256.create().update(certDer).digest().bytes();
+  // ESSCertIDv2 ::= SEQUENCE { hashAlgorithm AlgorithmIdentifier DEFAULT sha256, certHash OCTET STRING, issuerSerial IssuerSerial OPTIONAL }
+  // Include hashAlgorithm explicitly (strict verifiers accept the default omitted
+  // but an explicit SHA-256 is universally understood).
+  const essCertIdV2 = seq([ digestAlgSha256, octet(certHash) ]);
+  const signingCertV2Value = seq([ seq([ essCertIdV2 ]) ]);
+
+  // 3. Attributes. Each is SEQUENCE { OID, SET { value } }.
+  const mkAttr = (attrOid, valueAsn1) => seq([ oid(attrOid), set([ valueAsn1 ]) ]);
+  const attrs = [
+    mkAttr(OID_CT, oid(OID_DATA)),
+    mkAttr(OID_MD, octet(messageDigest)),
+    mkAttr(OID_ST, utcTime(now)),
+    mkAttr(OID_SC_V2, signingCertV2Value),
+  ];
+  // SET OF is DER-sorted by encoded value (per X.690 § 11.5). CAdES verifiers
+  // that care will reject unsorted attrs.
+  attrs.sort((a, b) => {
+    const da = asn1.toDer(a).getBytes();
+    const db = asn1.toDer(b).getBytes();
+    return da < db ? -1 : da > db ? 1 : 0;
+  });
+
+  // 4. For hashing, use the UNIVERSAL SET tag (0x31), NOT the IMPLICIT [0]
+  // that appears in the on-wire SignerInfo (RFC 5652 § 5.4).
+  const attrsAsSet = set(attrs);
+  const attrsSetDer = asn1.toDer(attrsAsSet).getBytes();
+  const sigMd = forge.md.sha256.create();
+  sigMd.update(attrsSetDer);
+  const signatureBytes = key.sign(sigMd);   // RSASSA-PKCS1-v1_5 with SHA-256
+
+  // 5. Build the SignerInfo (with IMPLICIT [0] for signedAttrs).
+  // Extract issuer + serial from the cert's ASN.1 (walk the TBS).
+  const certAsn1 = forge.pki.certificateToAsn1(cert);
+  const tbs = certAsn1.value[0];
+  // TBS starts with version [0] EXPLICIT (v3) or serial (v1/v2).
+  let idx = 0;
+  if (tbs.value[0].tagClass === Class.CONTEXT_SPECIFIC && tbs.value[0].type === 0) idx = 1;
+  const serialAsn1 = tbs.value[idx];         // INTEGER
+  const issuerAsn1 = tbs.value[idx + 2];     // Name (SEQUENCE OF RDN)
+  const sid = seq([ issuerAsn1, serialAsn1 ]);
+
+  const signedAttrsField = ctxImplicit(0, attrs);
+  const signerInfo = seq([
+    intVal(1),          // version
+    sid,
+    digestAlgSha256,
+    signedAttrsField,
+    sigAlgRsa,
+    octet(signatureBytes),
+  ]);
+
+  // 6. SignedData.
+  const encapContentInfo = seq([ oid(OID_DATA) /* no content [0] — detached */ ]);
+  const certs = Array.isArray(chain) && chain.length ? chain : [cert];
+  const certAsn1s = certs.map(c => forge.pki.certificateToAsn1(c));
+  const certsField = ctxImplicit(0, certAsn1s);
+  const signedData = seq([
+    intVal(1),                                     // version — 1 for SubjectKeyIdentifier-less signerInfos
+    set([ digestAlgSha256 ]),                      // digestAlgorithms
+    encapContentInfo,
+    certsField,
+    set([ signerInfo ]),                            // signerInfos
+  ]);
+
+  // 7. Outer ContentInfo.
+  const cmsAsn1 = seq([
+    oid(OID_SIGNED_DATA),
+    asn1.create(Class.CONTEXT_SPECIFIC, 0, true, [ signedData ]),   // [0] EXPLICIT
+  ]);
+
+  return { cmsAsn1, sigBytesForTsa: signatureBytes, signerInfoRef: signerInfo };
+}
+
 // One-stop signer: builds the CMS over signedBytes, optionally requests a
 // timestamp from tsaUrl and embeds it, returns final DER hex-encoded padded
 // to SIG_PLACEHOLDER_LEN.
 async function signAndOptionallyTimestamp({ signedBytes, cert, key, now, tsaUrl, backdated, chain }) {
-  const p7 = forge.pkcs7.createSignedData();
-  p7.content = forge.util.createBuffer(u8ToBinStr(signedBytes), 'binary');
-  // Embed the full chain (leaf + any intermediates) so verifiers can walk
-  // up to a root they trust. Falls back to just the leaf if no chain given.
-  const certs = Array.isArray(chain) && chain.length ? chain : [cert];
-  for (const c of certs) p7.addCertificate(c);
-  p7.addSigner({
-    key, certificate: cert,
-    digestAlgorithm: forge.pki.oids.sha256,
-    // NOTE: forge.pkcs7's _attributeToAsn1 only serializes contentType,
-    // messageDigest, and signingTime. For any other OID (including
-    // SigningCertificateV2) it emits an empty SET, which breaks strict
-    // CAdES/PAdES validation in Adobe. Until we hand-roll SignerInfo,
-    // stay on plain PKCS#7 so Adobe validates as a legacy sig and
-    // recognises TSA countersignatures properly.
-    authenticatedAttributes: [
-      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
-      { type: forge.pki.oids.messageDigest },
-      { type: forge.pki.oids.signingTime, value: now },
-    ],
-  });
-  p7.sign({ detached: true });
+  const { cmsAsn1, sigBytesForTsa } = buildCmsSignedData({ signedBytes, cert, key, now, chain });
 
-  let derBinary;
+  let tsaError = null;
   if (tsaUrl && !backdated) {
     try {
-      const sigBytes = extractSignerEncryptedDigest(p7);
-      const token = await fetchTimestampToken(tsaUrl, sigBytes);
-      derBinary = attachTimestampToken(p7.toAsn1(), token);
+      const token = await fetchTimestampToken(tsaUrl, sigBytesForTsa);
+      attachTimestampToken(cmsAsn1, token);      // mutates cmsAsn1 in place
     } catch (e) {
-      // Non-fatal: keep the signature without TSA, but tell the caller.
+      tsaError = e.message;
       console.warn('TSA failed, continuing without timestamp:', e.message);
-      derBinary = forge.asn1.toDer(p7.toAsn1()).getBytes();
-      // Attach the error onto p7 for the caller to surface if they want.
-      p7._tsaError = e.message;
     }
-  } else {
-    derBinary = forge.asn1.toDer(p7.toAsn1()).getBytes();
   }
 
+  const derBinary = forge.asn1.toDer(cmsAsn1).getBytes();
   let sigHex = '';
   for (let i = 0; i < derBinary.length; i++) sigHex += derBinary.charCodeAt(i).toString(16).padStart(2, '0');
   if (sigHex.length > SIG_PLACEHOLDER_LEN) throw new Error('Signature too large for placeholder (increase SIG_PLACEHOLDER_LEN)');
   return {
     hexPadded: sigHex + '0'.repeat(SIG_PLACEHOLDER_LEN - sigHex.length),
-    tsaError: p7._tsaError || null,
-    tsaEmbedded: !!tsaUrl && !backdated && !p7._tsaError,
+    tsaError,
+    tsaEmbedded: !!tsaUrl && !backdated && !tsaError,
   };
 }
 
@@ -5445,13 +5534,11 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   const sigDictShape = {
     Type: 'Sig',
     Filter: 'Adobe.PPKLite',
-    // Plain PKCS#7 detached — Adobe validates this cleanly and correctly
-    // reads a Sectigo/DigiCert TSA countersignature. Switching to
-    // /ETSI.CAdES.detached would claim strict PAdES/CAdES compliance,
-    // which requires a valid SigningCertificateV2 attribute; forge's
-    // pkcs7 module can't emit that, so the CAdES claim would be broken
-    // and Adobe would reject both the signature and its timestamp.
-    SubFilter: 'adbe.pkcs7.detached',
+    // PAdES-B-B baseline. The hand-rolled buildCmsSignedData emits a real
+    // SigningCertificateV2 with ESSCertIDv2, so Adobe's strict CAdES
+    // validation passes. This is the correct SubFilter for a modern
+    // signature that carries a TSA and (later) a DSS for LTV.
+    SubFilter: 'ETSI.CAdES.detached',
     ByteRange: [PDFNumber.of(0), PDFNumber.of(9999999999),
                 PDFNumber.of(9999999999), PDFNumber.of(9999999999)],
     Contents: PDFHexString.of('0'.repeat(SIG_PLACEHOLDER_LEN)),
@@ -6776,7 +6863,7 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // Sig dict + sig field bodies.
   const certUrlLine = certVaultUrl ? `   /PdfsignerCertUrl (${escapePdfString(certVaultUrl)})\n` : '';
   objBodies.push({ num: sigDictNum, body:
-    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n` +
+    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached\n` +
     `   /ByteRange [0 9999999999 9999999999 9999999999]\n` +
     `   /Contents <${'0'.repeat(SIG_PLACEHOLDER_LEN)}>\n` +
     `   /M (${pdfDate(now)})\n   /Name (${escapePdfString(meta.name)})\n` +
