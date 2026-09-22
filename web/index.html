@@ -2404,6 +2404,25 @@ async function openPdf(file) {
         toast('Source PDF needs normalization (Adobe-compat) — running Ghostscript…');
         const before = doc.bytes.length;
         doc.bytes = await normalizePdfViaGhostscript(doc.bytes);
+        // pdf-lib's own load+save cycle drops one unreferenced object from
+        // Ghostscript's clean output, producing a fragmented xref that
+        // Adobe rejects again. Round-trip through copyPages to force
+        // pdf-lib to produce a fully contiguous xref BEFORE sign-time
+        // mutations. Preserves page content; drops AcroForm fields (fine
+        // for the fresh-sign case that needs this in the first place —
+        // sources with existing sig fields don't hit the detection).
+        try {
+          const { PDFDocument } = window.PDFLib;
+          const src = await PDFDocument.load(doc.bytes);
+          const clean = await PDFDocument.create();
+          const pages = await clean.copyPages(src, src.getPageIndices());
+          for (const p of pages) clean.addPage(p);
+          try {
+            const t = src.getTitle(); if (t) clean.setTitle(t);
+            const a = src.getAuthor(); if (a) clean.setAuthor(a);
+          } catch (_) {}
+          doc.bytes = new Uint8Array(await clean.save({ useObjectStreams: false }));
+        } catch (e) { console.warn('copyPages pass skipped:', e.message); }
         doc.normalizedFromSource = true;
         toast('Normalized: ' + before + ' → ' + doc.bytes.length + ' bytes', 'ok');
       }
