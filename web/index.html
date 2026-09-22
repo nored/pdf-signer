@@ -4026,7 +4026,13 @@ function updateSignButton() {
 /* ═══════════════════════════════════════════════════════════════════════
    PDF signing (pdf-lib + forge)
    ═══════════════════════════════════════════════════════════════════════ */
-const SIG_PLACEHOLDER_LEN = 16384;
+// 16 KB of hex = 8 KB CMS was fine for plain PKCS#7 without TSA. With
+// SigningCertificateV2 + TSA token (which carries its own SignedData with
+// a 2-4 cert TSA chain, often 4-6 KB) + full signer cert chain, a large
+// but common signature can push 12 KB. Bump to 64 KB hex (32 KB CMS) to
+// match what Adobe Reader itself reserves — plenty of headroom for any
+// TSA response we're likely to attach.
+const SIG_PLACEHOLDER_LEN = 65536;
 
 /* ─── RFC 3161 timestamping ──────────────────────────────────────────────
    Add a trusted timestamp token to the CMS signature as the id-aa-
