@@ -961,10 +961,11 @@
                 <span class="info-hint" title="External time-stamp authority countersigns the signature so verifiers get a trusted 'signed before &lt;time&gt;' claim that survives your certificate expiring. Suppressed when 'Sign as of' is backdated.">ⓘ</span>
               </label>
               <label style="margin-top:6px">TSA URL</label>
-              <input type="text" id="tsaUrl" placeholder="https://freetsa.org/tsr" value="https://freetsa.org/tsr">
+              <input type="text" id="tsaUrl" placeholder="https://rfc3161.ai.moda" value="https://rfc3161.ai.moda">
               <p class="hint" style="margin-top:4px; font-size:11px;">
-                Adobe silent-green only with a commercial TSA on its trust list (e.g. <code>http://timestamp.digicert.com</code>).
-                Browser CORS may block some public TSAs — a failure toast will name the URL that refused.
+                Default <code>rfc3161.ai.moda</code> is one of the few public TSAs that sends CORS headers, so it works from a browser.
+                Most other public TSAs (freeTSA, DigiCert, Sectigo) reject browser fetches; a failure toast will name the URL that refused.
+                Adobe silent-green requires a TSA on Adobe's own trust list — none of the free ones qualify.
               </p>
             </div>
           </details>
