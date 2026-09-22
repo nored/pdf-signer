@@ -1,77 +1,81 @@
-# PDF Signer
+# pdf-signer
 
-Click-to-place digital PDF signer that runs entirely on your machine. Multiple named identities, per-placement appearance (text / image / both), lock or void-on-change, verify existing signatures.
+A single-page browser tool that cryptographically signs PDFs, hosts encrypted verification vaults on your own GitHub repo, and reads back signatures anyone else's copy of it can verify. No server, no upload, no vendor account. One HTML file, ~500 KB gzipped, runs in Firefox / Chrome / Safari.
 
-Three flavors, same UI, same signing code:
+**Live app: <https://nored.github.io/pdf-signer/web/>**
 
-| | Where | Install | Runtime |
-|---|---|---|---|
-| **Web** | `web/index.html` | none — open the file | any modern browser |
-| **Tauri** | `tauri/` | Rust + webkit2gtk-4.1 (Linux) / WebKit (macOS) / WebView2 (Win) | ~10 MB native binary |
-| **Electron** | `electron/` | Node + Electron | ~200 MB per platform |
+## What it does
 
-## Web (zero install, most portable)
+- Click-to-place signatures, text, redactions, and QR verification stamps on any PDF.
+- Emits PAdES-B-B (`SubFilter /ETSI.CAdES.detached`, hand-rolled `SigningCertificateV2` with real `ESSCertIDv2`, populated `issuerSerial`, DER-sorted signedAttrs, RSA-SHA256).
+- Countersigns with an RFC 3161 timestamp from a browser-reachable TSA (Sectigo via `rfc3161.ai.moda` by default; others accepted if they send CORS headers).
+- Multi-party incremental signing that preserves earlier signatures byte-for-byte (splices `/Fields` and `/Annots` without touching prior object bodies, so DocMDP P=3 stays valid under strict Adobe verification).
+- Signs into pre-existing empty AcroForm signature fields when the source has them.
+- Opt-in Ghostscript-WASM PDF/A-2b conversion at open time for Office-generated source PDFs (Word / Google Docs / iLovePDF pre-2.0) that Adobe otherwise rejects post-sign.
+- Uploads an AES-256-GCM-encrypted copy of the signed PDF to a GitHub repo you control, prints a QR on every page linking back to the built-in verifier.
+- Verifier fetches the vault over HTTPS, decrypts client-side, runs a full CMS check, walks the cert chain, cross-references AATL / EUTL fingerprints, fetches OCSP if the AIA is browser-reachable, shows a per-signature timeline for multi-signed PDFs, and produces a printable verification receipt PDF with its own QR back to the live check.
+- Compares signature revisions side by side; pixel-diffs each page so a recipient can see exactly what a downstream signer added.
 
-Open **`web/index.html`** in any browser. Loads pdf.js / pdf-lib / node-forge from cdnjs on first use, then browser cache. All data is local (IndexedDB).
+## Try it
 
-## Tauri (recommended for desktop)
+Open <https://nored.github.io/pdf-signer/web/>, generate an identity (name + password), drop a PDF, click **Sign & Download**. Signed file downloads to the same place your browser puts everything else. Nothing leaves the browser except an optional cert publish and vault upload, both to a GitHub repo you configure.
+
+Long-press the theme toggle (◐, top-right) to see which commit your browser is on and whether it's the latest.
+
+## How signatures work here
+
+- Each identity is a 2048-bit RSA keypair with a self-signed X.509 (10-year validity), stored as an encrypted PKCS#12 inside IndexedDB. Password-protected. Never leaves your machine except in the export bundle.
+- The signing certificate can also be published (once, by you) to a public GitHub repo. The signed PDF's `/Sig` dict carries the raw URL. Anyone verifying can fetch the cert over HTTPS and get transitive trust from the vault's HTTPS chain, no manual trust setup.
+- Bring-your-own certs via `.p12` import work too: full chain (leaf + intermediates + root) is walked, all intermediates go into the CMS, verifiers reach whatever root is in their store.
+- Every signature: `adbe.pkcs7.detached` in the legacy phrasing, `ETSI.CAdES.detached` in the SubFilter. Hand-rolled `SignerInfo` because `node-forge.pkcs7` cannot emit `SigningCertificateV2` correctly (silently produces an empty SET; Adobe strict-CAdES rejects that plus everything downstream).
+
+## Multi-party workflows
+
+The two-supervisor thesis review case is the load-bearing use case. What actually works and what doesn't:
+
+- **Head signer + downstream cooperative tools** (Adobe Acrobat proper, this app, DocuSign that does true incremental sign): head signature stays valid after every downstream sig. Head can use P=3 (Certify, allow further signatures) safely.
+- **Head signer + non-cooperative tools** (Apple Preview, iLovePDF sign flow, most web "sign PDF" services): downstream rewrites the file, head signature's byte range no longer covers what's on disk, crypto fails. No PDF technology fixes this. Workaround: sign last, or use P=1 lock and accept no downstream changes.
+- **Approval-only signatures** (No certification): only assert "I signed these bytes." Survive any downstream operation that appends rather than rewrites. Recommended default when you cannot control what the next signer will use.
+
+## Adobe compatibility notes
+
+- Silent green check requires a signer cert whose root is on Adobe's AATL. Self-signed certs get a yellow "unknown identity" warning under Adobe; the signature itself is still cryptographically valid and every non-Adobe verifier accepts it (poppler `pdfsig`, EU-DSS `verifysignature.eu`, openssl `cms -verify`).
+- Office / Word / Google-Docs-generated source PDFs pin `/Version /1.4` in the catalog and ship a fragmented xref with free object slots. Adobe rejects our CAdES signature over those with "document has been modified" even though nothing was modified. Fix: enable **Normalize source PDFs before signing** in identity settings. Runs a proper PDF/A-2b conversion via Ghostscript-WASM (lazy-loaded from jsDelivr, ~5 MB gzipped, only fetched when a source actually needs it, browser-cached afterwards).
+- Trusted-time from a TSA needs a TSA on Adobe's own TSA trust list. The default `rfc3161.ai.moda` proxies to Sectigo (a real commercial TSA) and works from browsers. Adobe shows the trusted time; the verifier here shows it regardless.
+
+## Verifying signatures
+
+Three paths, all backed by the same CMS+chain code:
+
+1. **In-app**: open any PDF, verify runs automatically, per-signature badges appear on each widget.
+2. **Public QR link**: scan the QR on any signed page, land on the verifier URL, the vault decrypts client-side and the check runs. Non-technical recipient sees a plain green / yellow / red status; a first-visit help panel explains what each state means. Verification receipt (PDF) downloadable with a QR back to the live check.
+3. **Independent tools**: `openssl cms -verify -inform DER -in signed.cms.der -content signed.range.bin -binary` and poppler `pdfsig signed.pdf` both accept every signature this tool produces. `verifysignature.eu` (EU-DSS reference validator) also accepts and prints "Integrity: Preserved".
+
+## Identity and vault storage
+
+- Identities live in IndexedDB, encrypted at rest with your password.
+- Export identity as `.pdfsigner.json` (encrypted bundle: p12 + signature image + settings + optional GitHub config).
+- Import bundle on another machine, unlock once, continue.
+- GitHub vault repo: a public repo you own. Each signed PDF gets encrypted (AES-256-GCM) with a fresh random key, uploaded as `vault/<hash>.vault`. QR carries the key; only the QR-holder can decrypt.
+- Cert publish repo: same repo, `vault/certs/<fingerprint>.pem`. Cert itself is not sensitive; anyone can fetch and verify against it.
+
+## Development
+
+Single file. Open `web/index.html` in a browser. Any change reloads instantly.
 
 ```sh
-cd tauri
-npm install          # tauri CLI + JS deps
-npm run dev          # runs a dev window
-npm run build        # bundles a .deb + AppImage on Linux; a .dmg on Mac
+git clone https://github.com/nored/pdf-signer
+cd pdf-signer
+python3 -m http.server 8000        # or `npx serve`, whatever
+open http://localhost:8000/web/
 ```
 
-Requires:
-- Rust (`rustup`).
-- Linux: `webkit2gtk-4.1`, `pkg-config`, `libssl`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`.
-- macOS: Xcode command-line tools.
-- Windows: WebView2 (bundled on modern Windows).
+Runtime deps loaded from CDN (cdnjs and jsdelivr): `pdf.js` (Mozilla), `pdf-lib` (Hopding), `node-forge` (Digital Bazaar), `qrcode-generator` (Kazuhiko Arase), optionally `@okathira/ghostpdl-wasm` (Artifex GhostPDL via jsdelivr, only if the user enables PDF normalization).
 
-The Rust code is tiny — literally just a window pointing at `../../web/index.html`. All signing logic runs in the WebView.
+Node-side tests in `scratchpad/test/` cover the load-bearing crypto paths (incremental signing byte-preserving splice, redaction round-trip, hand-rolled SignerInfo, DSS/OCSP embedding, PDF/A normalization end-to-end).
 
-### Install natively on Arch
+## License
 
-After a Tauri release build, install as a real pacman package:
+pdf-signer itself: MIT (see `LICENSE`).
 
-```sh
-cd tauri/src-tauri && cargo build --release && cd -
-cd packaging/pkg && makepkg -fi
-```
-
-`pdf-signer` lands in `$PATH` and shows up in the GNOME app grid. Uninstall with `sudo pacman -R pdf-signer`.
-
-## Electron
-
-```sh
-cd electron
-npm install
-npm start            # runs the app
-npm run dist         # builds .deb + AppImage on Linux and .dmg on Mac
-```
-
-Same UI as Web/Tauri but with bundled Chromium and Node.
-
-## Identity model
-
-- Each identity is a self-signed 2048-bit RSA + X.509 cert (10-year validity), stored as an encrypted PKCS#12 in IndexedDB.
-- Password-protected; asked once per session for signing.
-- Export/import as `.pdfsigner.json` bundles containing the encrypted p12 + optional signature PNG.
-- Signature image (photo of your signature on paper; background auto-removed) belongs to each identity individually.
-
-## Signature model
-
-- One cryptographic signature per PDF (CMS/PKCS#7 detached, `adbe.pkcs7.detached`, SHA-256, RSA).
-- Multiple visible marks share that one signature (multi-widget kids of one form field).
-- Per-placement appearance: **text block** (name / date / reason / location, no background) / **image only** (your PNG) / **image + text**.
-- **Lock document** = DocMDP P=1 (viewers enforce no further edits).
-- **Void on change** = no DocMDP; edits are allowed but crypto verification fails.
-
-## Verify
-
-Sidebar → **Verify signed PDF…** or open a signed PDF. Auto-verifies on open and:
-- Green ✓ badge over each valid signature widget.
-- Yellow ! badge if bytes exist outside the signed range (modified after signing).
-- Red ✕ badge + red tint over the whole widget if the SHA-256 doesn't match (tampered).
-- Blue ? badge for empty signature form fields (unsigned placeholder).
+Runtime-only optional dependency Ghostscript-WASM is AGPL-3.0-or-later (upstream Artifex build, unmodified, fetched by the user's browser directly from jsDelivr when the PDF normalization toggle is on). pdf-signer does not bundle, distribute, or modify it. See `NOTICE`.
