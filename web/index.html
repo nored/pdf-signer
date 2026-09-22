@@ -4278,6 +4278,14 @@ function extractSignerEncryptedDigest(p7) {
 //
 // Returns { cmsAsn1, sigBytesForTsa } — the ASN.1 tree of the outer
 // ContentInfo plus the raw RSA signature bytes (for timestamping).
+// Number of bytes a DER length header occupies given the encoded string:
+// 1 for short-form (< 128), 2..5 for long-form (0x81..0x84 + length bytes).
+function derLenHeaderBytes(encoded) {
+  const b0 = encoded.charCodeAt(1);
+  if (b0 < 0x80) return 1;
+  return 1 + (b0 & 0x7f);
+}
+
 function buildCmsSignedData({ signedBytes, cert, key, now, chain }) {
   const asn1 = forge.asn1;
   const Class = asn1.Class, Type = asn1.Type;
@@ -4327,17 +4335,29 @@ function buildCmsSignedData({ signedBytes, cert, key, now, chain }) {
     mkAttr(OID_SC_V2, signingCertV2Value),
   ];
   // SET OF is DER-sorted by encoded value (per X.690 § 11.5). CAdES verifiers
-  // that care will reject unsorted attrs.
+  // that care will reject unsorted attrs. Pre-sort so forge's own SET
+  // canonicalisation is a no-op.
   attrs.sort((a, b) => {
     const da = asn1.toDer(a).getBytes();
     const db = asn1.toDer(b).getBytes();
     return da < db ? -1 : da > db ? 1 : 0;
   });
 
-  // 4. For hashing, use the UNIVERSAL SET tag (0x31), NOT the IMPLICIT [0]
-  // that appears in the on-wire SignerInfo (RFC 5652 § 5.4).
+  // 4. Compute the exact DER bytes ONCE, then produce two views by flipping
+  // the leading tag: 0x31 for UNIVERSAL SET (what we hash + sign, per
+  // RFC 5652 § 5.4) and 0xA0 for CONTEXT-SPECIFIC [0] IMPLICIT (what goes
+  // on the wire inside SignerInfo). Byte-identical except the tag; verifiers
+  // that reconstruct-with-SET-tag and hash will match our sign hash exactly.
+  //
+  // (Previously we built two separate asn1 nodes and let forge encode each.
+  // forge sorts children when serialising a UNIVERSAL SET but does NOT sort
+  // when serialising CONTEXT-SPECIFIC — so the two paths could disagree on
+  // child order, producing a signature that verifies against neither ordering.
+  // Openssl symptom: messageDigest matched but SignerInfo_verify_content
+  // failed.)
   const attrsAsSet = set(attrs);
-  const attrsSetDer = asn1.toDer(attrsAsSet).getBytes();
+  const attrsSetDer = asn1.toDer(attrsAsSet).getBytes();     // starts with 0x31
+
   const sigMd = forge.md.sha256.create();
   sigMd.update(attrsSetDer);
   const signatureBytes = key.sign(sigMd);   // RSASSA-PKCS1-v1_5 with SHA-256
@@ -4353,7 +4373,11 @@ function buildCmsSignedData({ signedBytes, cert, key, now, chain }) {
   const issuerAsn1 = tbs.value[idx + 2];     // Name (SEQUENCE OF RDN)
   const sid = seq([ issuerAsn1, serialAsn1 ]);
 
-  const signedAttrsField = ctxImplicit(0, attrs);
+  // Wrap the pre-computed inner bytes as an asn1 node with composed:false
+  // so forge emits them verbatim (no re-serialisation, no re-sorting).
+  const innerBytes = attrsSetDer.slice(1 + derLenHeaderBytes(attrsSetDer));
+  const signedAttrsField = { tagClass: Class.CONTEXT_SPECIFIC, type: 0, constructed: true, composed: false, value: innerBytes };
+
   const signerInfo = seq([
     intVal(1),          // version
     sid,
@@ -5590,11 +5614,16 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   const sigDictShape = {
     Type: 'Sig',
     Filter: 'Adobe.PPKLite',
-    // PAdES-B-B baseline. The hand-rolled buildCmsSignedData emits a real
-    // SigningCertificateV2 with ESSCertIDv2, so Adobe's strict CAdES
-    // validation passes. This is the correct SubFilter for a modern
-    // signature that carries a TSA and (later) a DSS for LTV.
-    SubFilter: 'ETSI.CAdES.detached',
+    // NOTE: hand-rolled buildCmsSignedData emits a real SigningCertificateV2
+    // per PAdES-B-B, and the CMS is structurally valid (forge parses,
+    // openssl parses, messageDigest matches). But strict CAdES validation
+    // in Adobe still rejects with "document was modified" for reasons we
+    // haven't isolated yet — possibly a subtle DocMDP+CAdES interaction.
+    // Legacy /adbe.pkcs7.detached routes Adobe through the plain PKCS#7
+    // validator which accepts the same CMS cleanly and (per user testing)
+    // recognises Sectigo TSA countersignatures. Follow-up: figure out what
+    // strict CAdES actually wants and revert.
+    SubFilter: 'adbe.pkcs7.detached',
     ByteRange: [PDFNumber.of(0), PDFNumber.of(9999999999),
                 PDFNumber.of(9999999999), PDFNumber.of(9999999999)],
     Contents: PDFHexString.of('0'.repeat(SIG_PLACEHOLDER_LEN)),
@@ -6940,7 +6969,7 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // Sig dict + sig field bodies.
   const certUrlLine = certVaultUrl ? `   /PdfsignerCertUrl (${escapePdfString(certVaultUrl)})\n` : '';
   objBodies.push({ num: sigDictNum, body:
-    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached\n` +
+    `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n` +
     `   /ByteRange [0 9999999999 9999999999 9999999999]\n` +
     `   /Contents <${'0'.repeat(SIG_PLACEHOLDER_LEN)}>\n` +
     `   /M (${pdfDate(now)})\n   /Name (${escapePdfString(meta.name)})\n` +
