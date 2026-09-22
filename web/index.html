@@ -7563,37 +7563,71 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
   const helvB = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const mono = await pdfDoc.embedFont(StandardFonts.Courier);
 
-  const page = pdfDoc.addPage([595, 842]);   // A4
   const marginX = 48, marginY = 60;
-  let y = 842 - marginY;
+  const pageW = 595, pageH = 842;
+  const bottomMargin = 60;
+  let page = pdfDoc.addPage([pageW, pageH]);
+  let y = pageH - marginY;
+
+  const newPage = () => { page = pdfDoc.addPage([pageW, pageH]); y = pageH - marginY; };
+  const ensureRoom = (needed) => { if (y - needed < bottomMargin) newPage(); };
+
+  // Wrap `text` to fit `maxW`. Splits on whitespace; long words are hard-broken
+  // char-by-char so a 64-char SHA-256 or a long URL never overflows.
+  const wrapLines = (text, font, size, maxW) => {
+    const words = String(text).split(/\s+/);
+    const out = [];
+    let line = '';
+    const measure = (s) => font.widthOfTextAtSize(s, size);
+    for (const w of words) {
+      // Long single word: hard-break by char.
+      if (measure(w) > maxW) {
+        if (line) { out.push(line); line = ''; }
+        let piece = '';
+        for (const ch of w) {
+          if (measure(piece + ch) > maxW) { out.push(piece); piece = ch; } else piece += ch;
+        }
+        if (piece) line = piece;
+        continue;
+      }
+      const t = line ? line + ' ' + w : w;
+      if (measure(t) > maxW) { out.push(line); line = w; } else line = t;
+    }
+    if (line) out.push(line);
+    return out.length ? out : [''];
+  };
 
   const drawLine = (text, opts = {}) => {
     const font = opts.bold ? helvB : (opts.mono ? mono : helv);
     const size = opts.size || 11;
     const color = opts.color || rgb(0.1, 0.1, 0.1);
-    // Wrap on width.
-    const maxW = 595 - marginX * 2;
-    const words = String(text).split(/\s+/);
-    let line = '';
-    for (const w of words) {
-      const t = line ? line + ' ' + w : w;
-      if (font.widthOfTextAtSize(t, size) > maxW) {
-        page.drawText(line, { x: marginX, y, size, font, color });
-        y -= size * 1.35;
-        line = w;
-      } else line = t;
+    const maxW = pageW - marginX * 2;
+    const lines = wrapLines(text, font, size, maxW);
+    const step = size * 1.35;
+    for (const l of lines) {
+      ensureRoom(step);
+      page.drawText(l, { x: marginX, y, size, font, color });
+      y -= step;
     }
-    if (line) { page.drawText(line, { x: marginX, y, size, font, color }); y -= size * 1.35; }
   };
   const gap = (n = 8) => { y -= n; };
-  const heading = (t) => { gap(6); drawLine(t, { bold: true, size: 12, color: rgb(0.2, 0.2, 0.2) }); gap(2); };
+  const heading = (t) => { ensureRoom(30); gap(6); drawLine(t, { bold: true, size: 12, color: rgb(0.2, 0.2, 0.2) }); gap(2); };
+
   const row = (k, v, opts = {}) => {
     const kf = helvB, vf = opts.mono ? mono : helv;
     const size = 10;
-    page.drawText(String(k) + ':', { x: marginX, y, size, font: kf, color: rgb(0.35, 0.35, 0.35) });
-    const kw = kf.widthOfTextAtSize(String(k) + ':', size);
-    page.drawText(String(v == null ? '' : v), { x: marginX + Math.max(kw + 8, 140), y, size, font: vf, color: rgb(0.05, 0.05, 0.05) });
-    y -= size * 1.6;
+    const step = size * 1.55;
+    const keyStr = String(k) + ':';
+    const keyW = Math.max(kf.widthOfTextAtSize(keyStr, size) + 8, 140);
+    const valX = marginX + keyW;
+    const valMaxW = pageW - marginX - valX;
+    const lines = wrapLines(v == null ? '' : v, vf, size, valMaxW);
+    ensureRoom(step * lines.length);
+    page.drawText(keyStr, { x: marginX, y, size, font: kf, color: rgb(0.35, 0.35, 0.35) });
+    for (let i = 0; i < lines.length; i++) {
+      page.drawText(lines[i], { x: valX, y, size, font: vf, color: rgb(0.05, 0.05, 0.05) });
+      y -= step;
+    }
   };
 
   drawLine('Verification receipt', { bold: true, size: 20 });
@@ -7622,7 +7656,7 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
     const r = results[i];
     heading('Signature #' + (i + 1));
     if (r.error) {
-      row('Status', 'BROKEN — ' + r.error, {});
+      row('Status', 'BROKEN — ' + r.error);
       continue;
     }
     const st = perSigState(r, results);
@@ -7641,15 +7675,6 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
     if (r.ocspStatus) row('OCSP', r.ocspStatus + (r.ocspNote ? ' (' + r.ocspNote + ')' : ''));
     row('Byte range covered', '[' + r.byteRange.join(', ') + ']', { mono: true });
     row('Covers entire file', r.totalCovered ? 'yes' : 'no');
-    if (y < 120) {
-      // New page.
-      const p2 = pdfDoc.addPage([595, 842]);
-      y = 842 - marginY;
-      // switch drawing to new page — reassign closure-captured page via mutable ref
-      // (simplest: rebind by breaking out; here we just continue on p2)
-      // But because drawLine/row reference `page`, we need to change it. Quick fix:
-      break;
-    }
   }
 
   gap(20);
