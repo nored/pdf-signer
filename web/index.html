@@ -5448,19 +5448,14 @@ async function loadGhostscript() {
   if (_gsModulePromise) return _gsModulePromise;
   const CDN = 'https://cdn.jsdelivr.net/npm/@okathira/ghostpdl-wasm@1.1.0/dist';
   _gsModulePromise = (async () => {
-    // The package's dist/gs.js is an Emscripten UMD module. Load it via
-    // dynamic <script> so we don't need a build step.
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = CDN + '/gs.js';
-      s.onload = resolve;
-      s.onerror = () => reject(new Error('Failed to load Ghostscript-WASM from ' + s.src));
-      document.head.appendChild(s);
-    });
-    // Emscripten's UMD default: window.Module factory function. Its name
-    // may vary; try common exports.
-    const factory = window.GhostPDL || window.Module || window.gs || window.default;
-    if (typeof factory !== 'function') throw new Error('Ghostscript-WASM loader did not expose a factory function');
+    // dist/gs.js is a modern ES module — uses `import.meta.url` internally
+    // to locate the .wasm sibling. A classic <script> tag can't execute it
+    // ("SyntaxError: import.meta may only appear in a module"), so use
+    // dynamic import(). jsDelivr serves CORS headers, so cross-origin ESM
+    // import works.
+    const mod = await import(CDN + '/gs.js');
+    const factory = mod.default || mod.GhostPDL || mod.Module || mod;
+    if (typeof factory !== 'function') throw new Error('Ghostscript-WASM did not expose a factory function');
     const Module = await factory({
       // Tell Emscripten where to find the .wasm file (same CDN).
       locateFile: (name) => name.endsWith('.wasm') ? CDN + '/' + name : name,
