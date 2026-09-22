@@ -807,6 +807,50 @@
   .verifier-preview .page-label {
     font-size: 11px; color: var(--muted);
   }
+  .verifier-help-btn {
+    position: absolute; top: 18px; right: 22px;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--panel); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 15px; color: var(--muted);
+    box-shadow: var(--shadow);
+  }
+  .verifier-help-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .verifier-help-panel {
+    position: fixed; inset: 0; z-index: 400;
+    background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+    animation: fadeIn 120ms ease-out;
+  }
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  .verifier-help-panel .panel {
+    background: var(--panel); color: var(--text);
+    max-width: 560px; width: 100%; max-height: 85vh; overflow-y: auto;
+    border-radius: 12px; padding: 24px 26px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.35);
+    font-size: 14px; line-height: 1.5;
+  }
+  .verifier-help-panel h2 { margin: 0 0 6px; font-size: 18px; }
+  .verifier-help-panel .lede { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+  .verifier-help-panel h3 {
+    margin: 14px 0 4px; font-size: 13px;
+    text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  }
+  .verifier-help-panel .states { display: grid; gap: 8px; margin: 8px 0 4px; }
+  .verifier-help-panel .state-row {
+    display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start;
+    padding: 6px 0;
+  }
+  .verifier-help-panel .state-row .g {
+    width: 22px; height: 22px; border-radius: 50%; color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13px;
+  }
+  .verifier-help-panel .close-row {
+    display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px;
+  }
+  .verifier-help-panel .close-row button { margin: 0; }
 </style>
 </head>
 <body>
@@ -7699,6 +7743,7 @@ async function runAutoVerifyFromHash() {
     const fieldsHtml = opts.fields ? '<dl class="verifier-fields">' + Object.entries(opts.fields).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v || '<span style="color:var(--muted)">(none)</span>'}</dd>`).join('') + '</dl>' : '';
     const ctaHtml = opts.cta || '';
     root.innerHTML = `
+      <div class="verifier-help-btn" id="verifierHelpBtn" title="How does this work?">?</div>
       <div class="verifier-brand">pdf-signer verifier</div>
       <h1 class="verifier-title">Signed document check</h1>
       <div class="verifier-sub">Decrypts the vault the QR points to and verifies the signature inside. Runs in your browser. Nothing is uploaded.</div>
@@ -7725,8 +7770,55 @@ async function runAutoVerifyFromHash() {
       root.remove();
       document.querySelector('.app').style.display = '';
     };
+    const helpBtn = root.querySelector('#verifierHelpBtn');
+    if (helpBtn) helpBtn.onclick = () => showVerifierHelp();
     // Wire any dynamic buttons the caller injected.
     if (opts.wire) opts.wire(root);
+  }
+
+  function showVerifierHelp() {
+    // Dismiss any existing panel first.
+    document.querySelector('.verifier-help-panel')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'verifier-help-panel';
+    overlay.innerHTML = `
+      <div class="panel">
+        <h2>What am I looking at?</h2>
+        <p class="lede">Someone shared a document with a QR code, and this page just checked whether that document is genuine.</p>
+
+        <h3>What this page does</h3>
+        <p>Every step runs in your browser. Nothing is uploaded. The QR carries a link to an encrypted copy of the signed PDF plus the key to decrypt it. This page fetches the encrypted vault, decrypts it, and checks that the cryptographic signature inside the PDF matches the file byte-for-byte.</p>
+
+        <h3>What each status means</h3>
+        <div class="states">
+          <div class="state-row"><span class="g" style="background:var(--good)">✓</span><span><b>Verified</b> — the signature is valid and covers the entire document. Nobody has changed a single byte since signing.</span></div>
+          <div class="state-row"><span class="g" style="background:#d99a2b">⚠</span><span><b>Voided</b> — a signature was applied but bytes were appended after it. Treat the document as untrusted; the signer only vouched for the earlier version.</span></div>
+          <div class="state-row"><span class="g" style="background:var(--danger)">✕</span><span><b>Invalid</b> — the signature does not match the document. Either the file was tampered with, or the QR was.</span></div>
+        </div>
+
+        <h3>What "trust" means here</h3>
+        <p>A valid signature proves the file wasn't modified. It doesn't automatically prove <em>who</em> signed it. The <b>Trust</b> line shows one of:</p>
+        <ul style="margin:6px 0 0 18px; padding:0">
+          <li><b>chains to a trusted root</b> — the signer's certificate was issued by a Certificate Authority your browser already knows (Sectigo, DigiCert, Let's Encrypt for domains, etc.). Strongest form of identity trust.</li>
+          <li><b>trusted via signer's vault</b> — the signer publishes their public certificate on their own HTTPS domain. This page fetched it and confirmed it matches. Trust depends on you trusting that HTTPS domain.</li>
+          <li><b>self-signed</b> — the signer minted their own certificate. The signature proves the same person who holds the key signed the file, but there's no third party vouching for who they are.</li>
+        </ul>
+
+        <h3>What to do next</h3>
+        <p>If the status is Verified and you recognise the signer, you're done. If any part looks off (unexpected signer name, red status, or the CSV in the QR doesn't match), don't trust the document and contact the sender through a channel other than the one that sent you the QR.</p>
+
+        <div class="close-row">
+          <button class="primary" id="helpClose">Got it</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('#helpClose').onclick = () => {
+      try { localStorage.setItem('verifier.helpSeen', '1'); } catch (_) {}
+      close();
+    };
+    overlay.addEventListener('click', ev => { if (ev.target === overlay) close(); });
   }
 
   let parsed;
@@ -7738,6 +7830,15 @@ async function runAutoVerifyFromHash() {
     });
     return true;
   }
+
+  // First-visit onboarding: pop the help panel once per browser so a
+  // non-technical recipient can figure out what they're looking at in
+  // ~10 seconds without hunting for a docs link.
+  try {
+    if (!localStorage.getItem('verifier.helpSeen')) {
+      setTimeout(() => showVerifierHelp(), 300);
+    }
+  } catch (_) {}
 
   const initialFields = {
     'Signer (per QR)':  esc(parsed.signer),
