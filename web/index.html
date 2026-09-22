@@ -2786,7 +2786,150 @@ async function addSignatureStatusOverlays(results, hasSigPayload=false, hasUnsig
 async function showVerifyModal(results, isUnsignedField=false) {
   const body = document.createElement('div');
   body.innerHTML = `<p style="margin-bottom:8px"><b>${doc.file?.name || 'Signed PDF'}</b> · ${doc.bytes.length} bytes</p>` + verifyResultsHtml(results, isUnsignedField);
+  // For each valid signature, offer a "Show what this signature added"
+  // button that diffs rev N-1 vs rev N page-by-page. Only signatures with
+  // a real byte range earn a button (broken sigs don't).
+  const usable = results.filter(r => !r.error && r.byteRange && r.byteRange[1] > 0);
+  if (usable.length > 0) {
+    const diffSection = document.createElement('div');
+    diffSection.style.cssText = 'margin-top:14px; padding-top:12px; border-top:1px dashed var(--border)';
+    diffSection.innerHTML = '<div style="font-size:12px; color:var(--muted); margin-bottom:6px">Compare with previous revision to see what each signer added:</div>';
+    // Sort by byteRange[1] ascending — smallest byte range = earliest revision.
+    const sorted = [...usable].sort((a,b) => a.byteRange[1] - b.byteRange[1]);
+    for (let i = 0; i < sorted.length; i++) {
+      const r = sorted[i];
+      const prev = i === 0 ? null : sorted[i - 1];
+      const btn = document.createElement('button');
+      btn.style.cssText = 'margin:2px 6px 2px 0';
+      const signer = (r.signerCn || r.signer || 'Signer ' + (i + 1)).slice(0, 30);
+      btn.textContent = i === 0
+        ? `Show what "${signer}" signed (rev 1)`
+        : `Show what "${signer}" added (rev ${i + 1})`;
+      btn.onclick = async () => {
+        await showRevisionDiff({
+          prevBytes: prev ? revisionBytes(doc.bytes, prev.byteRange) : null,
+          currBytes: revisionBytes(doc.bytes, r.byteRange),
+          title: btn.textContent,
+        });
+      };
+      diffSection.appendChild(btn);
+    }
+    body.appendChild(diffSection);
+  }
   await modal({ title: 'Signature verification', body, confirmText: 'OK', cancelText: '' });
+}
+
+// Extract the bytes of the revision covered by a signature. A sig's
+// byteRange is [0, contentsStart, contentsEnd, tailLen] — the revision
+// includes everything from 0 to contentsEnd + tailLen (Contents hex is
+// inside the range as a hole for the CMS placeholder).
+function revisionBytes(bytes, byteRange) {
+  const end = byteRange[1] + byteRange[2] + byteRange[3];
+  return bytes.slice(0, end);
+}
+
+// Render page N of a PDF loaded from bytes to a canvas at the given scale.
+async function renderPdfPageToCanvas(bytes, pageNumber, scale) {
+  const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+  const page = await doc.getPage(pageNumber);
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(vp.width);
+  canvas.height = Math.ceil(vp.height);
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+  return { canvas, doc, page, viewport: vp };
+}
+
+// Overlay a red mask on canvas A wherever it differs from canvas B (or
+// wherever B has pixels not present in A — treated as "new content").
+// Threshold and dilation kept modest so anti-aliasing noise doesn't paint
+// the whole page red.
+function pixelDiffOverlay(canvasA, canvasB) {
+  // Resize B to A's dimensions if needed (rev N-1 may have fewer pages).
+  const w = canvasA.width, h = canvasA.height;
+  const out = document.createElement('canvas');
+  out.width = w; out.height = h;
+  const outCtx = out.getContext('2d');
+  outCtx.drawImage(canvasA, 0, 0);
+  if (!canvasB) {
+    // No previous revision — everything is "new".
+    outCtx.fillStyle = 'rgba(220,53,69,0.28)';
+    outCtx.fillRect(0, 0, w, h);
+    return { canvas: out, changedFraction: 1 };
+  }
+  const scratch = document.createElement('canvas');
+  scratch.width = w; scratch.height = h;
+  const sctx = scratch.getContext('2d');
+  sctx.drawImage(canvasB, 0, 0, w, h);
+  const A = outCtx.getImageData(0, 0, w, h);
+  const B = sctx.getImageData(0, 0, w, h);
+  const dA = A.data, dB = B.data;
+  // Mark deltas.
+  const mask = new Uint8Array(w * h);
+  const THRESH = 24;
+  let changedPx = 0;
+  for (let i = 0, p = 0; i < dA.length; i += 4, p++) {
+    const d = Math.abs(dA[i] - dB[i]) + Math.abs(dA[i+1] - dB[i+1]) + Math.abs(dA[i+2] - dB[i+2]);
+    if (d > THRESH) { mask[p] = 1; changedPx++; }
+  }
+  // Cheap dilate (3×3) so isolated pixels don't slip through and clusters
+  // become readable blobs.
+  const mask2 = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (mask[i] || mask[i-1] || mask[i+1] || mask[i-w] || mask[i+w]) mask2[i] = 1;
+    }
+  }
+  // Paint the mask onto the output as a translucent red overlay.
+  const overlay = outCtx.createImageData(w, h);
+  const od = overlay.data;
+  for (let i = 0, p = 0; i < od.length; i += 4, p++) {
+    if (mask2[p]) { od[i] = 220; od[i+1] = 53; od[i+2] = 69; od[i+3] = 90; }
+  }
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  tmp.getContext('2d').putImageData(overlay, 0, 0);
+  outCtx.drawImage(tmp, 0, 0);
+  return { canvas: out, changedFraction: changedPx / (w * h) };
+}
+
+async function showRevisionDiff({ prevBytes, currBytes, title }) {
+  const body = document.createElement('div');
+  body.style.cssText = 'max-height: 70vh; overflow-y: auto';
+  body.innerHTML = '<p class="hint" style="margin:0 0 8px">Red overlay shows regions where this revision differs from the previous one — added annotations, filled fields, new signature blocks, or (if unexpected) modified content.</p><div id="diffPages" style="display:flex; flex-direction:column; gap:12px"></div>';
+  const modalPromise = modal({ title, body, confirmText: 'Close', cancelText: '' });
+  const container = body.querySelector('#diffPages');
+  try {
+    const currDoc = await pdfjsLib.getDocument({ data: currBytes.slice() }).promise;
+    const prevDoc = prevBytes ? await pdfjsLib.getDocument({ data: prevBytes.slice() }).promise : null;
+    const scale = 1.0;
+    for (let pn = 1; pn <= currDoc.numPages; pn++) {
+      const page = await currDoc.getPage(pn);
+      const vp = page.getViewport({ scale });
+      const c = document.createElement('canvas');
+      c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      let prevC = null;
+      if (prevDoc && pn <= prevDoc.numPages) {
+        const pp = await prevDoc.getPage(pn);
+        const pvp = pp.getViewport({ scale });
+        prevC = document.createElement('canvas');
+        prevC.width = Math.ceil(pvp.width); prevC.height = Math.ceil(pvp.height);
+        await pp.render({ canvasContext: prevC.getContext('2d'), viewport: pvp }).promise;
+      }
+      const { canvas: overlay, changedFraction } = pixelDiffOverlay(c, prevC);
+      overlay.style.cssText = 'max-width:100%; border:1px solid var(--border); border-radius:4px; display:block';
+      const row = document.createElement('div');
+      const pctLabel = Math.round(changedFraction * 1000) / 10;
+      row.innerHTML = `<div style="font-size:12px; color:var(--muted); margin-bottom:4px">Page ${pn} · ${pctLabel}% of pixels changed</div>`;
+      row.appendChild(overlay);
+      container.appendChild(row);
+    }
+  } catch (e) {
+    container.innerHTML = '<div class="hint" style="color:var(--danger)">Failed to render diff: ' + (e.message || e) + '</div>';
+  }
+  await modalPromise;
 }
 
 async function buildPageList() {
