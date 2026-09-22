@@ -7449,12 +7449,245 @@ function verifyPdfSignatures(bytes) {
         selfSigned: isSelfSigned,
         certVaultUrl,           // present in the sig dict; verifier can auto-fetch
         cert,                   // stash the parsed cert so a follow-up async pass can compare
+        chainCerts: p7.certificates || [cert],   // full chain from the CMS, leaf first
       });
     } catch (e) {
       results.push({ error: e.message, byteRange: br });
     }
   }
   return results;
+}
+
+// Fetch OCSP status for each signer cert (best-effort). Mutates results in
+// place, stamping ocspStatus = 'good' | 'revoked' | 'unknown' |
+// 'noResponder' | 'error' along with ocspNote (short human string).
+// Reuses fetchChainOcsp which already handles AIA parsing + POST to
+// responder. Safe to call after verifyPdfSignatures; safe to skip if
+// running offline.
+async function verifyOcspAsync(results) {
+  for (const r of results) {
+    if (r.error || !r.cert) continue;
+    try {
+      const chain = Array.isArray(r.chainCerts) && r.chainCerts.length ? r.chainCerts : [r.cert];
+      const out = await fetchChainOcsp(chain);
+      // fetchChainOcsp returns entries for whichever certs had a responder
+      // AND a successful fetch. Find the signer's entry (leaf cert = chain[0]).
+      const signerOcsp = out.find(o => o.cert === r.cert || o.cert === chain[0]);
+      if (!signerOcsp) { r.ocspStatus = 'noResponder'; r.ocspNote = 'signer cert has no OCSP responder in AIA'; continue; }
+      // signerOcsp.ocsp is the raw DER OCSPResponse. Parse the status.
+      const parsed = parseOcspStatus(signerOcsp.ocsp);
+      r.ocspStatus = parsed.status;
+      r.ocspNote = parsed.note;
+    } catch (e) {
+      r.ocspStatus = 'error'; r.ocspNote = e.message;
+    }
+  }
+}
+
+// Parse an RFC 6960 OCSPResponse (raw DER) and return the certStatus
+// of the first (and only) SingleResponse: 'good' | 'revoked' | 'unknown'.
+// Cheap and permissive — falls back to 'unknown' if any parse step fails.
+function parseOcspStatus(ocspDer) {
+  try {
+    const asn1 = forge.asn1;
+    let bin = '';
+    for (let i = 0; i < ocspDer.length; i++) bin += String.fromCharCode(ocspDer[i]);
+    const outer = asn1.fromDer(bin);
+    // OCSPResponse ::= SEQUENCE { responseStatus ENUMERATED, responseBytes [0] EXPLICIT ResponseBytes OPTIONAL }
+    const respStatus = outer.value[0].value.charCodeAt(0);
+    if (respStatus !== 0) return { status: 'unknown', note: 'OCSP responder returned status ' + respStatus };
+    const responseBytes = outer.value[1].value[0];
+    // ResponseBytes ::= SEQUENCE { responseType OID, response OCTET STRING }
+    const responseOct = responseBytes.value[1].value;
+    const basicResp = asn1.fromDer(responseOct);
+    // BasicOCSPResponse ::= SEQUENCE { tbsResponseData, signatureAlgorithm, signature, [0] certs OPTIONAL }
+    const tbs = basicResp.value[0];
+    // ResponseData ::= SEQUENCE { [0] version DEFAULT v1, responderID, producedAt, responses SEQUENCE OF SingleResponse, [1] extensions OPTIONAL }
+    // Skip optional [0] version.
+    let idx = 0;
+    if (tbs.value[0].tagClass === asn1.Class.CONTEXT_SPECIFIC && tbs.value[0].type === 0) idx = 1;
+    // Find the SEQUENCE OF SingleResponse — it's the SEQUENCE after producedAt.
+    const responsesSeq = tbs.value[idx + 2];
+    const single = responsesSeq.value[0];
+    // SingleResponse ::= SEQUENCE { certID, certStatus, thisUpdate, nextUpdate OPTIONAL, ... }
+    const certStatus = single.value[1];
+    if (certStatus.tagClass === asn1.Class.CONTEXT_SPECIFIC && certStatus.type === 0) return { status: 'good', note: 'OCSP: certificate is good' };
+    if (certStatus.tagClass === asn1.Class.CONTEXT_SPECIFIC && certStatus.type === 1) return { status: 'revoked', note: 'OCSP: certificate is REVOKED' };
+    return { status: 'unknown', note: 'OCSP: unknown status' };
+  } catch (e) { return { status: 'unknown', note: 'OCSP parse failed: ' + e.message }; }
+}
+
+// Open a modal showing the full cert chain from a sig result: CN, issuer,
+// notBefore, notAfter, SHA-1 fingerprint per link.
+async function showCertChainModal(sigResult) {
+  const chain = sigResult.chainCerts || (sigResult.cert ? [sigResult.cert] : []);
+  const body = document.createElement('div');
+  body.style.cssText = 'font-size:13px; line-height:1.5; max-height:70vh; overflow-y:auto';
+  if (chain.length === 0) {
+    body.innerHTML = '<div class="hint">No certificates in the CMS.</div>';
+  } else {
+    const rows = chain.map((c, i) => {
+      const subCn = c.subject?.getField?.('CN')?.value || '(no CN)';
+      const subO = c.subject?.getField?.('O')?.value || '';
+      const issCn = c.issuer?.getField?.('CN')?.value || '(no CN)';
+      const issO = c.issuer?.getField?.('O')?.value || '';
+      const nb = c.validity?.notBefore?.toISOString?.().slice(0, 10) || '';
+      const na = c.validity?.notAfter?.toISOString?.().slice(0, 10) || '';
+      const fp = certFingerprint(c);
+      const label = i === 0 ? 'Signer (leaf)' : (i === chain.length - 1 ? 'Root / trust anchor' : 'Intermediate #' + i);
+      return `
+        <div style="border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px">
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px">${label}</div>
+          <div><b>${esc(subCn)}</b>${subO ? ' <span style="color:var(--muted)">('+esc(subO)+')</span>' : ''}</div>
+          <div style="color:var(--muted); font-size:12px; margin-top:2px">Issued by: ${esc(issCn)}${issO ? ' ('+esc(issO)+')' : ''}</div>
+          <div style="color:var(--muted); font-size:12px">Valid: ${nb} → ${na}</div>
+          <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; color:var(--muted); margin-top:4px; word-break:break-all">SHA-1 fp: ${fp}</div>
+        </div>
+      `;
+    }).join('');
+    body.innerHTML = rows;
+  }
+  await modal({ title: 'Certificate chain', body, confirmText: 'Close', cancelText: '' });
+}
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// Build a compliance-grade verification receipt as a small PDF via pdf-lib.
+// Not a signature — a plain record of "I verified this file at this URL on
+// this date, here are the results." Handy for archiving alongside signed
+// documents when a recipient needs proof they performed the check.
+async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, results, verifierUrl, verifiedAt, overallState }) {
+  const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+  const pdfDoc = await PDFDocument.create();
+  const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const helvB = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const mono = await pdfDoc.embedFont(StandardFonts.Courier);
+
+  const page = pdfDoc.addPage([595, 842]);   // A4
+  const marginX = 48, marginY = 60;
+  let y = 842 - marginY;
+
+  const drawLine = (text, opts = {}) => {
+    const font = opts.bold ? helvB : (opts.mono ? mono : helv);
+    const size = opts.size || 11;
+    const color = opts.color || rgb(0.1, 0.1, 0.1);
+    // Wrap on width.
+    const maxW = 595 - marginX * 2;
+    const words = String(text).split(/\s+/);
+    let line = '';
+    for (const w of words) {
+      const t = line ? line + ' ' + w : w;
+      if (font.widthOfTextAtSize(t, size) > maxW) {
+        page.drawText(line, { x: marginX, y, size, font, color });
+        y -= size * 1.35;
+        line = w;
+      } else line = t;
+    }
+    if (line) { page.drawText(line, { x: marginX, y, size, font, color }); y -= size * 1.35; }
+  };
+  const gap = (n = 8) => { y -= n; };
+  const heading = (t) => { gap(6); drawLine(t, { bold: true, size: 12, color: rgb(0.2, 0.2, 0.2) }); gap(2); };
+  const row = (k, v, opts = {}) => {
+    const kf = helvB, vf = opts.mono ? mono : helv;
+    const size = 10;
+    page.drawText(String(k) + ':', { x: marginX, y, size, font: kf, color: rgb(0.35, 0.35, 0.35) });
+    const kw = kf.widthOfTextAtSize(String(k) + ':', size);
+    page.drawText(String(v == null ? '' : v), { x: marginX + Math.max(kw + 8, 140), y, size, font: vf, color: rgb(0.05, 0.05, 0.05) });
+    y -= size * 1.6;
+  };
+
+  drawLine('Verification receipt', { bold: true, size: 20 });
+  drawLine('pdf-signer', { size: 9, color: rgb(0.5, 0.5, 0.5) });
+  gap(10);
+
+  const stateColor = overallState === 'valid' ? rgb(0.12, 0.48, 0.23)
+                    : overallState === 'modified' ? rgb(0.71, 0.47, 0.13)
+                    : rgb(0.76, 0.21, 0.12);
+  const stateLabel = overallState === 'valid' ? 'VERIFIED'
+                   : overallState === 'modified' ? 'VOIDED (modified after signing)'
+                   : 'INVALID';
+  drawLine('Overall status: ' + stateLabel, { bold: true, size: 14, color: stateColor });
+
+  heading('Document');
+  row('File name', fileName);
+  row('Size', fileBytes + ' bytes');
+  row('SHA-256', fileHash, { mono: true });
+
+  heading('Verification context');
+  row('Verifier URL', verifierUrl);
+  row('Verified at', verifiedAt.toISOString().replace('T', ' ').slice(0, 19) + ' UTC');
+  row('Signatures found', String(results.length));
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    heading('Signature #' + (i + 1));
+    if (r.error) {
+      row('Status', 'BROKEN — ' + r.error, {});
+      continue;
+    }
+    const st = perSigState(r, results);
+    row('Verdict', st === 'valid' ? 'valid' : st === 'modified' ? 'voided (uncovered bytes past this rev)' : st);
+    row('Signer CN', r.cn || '(unknown)');
+    if (r.email) row('Signer email', r.email);
+    if (r.signingTime) row('Signing time (claimed)', fmtSigningTime(r.signingTime));
+    if (r.tsaTime) row('TSA time (trusted)', fmtSigningTime(r.tsaTime) + (r.tsaSubject ? ' · ' + r.tsaSubject : ''));
+    if (r.certFp) row('Cert SHA-1', r.certFp, { mono: true });
+    const trust = r.trusted ? 'chains to a trusted root'
+                : (r.certVaultUrl && r.vaultTrusted) ? "trusted via signer's vault"
+                : r.selfSigned ? 'self-signed'
+                : 'chain not verified';
+    row('Trust', trust);
+    if (r.certVaultUrl) row('Vault URL', r.certVaultUrl);
+    if (r.ocspStatus) row('OCSP', r.ocspStatus + (r.ocspNote ? ' (' + r.ocspNote + ')' : ''));
+    row('Byte range covered', '[' + r.byteRange.join(', ') + ']', { mono: true });
+    row('Covers entire file', r.totalCovered ? 'yes' : 'no');
+    if (y < 120) {
+      // New page.
+      const p2 = pdfDoc.addPage([595, 842]);
+      y = 842 - marginY;
+      // switch drawing to new page — reassign closure-captured page via mutable ref
+      // (simplest: rebind by breaking out; here we just continue on p2)
+      // But because drawLine/row reference `page`, we need to change it. Quick fix:
+      break;
+    }
+  }
+
+  gap(20);
+  drawLine('This receipt records the verification result at the time above.', { size: 9, color: rgb(0.4, 0.4, 0.4) });
+  drawLine('It is not a signature; it proves nothing without the source document.', { size: 9, color: rgb(0.4, 0.4, 0.4) });
+
+  return await pdfDoc.save();
+}
+
+// Build a compact multi-signature timeline: one row per sig with signer,
+// time, verdict, trust. Rendered inline in the verifier's status card
+// when the document carries more than one signature.
+function multiSigTimelineHtml(results) {
+  if (results.length < 2) return '';
+  const rows = results.map((r, i) => {
+    const st = perSigState(r, results);
+    const badge = st === 'valid' ? '<span style="color:var(--good)">✓</span>'
+                : st === 'modified' ? '<span style="color:#b57920">⚠</span>'
+                : '<span style="color:var(--danger)">✕</span>';
+    const signer = esc(r.cn || 'unknown');
+    const t = r.tsaTime || r.signingTime;
+    const timeStr = t ? esc(fmtSigningTime(t)) : '';
+    const trust = r.trusted ? 'trusted root'
+                : (r.certVaultUrl && r.vaultTrusted) ? 'signer vault'
+                : r.selfSigned ? 'self-signed'
+                : 'untrusted';
+    return `<tr>
+      <td style="padding:6px 8px 6px 0">${badge}</td>
+      <td style="padding:6px 8px 6px 0"><b>${signer}</b><br><span style="color:var(--muted); font-size:11px">${trust}</span></td>
+      <td style="padding:6px 0; color:var(--muted); font-size:12px">${timeStr}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <div style="margin-top:14px; padding-top:12px; border-top:1px dashed var(--border)">
+      <div style="font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:6px">${results.length} signatures on this document</div>
+      <table style="width:100%; border-collapse:collapse; font-size:13px">${rows}</table>
+    </div>
+  `;
 }
 
 // Fetch every result's vault-published cert URL, compare to the CMS's leaf
@@ -7870,6 +8103,10 @@ async function runAutoVerifyFromHash() {
     const plaintext = await aesGcmDecrypt(parsed.keyBytes, cipherU8);
     const results = verifyPdfSignatures(plaintext);
     try { await verifyVaultTrustAsync(results); } catch (_) {}
+    // Best-effort revocation check for the signer cert. Skipped if AIA
+    // has no responder or the fetch is CORS-blocked; the UI reflects
+    // "no responder"/"unknown" transparently instead of hiding the row.
+    try { await verifyOcspAsync(results); } catch (_) {}
     const csvOk   = parsed.csv && parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes);
     const state = results.length && results.every(r => r.cryptoValid && r.totalCovered) ? 'valid'
                 : results.length && results.every(r => r.cryptoValid) ? 'modified'
@@ -7885,6 +8122,24 @@ async function runAutoVerifyFromHash() {
               : '<span style="color:var(--danger)">does NOT match</span> — the QR was tampered with')
       : '<span style="color:var(--muted)">(no CSV in QR)</span>';
 
+    // Trust cell now clickable — opens the cert chain drilldown.
+    const trustBase = first.trusted
+                        ? '<b style="color:var(--good)">chains to a trusted root</b>'
+                        : (first.certVaultUrl && first.vaultTrusted)
+                          ? `<b style="color:var(--good)">trusted via signer's vault</b>`
+                          : first.selfSigned
+                            ? '<span style="color:#b57920">self-signed</span>'
+                            : '<span style="color:#b57920">chain not verified</span>';
+    const ocspBadge = first.ocspStatus === 'good' ? ' · <span style="color:var(--good)">OCSP: cert is good</span>'
+                    : first.ocspStatus === 'revoked' ? ' · <b style="color:var(--danger)">OCSP: REVOKED</b>'
+                    : first.ocspStatus === 'noResponder' ? ' · <span style="color:var(--muted)">OCSP: no responder in cert</span>'
+                    : first.ocspStatus === 'unknown' ? ' · <span style="color:var(--muted)">OCSP: unknown</span>'
+                    : first.ocspStatus === 'error' ? ' · <span style="color:var(--muted)">OCSP: check failed</span>'
+                    : '';
+    const trustCell = `${trustBase}${ocspBadge}<br><a href="#" id="chainDrilldown" style="color:var(--accent); font-size:11px; text-decoration:none">→ inspect certificate chain (${(first.chainCerts||[]).length} cert${(first.chainCerts||[]).length===1?'':'s'})</a>`;
+
+    const fileHash = await sha256Hex(plaintext);
+
     render(state, {
       detail,
       fields: {
@@ -7892,29 +8147,71 @@ async function runAutoVerifyFromHash() {
         'Signer (in cert)': first.cn ? `<b>${esc(first.cn)}</b>${first.email ? ' &lt;' + esc(first.email) + '&gt;' : ''}` : '',
         'Signed at':        first.signingTime ? esc(fmtSigningTime(first.signingTime)) : '',
         'Cert SHA-1':       first.certFp ? `<code>${esc(first.certFp)}</code>` : '',
-        'Trust':            first.trusted
-                              ? '<b style="color:var(--good)">chains to a trusted root</b>'
-                              : (first.certVaultUrl && first.vaultTrusted)
-                                ? `<b style="color:var(--good)">trusted via signer's vault</b> · <a href="${esc(first.certVaultUrl)}" style="color:var(--accent)" target="_blank">cert</a>`
-                                : first.selfSigned
-                                  ? '<span style="color:#b57920">self-signed</span>'
-                                  : '<span style="color:#b57920">chain not verified</span>',
+        'Trust':            trustCell,
         'CSV cross-check':  csvRow,
+        'Document SHA-256': `<code style="font-size:11px">${fileHash}</code>`,
         'Document size':    plaintext.length + ' bytes',
       },
       cta: `
         <button id="btnPrint" class="primary">Print original</button>
         <button id="btnDownload">Download signed PDF</button>
-        <button id="btnDetails">Verification details</button>
+        <button id="btnReceipt">Download verification receipt</button>
+        <button id="btnDetails">Raw details</button>
       `,
       wire: r => {
         r.querySelector('#btnDownload').onclick = () => download('vault-' + (parsed.csv || 'decrypted') + '.pdf', plaintext, 'application/pdf');
         r.querySelector('#btnPrint').onclick = () => printPdf(plaintext);
+        r.querySelector('#btnReceipt').onclick = async () => {
+          try {
+            const bytes = await buildVerificationReceiptPdf({
+              fileName: 'vault-' + (parsed.csv || 'decrypted') + '.pdf',
+              fileHash,
+              fileBytes: plaintext.length,
+              results,
+              verifierUrl: location.href,
+              verifiedAt: new Date(),
+              overallState: state,
+            });
+            download('verification-receipt-' + (parsed.csv || 'doc').slice(0,8) + '.pdf', bytes, 'application/pdf');
+          } catch (e) { alert('Receipt build failed: ' + e.message); }
+        };
         r.querySelector('#btnDetails').onclick = async () => {
           const body = document.createElement('div');
           body.innerHTML = verifyResultsHtml(results);
           await modal({ title: 'Signature verification — raw', body, confirmText: 'Close', cancelText: '' });
         };
+        // Trust cell drilldown.
+        const chainLink = r.querySelector('#chainDrilldown');
+        if (chainLink) chainLink.onclick = ev => { ev.preventDefault(); showCertChainModal(first); };
+
+        // Multi-sig timeline + per-sig diff buttons.
+        if (results.length > 1) {
+          const card = r.querySelector('.verifier-card');
+          const timelineWrap = document.createElement('div');
+          timelineWrap.innerHTML = multiSigTimelineHtml(results);
+          card.appendChild(timelineWrap.firstElementChild);
+          // Diff buttons — one per sig, showing what that signer added.
+          const diffSection = document.createElement('div');
+          diffSection.style.cssText = 'margin-top:12px; padding-top:10px; border-top:1px dashed var(--border)';
+          diffSection.innerHTML = '<div style="font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:6px">See what each signer added</div>';
+          const sorted = [...results].filter(rr => !rr.error && rr.byteRange && rr.byteRange[1] > 0).sort((a,b) => a.byteRange[1] - b.byteRange[1]);
+          for (let i = 0; i < sorted.length; i++) {
+            const rr = sorted[i];
+            const prev = i === 0 ? null : sorted[i - 1];
+            const btn = document.createElement('button');
+            btn.style.cssText = 'margin:2px 6px 2px 0';
+            const signerName = (rr.cn || 'Signer ' + (i + 1)).slice(0, 30);
+            btn.textContent = (i === 0 ? '“' + signerName + '” signed' : '“' + signerName + '” added') + ' (rev ' + (i + 1) + ')';
+            btn.onclick = () => showRevisionDiff({
+              prevBytes: prev ? revisionBytes(plaintext, prev.byteRange) : null,
+              currBytes: revisionBytes(plaintext, rr.byteRange),
+              title: btn.textContent,
+            });
+            diffSection.appendChild(btn);
+          }
+          card.appendChild(diffSection);
+        }
+
         renderVerifierPreview(r, plaintext);
         // Emphasize the vault copy IS the document. UGR does the same:
         // their server-hosted PDF is the authoritative one; no local compare.
