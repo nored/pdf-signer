@@ -5766,23 +5766,6 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
 
   if (mdp === 'lock' || mdp === 'certify') pdfDoc.catalog.set(PDFName.of('Perms'), context.obj({ DocMDP: sigRef }));
 
-  // Some source PDFs carry a /Version entry in the catalog that pins the
-  // effective PDF version LOWER than what our signature requires. Our
-  // signatures emit SubFilter /ETSI.CAdES.detached which was introduced
-  // in PDF 1.7. When the catalog says /1.4-/1.6 Adobe rejects the
-  // signature (usually as an opaque "document was modified" error).
-  // Upgrade the catalog /Version to /1.7 when older; leave an unset
-  // /Version alone (the file header wins, and %PDF-1.7 or newer is
-  // fine). Diff proof: two files signed with same settings, same cert;
-  // wazze-signed.pdf (no /Version in catalog) → Adobe accepted;
-  // Ayush-signed(1).pdf (/Version /1.4 in catalog) → "modified".
-  const versionKey = PDFName.of('Version');
-  const curVer = pdfDoc.catalog.get(versionKey);
-  const curVerStr = curVer ? String(curVer).replace(/^\//, '') : null;
-  if (curVerStr && parseFloat(curVerStr) < 1.7) {
-    pdfDoc.catalog.set(versionKey, PDFName.of('1.7'));
-  }
-
   // ── PAdES-B-LT: fetch OCSP responses for the cert chain and embed a DSS
   // (Document Security Store) at the catalog level. Adobe reads this and
   // shows the "LTV enabled" badge; verifiers can check revocation status
