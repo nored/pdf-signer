@@ -6552,6 +6552,27 @@ function ensureSigFlags(objBytes, requiredBits) {
   return new TextEncoder().encode(before + ` /SigFlags ${requiredBits} ` + after);
 }
 
+// Insert or replace a /Key <ref> entry in the top-level dict of an object.
+// Used to add /DSS to the catalog during incremental sign without
+// re-serialising the whole catalog dict (which can noise up DocMDP P=3
+// verification). If the key already exists, replaces its value.
+function spliceCatalogSetIndirect(objBytes, key, refStr) {
+  const text = new TextDecoder('latin1').decode(objBytes);
+  // Match /Key <indirect ref> already present.
+  const existingRe = new RegExp('/' + key + '\\s+\\d+\\s+\\d+\\s+R');
+  if (existingRe.test(text)) {
+    return new TextEncoder().encode(text.replace(existingRe, '/' + key + ' ' + refStr));
+  }
+  // Not present — append before closing >>.
+  const outerStart = text.indexOf('<<');
+  const outerDict = extractBalancedDict(text, outerStart);
+  if (!outerDict) return null;
+  const closingAbs = outerStart + outerDict.lastIndexOf('>>');
+  const before = text.substring(0, closingAbs);
+  const after = text.substring(closingAbs);
+  return new TextEncoder().encode(before + ' /' + key + ' ' + refStr + ' ' + after);
+}
+
 // Splice /V + /AP into an existing empty sig field (or combined field+widget)
 // object's byte body without touching anything else. Returns null if /V is
 // already present (already-signed field — don't corrupt) or if the outer dict
@@ -7100,6 +7121,61 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     }
   }
 
+  // ── PAdES-B-LT: DSS embedding for the incremental path ──
+  // Best-effort: fetch OCSP responses for the signer's chain, emit cert
+  // and OCSP stream objects, then a DSS dict, then splice /DSS into the
+  // catalog so Adobe unlocks the "LTV enabled" badge. Skipped silently if
+  // the chain has no OCSP responder or the fetch fails (self-signed, CORS).
+  try {
+    const chainForOcsp = Array.isArray(chain) && chain.length ? chain : [cert];
+    const ocspResults = await fetchChainOcsp(chainForOcsp);
+    if (ocspResults.length > 0) {
+      const certRefs = [];
+      for (const c of chainForOcsp) {
+        const der = forge.asn1.toDer(forge.pki.certificateToAsn1(c)).getBytes();
+        const num = alloc();
+        // Raw binary stream — build the object body manually to avoid pdf-lib
+        // adding /Filter or re-encoding.
+        const bodyPre = `${num} 0 obj\n<< /Length ${der.length} >>\nstream\n`;
+        const bodyPost = `\nendstream\nendobj\n`;
+        // Concatenate as latin1 so binary bytes pass through cleanly.
+        objBodies.push({ num, body: bodyPre + der + bodyPost });
+        certRefs.push(num);
+      }
+      const ocspRefs = [];
+      for (const r of ocspResults) {
+        const bin = r.ocsp instanceof Uint8Array ? Array.from(r.ocsp).map(b => String.fromCharCode(b)).join('') : String(r.ocsp);
+        const num = alloc();
+        const bodyPre = `${num} 0 obj\n<< /Length ${bin.length} >>\nstream\n`;
+        const bodyPost = `\nendstream\nendobj\n`;
+        objBodies.push({ num, body: bodyPre + bin + bodyPost });
+        ocspRefs.push(num);
+      }
+      const dssNum = alloc();
+      const certsArr = certRefs.map(n => `${n} 0 R`).join(' ');
+      const ocspsArr = ocspRefs.map(n => `${n} 0 R`).join(' ');
+      objBodies.push({ num: dssNum, body:
+        `${dssNum} 0 obj\n<< /Type /DSS /Certs [${certsArr}] /OCSPs [${ocspsArr}] >>\nendobj\n`
+      });
+      // Splice /DSS <ref> into the catalog. Byte-preserving if possible so
+      // strict DocMDP verifiers don't flag the catalog change as a
+      // disallowed modification.
+      const catalogNum = parsed.rootRef.num;
+      const catalogOrig = await readOriginalObjectBytes(bytes, xref.entries, catalogNum);
+      if (catalogOrig) {
+        const updated = spliceCatalogSetIndirect(catalogOrig, 'DSS', `${dssNum} 0 R`);
+        if (updated) {
+          const inner = new TextDecoder('latin1').decode(updated).replace(/^\s*\d+\s+\d+\s+obj\s*/, '').replace(/\s*endobj\s*$/, '');
+          // Avoid duplicate catalog emission if some other branch already
+          // pushed it (e.g. AcroForm re-serialise fallback).
+          const existing = objBodies.findIndex(o => o.num === catalogNum);
+          if (existing >= 0) objBodies[existing] = { num: catalogNum, body: `${catalogNum} 0 obj\n${inner}\nendobj\n` };
+          else objBodies.push({ num: catalogNum, body: `${catalogNum} 0 obj\n${inner}\nendobj\n` });
+        }
+      }
+    }
+  } catch (e) { console.warn('DSS embedding skipped:', e && e.message); }
+
   // ── Assemble the incremental append ──
   const originalBytes = parsed.bytes;
   // Ensure the previous file ends with a newline before we glue on.
@@ -7334,6 +7410,12 @@ $('btnSign').onclick = async () => {
 function verifyPdfSignatures(bytes) {
   const results = [];
   const text = new TextDecoder('latin1').decode(bytes);
+  // Cheap DSS presence check — Adobe uses DSS to unlock the "LTV enabled"
+  // badge. Detects both DSS-in-catalog (referenced) and any /Type /DSS
+  // object body. Attached to each result for a per-doc "LTV data present"
+  // badge; a stricter check (DSS actually contains OCSP for THIS signer)
+  // would require full DSS parsing which we skip for now.
+  const hasDss = /\/DSS\s+\d+\s+\d+\s+R/.test(text) || /\/Type\s*\/DSS/.test(text);
   const brRegex = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/g;
   let m;
   while ((m = brRegex.exec(text)) !== null) {
@@ -7459,6 +7541,7 @@ function verifyPdfSignatures(bytes) {
         certVaultUrl,           // present in the sig dict; verifier can auto-fetch
         cert,                   // stash the parsed cert so a follow-up async pass can compare
         chainCerts: p7.certificates || [cert],   // full chain from the CMS, leaf first
+        hasDss,                 // /DSS in the PDF — Adobe's LTV enabling condition
       });
     } catch (e) {
       results.push({ error: e.message, byteRange: br });
@@ -7755,6 +7838,7 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
     row('Trust', trust);
     if (r.certVaultUrl) row('Vault URL', r.certVaultUrl);
     if (r.ocspStatus) row('OCSP', r.ocspStatus + (r.ocspNote ? ' (' + r.ocspNote + ')' : ''));
+    if (r.hasDss) row('LTV', 'enabled (DSS present in document)');
     row('Byte range covered', '[' + r.byteRange.join(', ') + ']', { mono: true });
     row('Covers entire file', r.totalCovered ? 'yes' : 'no');
   }
@@ -8253,7 +8337,8 @@ async function runAutoVerifyFromHash() {
                     : first.ocspStatus === 'unknown' ? ' · <span style="color:var(--muted)">OCSP: unknown</span>'
                     : first.ocspStatus === 'error' ? ' · <span style="color:var(--muted)">OCSP: check failed</span>'
                     : '';
-    const trustCell = `${trustBase}${ocspBadge}<br><a href="#" id="chainDrilldown" style="color:var(--accent); font-size:11px; text-decoration:none">→ inspect certificate chain (${(first.chainCerts||[]).length} cert${(first.chainCerts||[]).length===1?'':'s'})</a>`;
+    const ltvBadge = first.hasDss ? ' · <span style="color:var(--good)">LTV enabled (DSS present)</span>' : '';
+    const trustCell = `${trustBase}${ocspBadge}${ltvBadge}<br><a href="#" id="chainDrilldown" style="color:var(--accent); font-size:11px; text-decoration:none">→ inspect certificate chain (${(first.chainCerts||[]).length} cert${(first.chainCerts||[]).length===1?'':'s'})</a>`;
 
     const tsaCell = first.tsaTime
       ? `<b>${esc(fmtSigningTime(first.tsaTime))}</b>` +
