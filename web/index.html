@@ -4315,7 +4315,31 @@ function buildCmsSignedData({ signedBytes, cert, key, now, chain }) {
   // ESSCertIDv2 ::= SEQUENCE { hashAlgorithm AlgorithmIdentifier DEFAULT sha256, certHash OCTET STRING, issuerSerial IssuerSerial OPTIONAL }
   // Include hashAlgorithm explicitly (strict verifiers accept the default omitted
   // but an explicit SHA-256 is universally understood).
-  const essCertIdV2 = seq([ digestAlgSha256, octet(certHash) ]);
+  // ESSCertIDv2 also carries an optional issuerSerial. Adobe's CAdES
+  // validator (activated by SubFilter /ETSI.CAdES.detached) rejects the
+  // signature with "document was modified" when SigningCertificateV2 is
+  // present but issuerSerial is missing — the empty-SET variant emitted by
+  // forge.pkcs7 was silently ignored, but our populated ESSCertIDv2
+  // gets checked strictly. Include issuerSerial to keep Adobe happy.
+  //
+  //   IssuerSerial ::= SEQUENCE {
+  //     issuer       GeneralNames,          -- SEQUENCE OF GeneralName
+  //     serialNumber CertificateSerialNumber
+  //   }
+  //   GeneralName [4] EXPLICIT IMPLICIT directoryName  -- Name (rdnSequence)
+  //
+  // Walk the cert's TBS to grab issuer + serial as ASN.1 nodes (avoids
+  // re-encoding what forge already produced).
+  const certForIssuer = forge.pki.certificateToAsn1(cert);
+  const tbsForIssuer = certForIssuer.value[0];
+  let idxIS = 0;
+  if (tbsForIssuer.value[0].tagClass === Class.CONTEXT_SPECIFIC && tbsForIssuer.value[0].type === 0) idxIS = 1;
+  const certSerialAsn1 = tbsForIssuer.value[idxIS];
+  const certIssuerAsn1 = tbsForIssuer.value[idxIS + 2];
+  const generalNameDirectory = asn1.create(Class.CONTEXT_SPECIFIC, 4, true, [certIssuerAsn1]);
+  const generalNames = seq([generalNameDirectory]);
+  const issuerSerial = seq([generalNames, certSerialAsn1]);
+  const essCertIdV2 = seq([ digestAlgSha256, octet(certHash), issuerSerial ]);
   const signingCertV2Value = seq([ seq([ essCertIdV2 ]) ]);
 
   // 3. Attributes. Each is SEQUENCE { OID, SET { value } }.
