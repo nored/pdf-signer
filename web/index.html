@@ -2416,6 +2416,19 @@ async function openPdf(file) {
     if (restored > 0) toast(`Restored ${restored} placement${restored > 1 ? 's' : ''} from your previous session`, 'ok');
   }
   if ($('stampEnable').checked && !doc.alreadySigned) autoSeedStampsIfNone();
+  // Build the sig-field map (fieldName → { fieldObjNum, widgetObjNum, isCombined,
+  // rect, pageIndex }) so the sign paths can route signatures into these
+  // existing fields instead of stamping fresh ones. Then show a "Sign here?"
+  // affordance on each empty field. Skipped for encrypted PDFs (writes are
+  // disabled anyway).
+  doc.sigFieldMap = {};
+  try {
+    if (!doc.isEncrypted) {
+      const pdfDocForFields = await window.PDFLib.PDFDocument.load(doc.bytes);
+      doc.sigFieldMap = buildSigFieldMap(pdfDocForFields);
+      await markUnsignedFieldHints();
+    }
+  } catch (e) { console.warn('sig field detection failed:', e); }
   if (isThumbsOpen()) renderThumbnails();
   updateSignButton();
 }
@@ -2630,6 +2643,16 @@ async function renderFormFieldOverlays() {
 // Non-invasive hint: mark empty signature form fields with a small dashed
 // outline so the user can see them if they want, without touching them.
 async function markUnsignedFieldHints() {
+  // Skip if the doc has no AcroForm sig fields — cheap early exit for the
+  // common case (freshly-printed reports without form-authored slots).
+  const rawText = dec.decode(doc.bytes);
+  if (!/\/FT\s*\/Sig/.test(rawText)) return false;
+  // If the user already has a placement targeting a specific form field
+  // (from a previous session that was autosaved), don't re-offer that
+  // field's hint — the placement is already sitting on it.
+  const claimedFields = new Set(
+    doc.placements.filter(p => p.formFieldName).map(p => p.formFieldName)
+  );
   let any = false;
   for (const meta of doc.pageMeta) {
     let anns = [];
@@ -2639,6 +2662,8 @@ async function markUnsignedFieldHints() {
       if ((a.fieldType || '').toLowerCase() !== 'sig') continue;
       if (a.fieldValue) continue;
       if (!a.rect || a.rect.length < 4) continue;
+      const fieldName = a.fieldName || null;
+      if (fieldName && claimedFields.has(fieldName)) continue;
       any = true;
       const [x1, y1, x2, y2] = a.rect;
       const [cx1, cy1] = meta.viewport.convertToViewportPoint(x1, y2);
@@ -2651,7 +2676,9 @@ async function markUnsignedFieldHints() {
       hint.style.top = top + 'px';
       hint.style.width = w + 'px';
       hint.style.height = h + 'px';
-      hint.title = 'Empty signature field — click to place your signature here';
+      hint.title = fieldName
+        ? 'Empty signature field "' + fieldName + '" — click to sign into it'
+        : 'Empty signature field — click to sign into it';
       hint.addEventListener('click', ev => {
         ev.stopPropagation();
         pushUndo();
@@ -2663,6 +2690,10 @@ async function markUnsignedFieldHints() {
           wPdf: Math.abs(x2 - x1),
           hPdf: Math.abs(y2 - y1),
           type: 'digital',
+          // Route the sig into this pre-existing AcroForm field instead of
+          // creating a new one. The sign paths use this to update the
+          // existing widget's /V rather than emit a new /FT /Sig object.
+          formFieldName: fieldName,
         };
         doc.placements.push(p);
         attachPlacementToPage(p);
@@ -2674,7 +2705,7 @@ async function markUnsignedFieldHints() {
       });
       const label = document.createElement('div');
       label.className = 'field-hint-label';
-      label.textContent = 'Sign here?';
+      label.textContent = fieldName ? 'Sign here: ' + fieldName : 'Sign here?';
       hint.appendChild(label);
       meta.wrapEl.appendChild(hint);
     }
@@ -3766,10 +3797,13 @@ function renderPlacementList() {
     const row = document.createElement('div');
     row.className = 'placement-item' + (p.id === doc.selectedPlacementId ? ' selected' : '');
     const swatchClass = p.type === 'text' ? 'text' : (p.type === 'stamp' ? 'text' : (p.type === 'redact' ? 'text' : 'digital'));
-    const kind = p.type === 'text' ? 'Text field' : (p.type === 'stamp' ? 'Stamp position' : (p.type === 'redact' ? 'Redaction' : 'Signature'));
+    const kind = p.type === 'text' ? 'Text field'
+               : (p.type === 'stamp' ? 'Stamp position'
+               : (p.type === 'redact' ? 'Redaction'
+               : (p.formFieldName ? 'Signature → field' : 'Signature')));
     const preview = p.type === 'text' && p.text
       ? ' — “' + (p.text.length > 22 ? p.text.slice(0, 22) + '…' : p.text) + '”'
-      : '';
+      : (p.formFieldName ? ' — “' + p.formFieldName + '”' : '');
     row.innerHTML = `
       <span class="swatch ${swatchClass}"></span>
       <span>${kind} · p.${p.pageIndex + 1}${preview}</span>
@@ -5058,7 +5092,7 @@ function drawStampVertical(page, pageIndex, totalPages, fonts, opts) {
   }
 }
 
-async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated, certVaultUrl}) {
+async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated, certVaultUrl, sigFieldMap}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
@@ -5313,53 +5347,81 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
     sigDict.set(PDFName.of('Reference'), context.obj([sigRefEntry]));
   }
 
-  // 3. Signature form field with N widget kids (one per placement).
-  const kidsArr = context.obj([]);
-  const sigField = context.obj({
-    FT: PDFName.of('Sig'),
-    T: PDFString.of('Signature1'),
-    V: sigRef,
-    Kids: kidsArr,
-  });
-  const sigFieldRef = context.register(sigField);
-
-  const annotsKey = PDFName.of('Annots');
+  // 3. Signature form fields — split into "routed into an existing empty
+  // AcroForm sig field" (formFieldName mapped) and "create a fresh field".
+  const fieldMapForRewrite = sigFieldMap || {};
+  const routedSigs = [];
+  const newSigs = [];
   for (const p of sigPlacements) {
-    const page = pdfDoc.getPage(p.pageIndex);
-    const widget = context.obj({
-      Type: PDFName.of('Annot'),
-      Subtype: PDFName.of('Widget'),
-      Rect: [p.xPdf, p.yPdf, p.xPdf + p.wPdf, p.yPdf + p.hPdf],
-      F: PDFNumber.of(132),
-      P: page.ref,
-      Parent: sigFieldRef,
-    });
-    const widgetRef = context.register(widget);
-    kidsArr.push(widgetRef);
-    let annots = page.node.get(annotsKey);
-    if (annots && typeof annots.push !== 'function') annots = context.lookup(annots);
-    if (!annots) page.node.set(annotsKey, context.obj([widgetRef]));
-    else annots.push(widgetRef);
+    const t = p.formFieldName ? fieldMapForRewrite[p.formFieldName] : null;
+    if (t && t.isCombined && !t.alreadySigned) routedSigs.push({ p, target: t });
+    else newSigs.push(p);
   }
 
-  // Merge into any existing AcroForm so pre-existing (empty) signature fields are preserved.
+  const annotsKey = PDFName.of('Annots');
+  let sigFieldRef = null;
+  if (newSigs.length > 0) {
+    // One shared sig field with N widget kids for fresh placements.
+    const kidsArr = context.obj([]);
+    const sigField = context.obj({
+      FT: PDFName.of('Sig'),
+      T: PDFString.of('Signature-' + now.getTime().toString(36)),
+      V: sigRef,
+      Kids: kidsArr,
+    });
+    sigFieldRef = context.register(sigField);
+    for (const p of newSigs) {
+      const page = pdfDoc.getPage(p.pageIndex);
+      const widget = context.obj({
+        Type: PDFName.of('Annot'),
+        Subtype: PDFName.of('Widget'),
+        Rect: [p.xPdf, p.yPdf, p.xPdf + p.wPdf, p.yPdf + p.hPdf],
+        F: PDFNumber.of(132),
+        P: page.ref,
+        Parent: sigFieldRef,
+      });
+      const widgetRef = context.register(widget);
+      kidsArr.push(widgetRef);
+      let annots = page.node.get(annotsKey);
+      if (annots && typeof annots.push !== 'function') annots = context.lookup(annots);
+      if (!annots) page.node.set(annotsKey, context.obj([widgetRef]));
+      else annots.push(widgetRef);
+    }
+  }
+
+  // Routed placements: point each existing field's /V at our sigRef.
+  // The visible sig appearance is drawn onto page content at the field's
+  // rect (see below where drawDigitalAppearance is called), so a viewer
+  // still sees the signature at the form-authored spot.
+  for (const { target } of routedSigs) {
+    const fieldRef = window.PDFLib.PDFRef.of(target.fieldObjNum, 0);
+    const fieldDict = context.lookup(fieldRef);
+    if (fieldDict) fieldDict.set(PDFName.of('V'), sigRef);
+  }
+
+  // Merge into any existing AcroForm so pre-existing (empty) signature
+  // fields are preserved. Only append the newly-minted field to /Fields
+  // when we actually made one; routed placements re-use fields that are
+  // already in /Fields.
   const acroFormKey = PDFName.of('AcroForm');
   let acroFormObj = pdfDoc.catalog.get(acroFormKey);
   if (acroFormObj) acroFormObj = context.lookup(acroFormObj);
   if (acroFormObj) {
-    let fields = acroFormObj.get(PDFName.of('Fields'));
-    if (fields) fields = context.lookup(fields);
-    if (!fields || typeof fields.push !== 'function') {
-      fields = context.obj([sigFieldRef]);
-      acroFormObj.set(PDFName.of('Fields'), fields);
-    } else {
-      fields.push(sigFieldRef);
+    if (sigFieldRef) {
+      let fields = acroFormObj.get(PDFName.of('Fields'));
+      if (fields) fields = context.lookup(fields);
+      if (!fields || typeof fields.push !== 'function') {
+        fields = context.obj([sigFieldRef]);
+        acroFormObj.set(PDFName.of('Fields'), fields);
+      } else {
+        fields.push(sigFieldRef);
+      }
     }
     const flagsObj = acroFormObj.get(PDFName.of('SigFlags'));
     const curFlags = (flagsObj && typeof flagsObj.numberValue === 'number') ? flagsObj.numberValue
                    : (flagsObj && typeof flagsObj.value === 'number') ? flagsObj.value : 0;
     acroFormObj.set(PDFName.of('SigFlags'), PDFNumber.of(curFlags | 3));
-  } else {
+  } else if (sigFieldRef) {
     const acroForm = context.obj({ Fields: [sigFieldRef], SigFlags: PDFNumber.of(3) });
     pdfDoc.catalog.set(acroFormKey, context.register(acroForm));
   }
@@ -6210,6 +6272,115 @@ function ensureSigFlags(objBytes, requiredBits) {
   return new TextEncoder().encode(before + ` /SigFlags ${requiredBits} ` + after);
 }
 
+// Splice /V + /AP into an existing empty sig field (or combined field+widget)
+// object's byte body without touching anything else. Returns null if /V is
+// already present (already-signed field — don't corrupt) or if the outer dict
+// bounds can't be found. Used by the incremental sign path to route a signature
+// into a pre-existing AcroForm slot.
+function spliceEmptyFieldSetVAP(objBytes, sigDictNum, apNum) {
+  const text = new TextDecoder('latin1').decode(objBytes);
+  const openIdx = text.indexOf('<<');
+  const closeIdx = text.lastIndexOf('>>');
+  if (openIdx < 0 || closeIdx < 0) return null;
+  const inner = text.substring(openIdx + 2, closeIdx);
+  if (/\/V\s+\d+\s+\d+\s+R/.test(inner)) return null;
+  if (/\/V\s*</.test(inner)) return null;
+  const before = text.substring(0, openIdx + 2);
+  const after = text.substring(closeIdx);
+  const insertion = ` /V ${sigDictNum} 0 R /AP << /N ${apNum} 0 R >>`;
+  return new TextEncoder().encode(before + insertion + inner + after);
+}
+
+// Walk AcroForm.Fields (recursively via /Kids) and return a map keyed by the
+// full field name (parent.child notation), value = { fieldObjNum,
+// widgetObjNum, isCombined, rect, pageIndex, alreadySigned }. isCombined means
+// the field dict itself is also the widget (no /Kids, has /Subtype /Widget or
+// /Rect). Used by the sign paths to route a signature into an existing form
+// slot instead of creating a new /Sig field alongside.
+function buildSigFieldMap(pdfDoc) {
+  const { PDFRef, PDFArray, PDFDict, PDFName, PDFString, PDFHexString } = window.PDFLib;
+  const map = {};
+  const catalog = pdfDoc.catalog;
+  const ctx = pdfDoc.context;
+  const acroForm = catalog.lookup(PDFName.of('AcroForm'));
+  if (!acroForm || !(acroForm instanceof PDFDict)) return map;
+  const fields = acroForm.lookup(PDFName.of('Fields'));
+  if (!(fields instanceof PDFArray)) return map;
+  // Build a pageRef → pageIndex lookup so we can name where each widget lives.
+  const pageRefToIndex = new Map();
+  pdfDoc.getPages().forEach((pg, idx) => { pageRefToIndex.set(pg.ref.tag || (pg.ref.objectNumber + ':' + pg.ref.generationNumber), idx); });
+  const resolvePageIdx = (ref) => {
+    if (!ref) return null;
+    const key = ref.tag || (ref.objectNumber + ':' + ref.generationNumber);
+    return pageRefToIndex.has(key) ? pageRefToIndex.get(key) : null;
+  };
+  const nameOf = (dict) => {
+    const t = dict.lookupMaybe ? dict.lookupMaybe(PDFName.of('T'), PDFString, PDFHexString) : null;
+    if (!t) return null;
+    return t.decodeText ? t.decodeText() : String(t);
+  };
+  function walk(entry, prefix) {
+    let ref = null, dict = null;
+    if (entry instanceof PDFRef) { ref = entry; dict = ctx.lookup(entry); }
+    else if (entry instanceof PDFDict) { dict = entry; }
+    if (!dict) return;
+    const t = nameOf(dict);
+    const fullName = t ? (prefix ? prefix + '.' + t : t) : prefix;
+    const ft = dict.lookupMaybe ? dict.lookupMaybe(PDFName.of('FT'), PDFName) : null;
+    const ftStr = ft ? String(ft).replace(/^\//, '') : null;
+    const kids = dict.lookupMaybe ? dict.lookupMaybe(PDFName.of('Kids'), PDFArray) : null;
+    if (ftStr === 'Sig' && fullName) {
+      const v = dict.lookupMaybe ? dict.lookupMaybe(PDFName.of('V'), PDFDict) : null;
+      const alreadySigned = !!v;
+      // Combined field+widget: no /Kids, has /Rect
+      const rectArr = dict.lookupMaybe ? dict.lookupMaybe(PDFName.of('Rect'), PDFArray) : null;
+      const pRef = dict.get ? dict.get(PDFName.of('P')) : null;
+      if (!kids && rectArr && ref) {
+        const rect = [];
+        for (let i = 0; i < 4; i++) {
+          const n = rectArr.get(i);
+          rect.push(n && typeof n.value === 'function' ? n.value() : (n && n.numberValue) || 0);
+        }
+        map[fullName] = {
+          fieldObjNum: ref.objectNumber,
+          widgetObjNum: ref.objectNumber,
+          isCombined: true,
+          rect,
+          pageIndex: resolvePageIdx(pRef),
+          alreadySigned,
+        };
+      } else if (kids && ref) {
+        // Field with separate widget children. Take the first widget child.
+        const kid0Ref = kids.get(0);
+        const kidDict = kid0Ref instanceof PDFRef ? ctx.lookup(kid0Ref) : kid0Ref;
+        if (kidDict && kidDict.lookupMaybe) {
+          const kRect = kidDict.lookupMaybe(PDFName.of('Rect'), PDFArray);
+          const kP = kidDict.get ? kidDict.get(PDFName.of('P')) : null;
+          const rect = [];
+          if (kRect) for (let i = 0; i < 4; i++) {
+            const n = kRect.get(i);
+            rect.push(n && typeof n.value === 'function' ? n.value() : (n && n.numberValue) || 0);
+          }
+          map[fullName] = {
+            fieldObjNum: ref.objectNumber,
+            widgetObjNum: kid0Ref instanceof PDFRef ? kid0Ref.objectNumber : null,
+            isCombined: false,
+            rect,
+            pageIndex: resolvePageIdx(kP),
+            alreadySigned,
+          };
+        }
+      }
+    }
+    // Recurse into kids for non-terminal fields
+    if (kids && ftStr !== 'Sig') {
+      for (let i = 0; i < kids.size(); i++) walk(kids.get(i), fullName);
+    }
+  }
+  for (let i = 0; i < fields.size(); i++) walk(fields.get(i), '');
+  return map;
+}
+
 function parsePdfForIncremental(bytes) {
   const text = new TextDecoder('latin1').decode(bytes);
 
@@ -6316,7 +6487,7 @@ function stdFontNameFor(key) {
   }
 }
 
-async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated, certVaultUrl }) {
+async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated, certVaultUrl, sigFieldMap }) {
   const { PDFDocument, PDFName, PDFArray, PDFRef, PDFNumber } = window.PDFLib;
   const parsed = parsePdfForIncremental(bytes);
   const now = signingTime instanceof Date ? signingTime : new Date();
@@ -6326,6 +6497,22 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // stamp placement would modify page content and void the prior signature.
   const sigPlacements = placements.filter(p => p.type === 'digital');
   if (sigPlacements.length === 0) throw new Error('Incremental signing needs at least one signature placement');
+
+  // Split placements into "route into existing AcroForm field" (needs the map
+  // AND the target field to be a combined field+widget the user hasn't
+  // already signed) and "create a fresh field". Anything with formFieldName
+  // that isn't a clean route-in falls back to fresh.
+  const fieldMap = sigFieldMap || {};
+  const routedSigs = [];
+  const newSigs = [];
+  for (const p of sigPlacements) {
+    const target = p.formFieldName ? fieldMap[p.formFieldName] : null;
+    if (target && target.isCombined && !target.alreadySigned) {
+      routedSigs.push({ p, target });
+    } else {
+      newSigs.push(p);
+    }
+  }
 
   // Load with pdf-lib for object graph lookups (chain-of-refs, page tree,
   // AcroForm entry) — works regardless of xref form or object-stream use.
@@ -6369,9 +6556,14 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     registerFont(stdFontNameFor(p.nameFont || 'serif-italic'));
   }
   const sigDictNum = alloc();
-  const sigFieldNum = alloc();
+  // Only allocate a new field object number if we're creating at least one
+  // fresh field. Routed-into-existing-field placements reuse that field's
+  // object number.
+  const sigFieldNum = newSigs.length > 0 ? alloc() : null;
 
-  for (const p of sigPlacements) {
+  // Fresh field placements: emit an appearance stream + a widget annotation
+  // pointing at the new sigFieldNum (which we'll emit as one shared field).
+  for (const p of newSigs) {
     const nameFontRec = fontResourceRegistry.get(stdFontNameFor(p.nameFont || 'serif-italic'));
     const w = p.wPdf, h = p.hPdf;
     const stream = buildSigAppearanceStream({
@@ -6400,6 +6592,38 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     widgetObjs.push({ num: widgetNum, pageIndex: p.pageIndex });
   }
 
+  // Routed placements: emit an appearance stream, then splice /V and /AP
+  // into the EXISTING field/widget object's original bytes. No new widget
+  // annotation, no /Fields append, no page /Annots change.
+  const routedObjNums = new Set();
+  for (const { p, target } of routedSigs) {
+    const nameFontRec = fontResourceRegistry.get(stdFontNameFor(p.nameFont || 'serif-italic'));
+    // Render at the field's own rect so the appearance box matches what the
+    // form author placed (users see their sig inside the form's box).
+    const rect = target.rect;
+    const w = Math.abs(rect[2] - rect[0]);
+    const h = Math.abs(rect[3] - rect[1]);
+    const stream = buildSigAppearanceStream({
+      name: meta.name, dateStr, reason: reason || '', location: location || '',
+      w, h, nameFontResource: nameFontRec.resName,
+    });
+    const apNum = alloc();
+    let fontSubdict = '';
+    for (const [, rec] of fontResourceRegistry) fontSubdict += `/${rec.resName} ${rec.objNum} 0 R `;
+    objBodies.push({ num: apNum, body:
+      `${apNum} 0 obj\n<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 ${pdfNum(w)} ${pdfNum(h)}]\n` +
+      `   /Resources << /Font << ${fontSubdict}>> /ProcSet [/PDF /Text] >>\n` +
+      `   /Length ${stream.length}\n>>\nstream\n${stream}endstream\nendobj\n`
+    });
+    const orig = await readOriginalObjectBytes(bytes, xref.entries, target.fieldObjNum);
+    if (!orig) throw new Error(`Could not read original bytes for form field "${p.formFieldName}" (obj ${target.fieldObjNum})`);
+    const spliced = spliceEmptyFieldSetVAP(orig, sigDictNum, apNum);
+    if (!spliced) throw new Error(`Form field "${p.formFieldName}" already has a /V entry — refusing to overwrite`);
+    const inner = new TextDecoder('latin1').decode(spliced).replace(/^\s*\d+\s+\d+\s+obj\s*/, '').replace(/\s*endobj\s*$/, '');
+    objBodies.push({ num: target.fieldObjNum, body: `${target.fieldObjNum} 0 obj\n${inner}\nendobj\n` });
+    routedObjNums.add(target.fieldObjNum);
+  }
+
   // Font objects.
   for (const [psName, rec] of fontResourceRegistry) {
     objBodies.push({ num: rec.objNum, body:
@@ -6417,11 +6641,13 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     certUrlLine +
     `>>\nendobj\n`
   });
-  const kidsStr = widgetObjs.map(w => `${w.num} 0 R`).join(' ');
-  const sigFieldName = `Signature-${now.getTime().toString(36)}`;
-  objBodies.push({ num: sigFieldNum, body:
-    `${sigFieldNum} 0 obj\n<< /FT /Sig /T (${sigFieldName}) /V ${sigDictNum} 0 R /Kids [${kidsStr}] >>\nendobj\n`
-  });
+  if (sigFieldNum !== null && widgetObjs.length > 0) {
+    const kidsStr = widgetObjs.map(w => `${w.num} 0 R`).join(' ');
+    const sigFieldName = `Signature-${now.getTime().toString(36)}`;
+    objBodies.push({ num: sigFieldNum, body:
+      `${sigFieldNum} 0 obj\n<< /FT /Sig /T (${sigFieldName}) /V ${sigDictNum} 0 R /Kids [${kidsStr}] >>\nendobj\n`
+    });
+  }
 
   // AcroForm update — byte-preserving splice first, pdf-lib re-serialise as
   // a fallback for objects we couldn't slice out of the original bytes
@@ -6468,10 +6694,12 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
 
   let acroFormEntry = pdfDoc.catalog.get(acroFormKey);
   let acroFormNum = null, catalogNeedsUpdate = false;
-  const newFieldRefs = [`${sigFieldNum} 0 R`];
+  // Only append to /Fields when we minted a new field. Routed placements
+  // reuse a field that's already in /Fields, so nothing to append there.
+  const newFieldRefs = (sigFieldNum !== null && widgetObjs.length > 0) ? [`${sigFieldNum} 0 R`] : [];
   let byteSpliceUsed = false;
 
-  if (acroFormEntry instanceof PDFRef) {
+  if (acroFormEntry instanceof PDFRef && newFieldRefs.length > 0) {
     acroFormNum = acroFormEntry.objectNumber;
     const spliceResult = await emitByteSplicedFieldsAppend(acroFormNum, newFieldRefs);
     if (spliceResult instanceof Uint8Array) {
@@ -6488,9 +6716,28 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
       // /SigFlags ≥ 3, so leave it alone unless we have to.
       byteSpliceUsed = true;
     }
+  } else if (newFieldRefs.length === 0) {
+    // Pure routed-into-existing-fields case. Ensure /SigFlags |= 3 on the
+    // AcroForm dict (a form that only had /Sig fields without ever being
+    // signed may still have /SigFlags 0). Splice minimally, no /Fields touch.
+    if (acroFormEntry instanceof PDFRef) {
+      acroFormNum = acroFormEntry.objectNumber;
+      const orig = await readOriginalObjectBytes(bytes, xref.entries, acroFormNum);
+      if (orig) {
+        const updated = ensureSigFlags(orig, 3);
+        // Only re-emit if the /SigFlags actually changed (avoid re-emitting
+        // an untouched AcroForm dict, which itself would be a valid append
+        // but adds noise).
+        if (updated.length !== orig.length || !updated.every((b, i) => b === orig[i])) {
+          const inner = new TextDecoder('latin1').decode(updated).replace(/^\s*\d+\s+\d+\s+obj\s*/, '').replace(/\s*endobj\s*$/, '');
+          objBodies.push({ num: acroFormNum, body: `${acroFormNum} 0 obj\n${inner}\nendobj\n` });
+        }
+      }
+      byteSpliceUsed = true;
+    }
   }
 
-  if (!byteSpliceUsed) {
+  if (!byteSpliceUsed && newFieldRefs.length > 0) {
     // Fallback: pdf-lib re-serialise (breaks DocMDP P=3 in strict Adobe
     // verification, but keeps the sig otherwise valid for viewers that
     // don't strict-check DocMDP).
@@ -6738,6 +6985,7 @@ $('btnSign').onclick = async () => {
         key: unlocked.key,
         chain: unlocked.chain,
         signingTime, tsaUrl, backdated, certVaultUrl,
+        sigFieldMap: doc.sigFieldMap || {},
       });
     } else {
       signed = await makeSignedPdf({
@@ -6754,6 +7002,7 @@ $('btnSign').onclick = async () => {
         chain: unlocked.chain,
         sigPngU8: sigImage.pngU8,
         signingTime,
+        sigFieldMap: doc.sigFieldMap || {},
         stamp: stampEnabled ? {
           enabled: true,
           role: ($('stampRole').value || '').trim(),
