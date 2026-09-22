@@ -7467,6 +7467,50 @@ function verifyPdfSignatures(bytes) {
   return results;
 }
 
+// Fetch the AATL/EUTL trust anchors JSON bundled in the app (or a nearby
+// curated copy). Returns { anchors: [{list, name, sha256}] }; empty on
+// failure so verification degrades cleanly. Cached per session.
+let _trustAnchorsCache = null;
+async function loadTrustAnchors() {
+  if (_trustAnchorsCache) return _trustAnchorsCache;
+  try {
+    const url = new URL('trust-anchors.json', location.href).toString();
+    const r = await fetch(url, { cache: 'no-cache' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    _trustAnchorsCache = { anchors: Array.isArray(j.anchors) ? j.anchors : [] };
+  } catch (_) { _trustAnchorsCache = { anchors: [] }; }
+  return _trustAnchorsCache;
+}
+
+// SHA-256 of an X.509 cert's DER encoding, lowercase hex.
+function certSha256Fp(cert) {
+  try {
+    const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
+    return forge.md.sha256.create().update(der).digest().toHex().toLowerCase();
+  } catch (_) { return null; }
+}
+
+// Cross-check each sig's chain against the AATL/EUTL fingerprints. Stamps
+// r.trustListMatch = { list, name, fp } on the first matching cert (usually
+// a root or a well-known intermediate). Mutates results in place.
+async function verifyTrustListsAsync(results) {
+  const { anchors } = await loadTrustAnchors();
+  if (!anchors.length) return;
+  const byFp = new Map();
+  for (const a of anchors) if (a && a.sha256) byFp.set(String(a.sha256).toLowerCase(), a);
+  for (const r of results) {
+    if (r.error) continue;
+    const chain = r.chainCerts || (r.cert ? [r.cert] : []);
+    for (const c of chain) {
+      const fp = certSha256Fp(c);
+      if (!fp) continue;
+      const hit = byFp.get(fp);
+      if (hit) { r.trustListMatch = { list: hit.list, name: hit.name, fp }; break; }
+    }
+  }
+}
+
 // Fetch OCSP status for each signer cert (best-effort). Mutates results in
 // place, stamping ocspStatus = 'good' | 'revoked' | 'unknown' |
 // 'noResponder' | 'error' along with ocspNote (short human string).
@@ -7703,7 +7747,8 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
     if (r.signingTime) row('Signing time (claimed)', fmtSigningTime(r.signingTime));
     if (r.tsaTime) row('TSA time (trusted)', fmtSigningTime(r.tsaTime) + (r.tsaSubject ? ' · ' + r.tsaSubject : ''));
     if (r.certFp) row('Cert SHA-1', r.certFp, { mono: true });
-    const trust = r.trusted ? 'chains to a trusted root'
+    const trust = r.trustListMatch ? ('on ' + r.trustListMatch.list + ': ' + r.trustListMatch.name)
+                : r.trusted ? 'chains to a trusted root'
                 : (r.certVaultUrl && r.vaultTrusted) ? "trusted via signer's vault"
                 : r.selfSigned ? 'self-signed'
                 : 'chain not verified';
@@ -7734,7 +7779,8 @@ function multiSigTimelineHtml(results) {
     const signer = esc(r.cn || 'unknown');
     const t = r.tsaTime || r.signingTime;
     const timeStr = t ? esc(fmtSigningTime(t)) : '';
-    const trust = r.trusted ? 'trusted root'
+    const trust = r.trustListMatch ? (r.trustListMatch.list + ': ' + r.trustListMatch.name)
+                : r.trusted ? 'trusted root'
                 : (r.certVaultUrl && r.vaultTrusted) ? 'signer vault'
                 : r.selfSigned ? 'self-signed'
                 : 'untrusted';
@@ -8169,6 +8215,9 @@ async function runAutoVerifyFromHash() {
     // has no responder or the fetch is CORS-blocked; the UI reflects
     // "no responder"/"unknown" transparently instead of hiding the row.
     try { await verifyOcspAsync(results); } catch (_) {}
+    // AATL / EUTL cross-check — promote Trust badge to explicit list
+    // membership when the chain touches a curated fingerprint.
+    try { await verifyTrustListsAsync(results); } catch (_) {}
     const csvOk   = parsed.csv && parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes);
     const state = results.length && results.every(r => r.cryptoValid && r.totalCovered) ? 'valid'
                 : results.length && results.every(r => r.cryptoValid) ? 'modified'
@@ -8185,13 +8234,19 @@ async function runAutoVerifyFromHash() {
       : '<span style="color:var(--muted)">(no CSV in QR)</span>';
 
     // Trust cell now clickable — opens the cert chain drilldown.
-    const trustBase = first.trusted
-                        ? '<b style="color:var(--good)">chains to a trusted root</b>'
-                        : (first.certVaultUrl && first.vaultTrusted)
-                          ? `<b style="color:var(--good)">trusted via signer's vault</b>`
-                          : first.selfSigned
-                            ? '<span style="color:#b57920">self-signed</span>'
-                            : '<span style="color:#b57920">chain not verified</span>';
+    // If the chain matched an AATL/EUTL fingerprint, promote the badge:
+    // an AATL/EUTL membership is a stronger signal than a generic
+    // "chains to a trusted root" (which can include the OS trust store).
+    const listMatch = first.trustListMatch;
+    const trustBase = listMatch
+                        ? `<b style="color:var(--good)">on ${esc(listMatch.list)}: ${esc(listMatch.name)}</b>`
+                        : first.trusted
+                          ? '<b style="color:var(--good)">chains to a trusted root</b>'
+                          : (first.certVaultUrl && first.vaultTrusted)
+                            ? `<b style="color:var(--good)">trusted via signer's vault</b>`
+                            : first.selfSigned
+                              ? '<span style="color:#b57920">self-signed</span>'
+                              : '<span style="color:#b57920">chain not verified</span>';
     const ocspBadge = first.ocspStatus === 'good' ? ' · <span style="color:var(--good)">OCSP: cert is good</span>'
                     : first.ocspStatus === 'revoked' ? ' · <b style="color:var(--danger)">OCSP: REVOKED</b>'
                     : first.ocspStatus === 'noResponder' ? ' · <span style="color:var(--muted)">OCSP: no responder in cert</span>'

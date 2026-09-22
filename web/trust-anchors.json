@@ -1,0 +1,5 @@
+{
+  "_schema": 1,
+  "_note": "Curated fingerprints of AATL (Adobe Approved Trust List) and EUTL (EU Trusted List) root certificates. On verify, pdf-signer walks each cert in the signer's CMS chain and matches SHA-256(DER) against the fingerprints below. A match promotes the Trust badge from a generic 'chains to a trusted root' to an explicit list membership. To add an entry: 'openssl x509 -in root.pem -outform DER | shasum -a 256' (lowercase, no colons). Authoritative sources: Adobe AATL is bundled in Acrobat's install; EU LOTL machine-readable index at https://ec.europa.eu/tools/lotl/eu-lotl.xml points at each member state's trust list.",
+  "anchors": []
+}
