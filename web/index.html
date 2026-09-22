@@ -5766,6 +5766,19 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
 
   if (mdp === 'lock' || mdp === 'certify') pdfDoc.catalog.set(PDFName.of('Perms'), context.obj({ DocMDP: sigRef }));
 
+  // DELETE any /Version entry from the catalog. Office-generated source
+  // PDFs (from Word / iLovePDF pre-2.0 / older tools) often ship with
+  // /Version /1.4 in the catalog, which pins the effective PDF version
+  // below what our /ETSI.CAdES.detached signature needs. Adobe rejects
+  // the signed output with "document was modified". User-verified fix:
+  // a normalized source (iLovePDF PDF/A conversion) has NO /Version
+  // entry at all — the file header (%PDF-1.7) wins. Removing the entry
+  // gets our sign flow to the same state without requiring the user to
+  // pre-normalize. Only removes /Version; leaves all other catalog
+  // entries intact. Wazze-signed.pdf worked because wazze source didn't
+  // have this entry in the first place.
+  pdfDoc.catalog.delete(PDFName.of('Version'));
+
   // ── PAdES-B-LT: fetch OCSP responses for the cert chain and embed a DSS
   // (Document Security Store) at the catalog level. Adobe reads this and
   // shows the "LTV enabled" badge; verifiers can check revocation status
