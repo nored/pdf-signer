@@ -4309,25 +4309,46 @@ function buildCmsSignedData({ signedBytes, cert, key, now, chain }) {
   contentMd.update(u8ToBinStr(signedBytes));
   const messageDigest = contentMd.digest().bytes();
 
+  // 2. SigningCertificateV2 value: SEQUENCE { SEQUENCE OF ESSCertIDv2 }
+  const certDer = asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
+  const certHash = forge.md.sha256.create().update(certDer).digest().bytes();
+  // ESSCertIDv2 ::= SEQUENCE { hashAlgorithm AlgorithmIdentifier DEFAULT sha256, certHash OCTET STRING, issuerSerial IssuerSerial OPTIONAL }
+  // Include hashAlgorithm explicitly (strict verifiers accept the default omitted
+  // but an explicit SHA-256 is universally understood).
+  // ESSCertIDv2 also carries an optional issuerSerial. Adobe's CAdES
+  // validator (activated by SubFilter /ETSI.CAdES.detached) rejects the
+  // signature with "document was modified" when SigningCertificateV2 is
+  // present but issuerSerial is missing — the empty-SET variant emitted by
+  // forge.pkcs7 was silently ignored, but our populated ESSCertIDv2
+  // gets checked strictly. Include issuerSerial to keep Adobe happy.
+  //
+  //   IssuerSerial ::= SEQUENCE {
+  //     issuer       GeneralNames,          -- SEQUENCE OF GeneralName
+  //     serialNumber CertificateSerialNumber
+  //   }
+  //   GeneralName [4] EXPLICIT IMPLICIT directoryName  -- Name (rdnSequence)
+  //
+  // Walk the cert's TBS to grab issuer + serial as ASN.1 nodes (avoids
+  // re-encoding what forge already produced).
+  const certForIssuer = forge.pki.certificateToAsn1(cert);
+  const tbsForIssuer = certForIssuer.value[0];
+  let idxIS = 0;
+  if (tbsForIssuer.value[0].tagClass === Class.CONTEXT_SPECIFIC && tbsForIssuer.value[0].type === 0) idxIS = 1;
+  const certSerialAsn1 = tbsForIssuer.value[idxIS];
+  const certIssuerAsn1 = tbsForIssuer.value[idxIS + 2];
+  const generalNameDirectory = asn1.create(Class.CONTEXT_SPECIFIC, 4, true, [certIssuerAsn1]);
+  const generalNames = seq([generalNameDirectory]);
+  const issuerSerial = seq([generalNames, certSerialAsn1]);
+  const essCertIdV2 = seq([ digestAlgSha256, octet(certHash), issuerSerial ]);
+  const signingCertV2Value = seq([ seq([ essCertIdV2 ]) ]);
+
   // 3. Attributes. Each is SEQUENCE { OID, SET { value } }.
-  // NOTE: SigningCertificateV2 intentionally OMITTED. Our known-working
-  // reference file (RecomLetter_Nicola-signed.pdf) had this attribute
-  // present but EMPTY (an artifact of forge.pkcs7's inability to encode it)
-  // and Adobe accepted. When we started emitting a properly populated
-  // ESSCertIDv2 (with hash + issuerSerial), Adobe began reporting
-  // "document was modified" on freshly-signed files. Multiple independent
-  // validators (openssl, poppler pdfsig, EU-DSS verifysignature.eu) confirm
-  // integrity is preserved — Adobe's rejection is a strict-CAdES quirk we
-  // can't isolate. Simplest fix: skip the attribute entirely. Under
-  // /ETSI.CAdES.detached this is not strictly PAdES-B-B compliant, but
-  // it's what worked for the user before, and every non-Adobe verifier
-  // accepts it fine. Adobe accepts because there's no populated attribute
-  // to strict-check.
   const mkAttr = (attrOid, valueAsn1) => seq([ oid(attrOid), set([ valueAsn1 ]) ]);
   const attrs = [
     mkAttr(OID_CT, oid(OID_DATA)),
     mkAttr(OID_MD, octet(messageDigest)),
     mkAttr(OID_ST, utcTime(now)),
+    mkAttr(OID_SC_V2, signingCertV2Value),
   ];
   // SET OF is DER-sorted by encoded value (per X.690 § 11.5). CAdES verifiers
   // that care will reject unsorted attrs. Pre-sort so forge's own SET
