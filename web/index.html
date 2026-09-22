@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="pdfsigner-commit" content="__COMMIT_SHA__">
+<meta name="pdfsigner-build" content="__BUILD_TIME__">
 <title>PDF Signer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
@@ -7454,6 +7456,36 @@ $('themeToggle').onclick = () => {
   else document.documentElement.removeAttribute('data-theme');
   try { localStorage.setItem('theme', next); } catch (_) {}
 };
+
+// Longpress the theme toggle to reveal the build version. Kept out of the
+// visible UI on purpose — it's for verifying "am I looking at what I just
+// pushed" rather than something to show every user every day.
+(() => {
+  const btn = $('themeToggle');
+  let timer = null, fired = false;
+  const showVersion = () => {
+    fired = true;
+    const sha = document.querySelector('meta[name="pdfsigner-commit"]')?.content || '';
+    const built = document.querySelector('meta[name="pdfsigner-build"]')?.content || '';
+    const shaOk = sha && !sha.startsWith('__');
+    const builtOk = built && !built.startsWith('__');
+    const parts = [];
+    parts.push(shaOk ? 'v ' + sha.slice(0, 7) : 'v (unstamped dev build)');
+    if (builtOk) parts.push('built ' + built);
+    toast(parts.join(' · '), 'ok');
+    if (shaOk) navigator.clipboard?.writeText(sha).catch(() => {});
+  };
+  const start = () => { fired = false; timer = setTimeout(showVersion, 700); };
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  btn.addEventListener('mousedown', start);
+  btn.addEventListener('touchstart', start, { passive: true });
+  btn.addEventListener('mouseup', cancel);
+  btn.addEventListener('mouseleave', cancel);
+  btn.addEventListener('touchend', cancel);
+  btn.addEventListener('touchcancel', cancel);
+  // Suppress the click's theme-toggle when longpress fired.
+  btn.addEventListener('click', ev => { if (fired) { ev.stopImmediatePropagation(); fired = false; } }, true);
+})();
 try {
   const t = localStorage.getItem('theme');
   if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
