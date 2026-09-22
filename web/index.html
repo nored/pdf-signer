@@ -2405,14 +2405,14 @@ async function openPdf(file) {
         const before = doc.bytes.length;
         doc.bytes = await normalizePdfViaGhostscript(doc.bytes);
         // pdf-lib's own load+save cycle drops one unreferenced object from
-        // Ghostscript's clean output, producing a fragmented xref that
-        // Adobe rejects again. Round-trip through copyPages to force
-        // pdf-lib to produce a fully contiguous xref BEFORE sign-time
-        // mutations. Preserves page content; drops AcroForm fields (fine
-        // for the fresh-sign case that needs this in the first place —
-        // sources with existing sig fields don't hit the detection).
+        // Ghostscript's PDF/A output, producing a fragmented xref that
+        // Adobe rejects again. Round-trip through copyPages into a fresh
+        // PDFDocument to force pdf-lib to produce a contiguous xref BEFORE
+        // sign-time mutations. copyPages doesn't preserve the /Metadata
+        // XMP stream by default — clone it manually so the pdfaid PDF/A
+        // conformance marker survives the round-trip.
         try {
-          const { PDFDocument } = window.PDFLib;
+          const { PDFDocument, PDFName } = window.PDFLib;
           const src = await PDFDocument.load(doc.bytes);
           const clean = await PDFDocument.create();
           const pages = await clean.copyPages(src, src.getPageIndices());
@@ -2420,6 +2420,19 @@ async function openPdf(file) {
           try {
             const t = src.getTitle(); if (t) clean.setTitle(t);
             const a = src.getAuthor(); if (a) clean.setAuthor(a);
+          } catch (_) {}
+          // Preserve /Metadata (XMP stream with pdfaid marker) so Adobe
+          // continues to see this as a PDF/A-2b document after signing.
+          try {
+            const srcMetaRef = src.catalog.get(PDFName.of('Metadata'));
+            if (srcMetaRef) {
+              const srcMeta = src.context.lookup(srcMetaRef);
+              if (srcMeta && typeof srcMeta.clone === 'function') {
+                const cloned = srcMeta.clone(clean.context);
+                const ref = clean.context.register(cloned);
+                clean.catalog.set(PDFName.of('Metadata'), ref);
+              }
+            }
           } catch (_) {}
           doc.bytes = new Uint8Array(await clean.save({ useObjectStreams: false }));
         } catch (e) { console.warn('copyPages pass skipped:', e.message); }
@@ -5550,9 +5563,19 @@ async function normalizePdfViaGhostscript(inputBytes) {
   const inName = 'in_' + Date.now() + '.pdf';
   const outName = 'out_' + Date.now() + '.pdf';
   Module.FS.writeFile(inName, inputBytes);
+  // Real PDF/A-2b conversion (same operation iLovePDF performs). Emits a
+  // PDF with pdfaid conformance marker, DeviceRGB color space, embedded
+  // fonts, contiguous xref stream, clean catalog with /Metadata XMP and
+  // no legacy /Version pin. This is what Adobe accepts silently for
+  // certifying sigs. -dPDFACompatibilityPolicy=1 tells Ghostscript to
+  // silently repair non-compliant elements instead of aborting.
   const rc = Module.callMain([
+    '-dPDFA=2',
+    '-dPDFACompatibilityPolicy=1',
     '-dNOPAUSE', '-dBATCH', '-dQUIET',
     '-sDEVICE=pdfwrite',
+    '-sColorConversionStrategy=RGB',
+    '-sProcessColorModel=DeviceRGB',
     '-dCompatibilityLevel=1.7',
     '-sOutputFile=' + outName,
     inName,
