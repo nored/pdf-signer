@@ -973,7 +973,6 @@
       </details>
 
       <button id="btnSign" class="primary" disabled>Sign &amp; Download</button>
-      <button id="btnSignBatch" style="width:100%; margin-top:6px;" disabled title="Sign this PDF, then repeat the same placements + certify options on additional PDFs">Sign this + N more…</button>
     </details>
   </aside>
 
@@ -3796,8 +3795,6 @@ function updateSignButton() {
     btn.textContent = doc.alreadySigned ? 'Add signature (keeps existing valid) & Download' : 'Sign & Download';
     btn.title = '';
   }
-  const batchBtn = $('btnSignBatch');
-  if (batchBtn) batchBtn.disabled = btn.disabled;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -6650,112 +6647,6 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
 
   return combined;
 }
-
-// Snapshot the current sign options from the DOM into a plain object that
-// batch mode can reuse for each queued PDF without re-reading the UI. Returns
-// null if the current setup can't sign (e.g. missing image for image mode).
-function snapshotSignOpts(unlocked) {
-  const appearance = document.querySelector('input[name="appearance"]:checked').value;
-  const lockmodeVal = document.querySelector('input[name="lockmode"]:checked').value;
-  const rawDate = ($('signDate').value || '').trim();
-  let signingTime, backdated = false;
-  if (rawDate) {
-    const t = new Date(rawDate);
-    if (isNaN(t.getTime())) throw new Error('Sign-as-of date is not a valid datetime');
-    signingTime = t; backdated = true;
-  } else {
-    signingTime = new Date();
-  }
-  const tsaEnabled = $('tsaEnable') && $('tsaEnable').checked && !backdated;
-  const tsaUrl = tsaEnabled ? (($('tsaUrl') && $('tsaUrl').value.trim()) || null) : null;
-  return {
-    unlocked, appearance, lockmodeVal, signingTime, backdated, tsaUrl,
-    reason: $('reason').value.trim(),
-    location: $('location').value.trim(),
-    stampRole: ($('stampRole').value || '').trim(),
-  };
-}
-
-// Sign an arbitrary PDF (bytes) with the current template placements and
-// snapshotted options. Used for both the primary "Sign & Download" and each
-// item in "Sign this + N more…". Returns the signed Uint8Array.
-async function signPdfBytesWithTemplate(bytes, placements, opts) {
-  // Peek at verify results to decide sign path (rewrite vs incremental).
-  let verifyResults = [];
-  try { verifyResults = verifyPdfSignatures(bytes); } catch (_) {}
-  const alreadySigned = verifyResults.some(r => !r.error && r.cryptoValid);
-  const certifyMode = alreadySigned ? 'none' : opts.lockmodeVal;
-  const lock = certifyMode === 'locked' || certifyMode === 'lock';
-  if (alreadySigned) {
-    return await makeIncrementalSignedPdf({
-      bytes,
-      placements: placements.filter(p => p.type === 'digital'),
-      meta: opts.unlocked.meta,
-      reason: opts.reason, location: opts.location,
-      cert: opts.unlocked.cert, key: opts.unlocked.key, chain: opts.unlocked.chain,
-      signingTime: opts.signingTime, tsaUrl: opts.tsaUrl, backdated: opts.backdated,
-    });
-  }
-  // Fresh sign path — needs a pdf.js doc for redaction.
-  const pdfjsDoc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
-  return await makeSignedPdf({
-    bytes,
-    placements,
-    lock,
-    certifyMode: certifyMode === 'certify' ? 'certify' : (certifyMode === 'locked' ? 'lock' : 'none'),
-    meta: opts.unlocked.meta,
-    reason: opts.reason, location: opts.location,
-    appearance: opts.appearance,
-    cert: opts.unlocked.cert, key: opts.unlocked.key, chain: opts.unlocked.chain,
-    sigPngU8: sigImage.pngU8,
-    signingTime: opts.signingTime,
-    stamp: { enabled: false },       // batch mode skips stamps (each would need a fresh vault key)
-    formFields: {},
-    pdfjsDoc,
-    tsaUrl: opts.tsaUrl, backdated: opts.backdated,
-  });
-}
-
-$('btnSignBatch').onclick = async () => {
-  if (!doc.placements.length) return;
-  const extras = await pickFiles('application/pdf,.pdf');
-  if (!extras || extras.length === 0) return;
-  const totalN = 1 + extras.length;
-  if (!confirm(`Sign this PDF plus ${extras.length} more with the SAME placements and options?\n\n${totalN} signed files will be downloaded one by one. Integrity-stamp/vault uploads are skipped in batch mode.`)) return;
-  try {
-    const unlocked = await ensureUnlocked();
-    const opts = snapshotSignOpts(unlocked);
-    const btn = $('btnSignBatch');
-    btn.disabled = true;
-    const originalLabel = btn.textContent;
-    // Sign the currently-open doc first.
-    btn.textContent = `Batch: 1 / ${totalN} (${doc.file.name})`;
-    const cur = await signPdfBytesWithTemplate(doc.bytes, doc.placements, opts);
-    download(doc.file.name.replace(/\.pdf$/i, '') + '-signed.pdf', cur, 'application/pdf');
-    let ok = 1, fail = 0;
-    for (let i = 0; i < extras.length; i++) {
-      const f = extras[i];
-      btn.textContent = `Batch: ${i + 2} / ${totalN} (${f.name})`;
-      try {
-        const bytes = new Uint8Array(await f.arrayBuffer());
-        const signed = await signPdfBytesWithTemplate(bytes, doc.placements, opts);
-        download(f.name.replace(/\.pdf$/i, '') + '-signed.pdf', signed, 'application/pdf');
-        ok++;
-      } catch (e) {
-        console.error('Batch item failed:', f.name, e);
-        toast(`Skipped ${f.name}: ${e.message}`, 'err');
-        fail++;
-      }
-    }
-    btn.textContent = originalLabel;
-    btn.disabled = false;
-    toast(`Batch done: ${ok} signed${fail ? ', ' + fail + ' skipped' : ''}`, fail ? 'err' : 'ok');
-  } catch (e) {
-    if (e.message !== 'cancelled') toast('Batch failed: ' + e.message, 'err');
-    $('btnSignBatch').disabled = false;
-    updateSignButton();
-  }
-};
 
 $('btnSign').onclick = async () => {
   if (!doc.placements.length) return;
