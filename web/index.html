@@ -3731,19 +3731,14 @@ $('btnRotateStamp').onclick = () => {
   pushUndo();
   const wasHorizontal = (p.orientation || 'horizontal') === 'horizontal';
   p.orientation = wasHorizontal ? 'vertical' : 'horizontal';
-  // Swap the box dimensions but keep the bottom-left corner where it is.
-  // (Centering the rotation could push a bottom-edge stamp off the page.)
-  const newW = p.hPdf, newH = p.wPdf;
-  p.wPdf = newW;
-  p.hPdf = newH;
-  // Cap the new dimensions to the page so a rotated full-width horizontal
-  // stamp does not become taller than the page (common on landscape PDFs).
-  const [_,__,pageW, pageH] = doc.pageMeta[p.pageIndex].viewport.viewBox;
-  const margin = 8;
-  if (p.wPdf > pageW - margin) p.wPdf = pageW - margin;
-  if (p.hPdf > pageH - margin) p.hPdf = pageH - margin;
-  if (p.xPdf + p.wPdf > pageW) p.xPdf = Math.max(0, pageW - p.wPdf);
-  if (p.yPdf + p.hPdf > pageH) p.yPdf = Math.max(0, pageH - p.hPdf);
+  // Reset to the sensible default box for the new orientation. A plain
+  // dimension swap would break on landscape pages (a full-width horizontal
+  // bar becomes taller than the page when rotated) and even on portrait
+  // pages the seed uses pageW so the first rotate-back would clip against
+  // the safety margin and lose ~8pt permanently. Resetting keeps the bar
+  // shape stable across any number of rotations.
+  const box = defaultStampBox(doc.pageMeta[p.pageIndex], p.orientation);
+  p.xPdf = box.xPdf; p.yPdf = box.yPdf; p.wPdf = box.wPdf; p.hPdf = box.hPdf;
   positionPlacementFromPdf(p);
   updateStampRotateRow();
 };
