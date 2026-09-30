@@ -3723,12 +3723,13 @@ function renderPlacementPreview(p) {
     const wmCx = centerX + centerW / 2;
     const wmCy = h / 2;
     const wcw = wmSize * 0.5;
-    // Check mark: start upper-left, vertex lower-middle, end upper-right.
-    // Signs match the PDF path (both use `vertex y = cy + offset`) so the
-    // two paths stay in sync when tweaking the shape.
-    const wmXml = `<path d="M ${(wmCx - wcw*0.5).toFixed(2)} ${(wmCy + wcw*0.10).toFixed(2)}
-                             L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy - wcw*0.28).toFixed(2)}
-                             L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy + wcw*0.42).toFixed(2)}"
+    // SVG y-down needs the OPPOSITE signs from the PDF path (which
+    // empirically renders with "vertex y = cy − offset" as vertex-at-
+    // bottom). Here that means `vertex y = wmCy + offset` — larger y in
+    // y-down puts the vertex lower on screen.
+    const wmXml = `<path d="M ${(wmCx - wcw*0.5).toFixed(2)} ${(wmCy - wcw*0.10).toFixed(2)}
+                             L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy + wcw*0.28).toFixed(2)}
+                             L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy - wcw*0.42).toFixed(2)}"
                        fill="none" stroke="rgba(114,214,163,0.75)" stroke-width="${Math.max(0.8, wmSize*0.08).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
 
     // Text baseline y in SVG needs to be a full baseline y; the nameLineY was
