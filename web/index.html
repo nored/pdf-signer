@@ -3320,17 +3320,64 @@ async function showSignerAdditions({ allBytes, thisByteRange, prevByteRange, tit
       return;
     }
 
-    const annMode = pdfjsLib.AnnotationMode ? pdfjsLib.AnnotationMode.ENABLE : undefined;
-    for (const pn of [...changedPages].sort((a, b) => a - b)) {
+    // Ghostscript renders signature-widget appearances correctly (pdf.js
+    // doesn't). Try GS first; fall back to pdf.js if the WASM module
+    // fails to load. Load-once, cached across pages.
+    let gsModule = null;
+    try { gsModule = await loadGhostscript(); } catch (e) { console.warn('GS unavailable, using pdf.js:', e && e.message); }
+
+    const gsDpi = 110;
+    const gsScale = gsDpi / 72;
+    const pngUrlCache = [];
+    const renderPageAsCanvas = async (pn) => {
       const page = await currDoc.getPage(pn);
-      const vp = page.getViewport({ scale: 1.5 });
+      const vp = page.getViewport({ scale: gsScale });
       const c = document.createElement('canvas');
       c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
       const ctx = c.getContext('2d');
-      await page.render({
-        canvasContext: ctx, viewport: vp,
-        ...(annMode !== undefined ? { annotationMode: annMode } : {}),
-      }).promise;
+      let ok = false;
+      if (gsModule) {
+        try {
+          const inName = `verif_in_${Date.now()}_${pn}.pdf`;
+          const outName = `verif_out_${Date.now()}_${pn}.png`;
+          gsModule.FS.writeFile(inName, allBytes);
+          const rc = gsModule.callMain([
+            '-dNOPAUSE', '-dBATCH', '-dQUIET',
+            '-sDEVICE=png16m',
+            `-r${gsDpi}`,
+            `-dFirstPage=${pn}`,
+            `-dLastPage=${pn}`,
+            `-sOutputFile=${outName}`,
+            inName,
+          ]);
+          if (rc === 0) {
+            const png = gsModule.FS.readFile(outName);
+            const url = URL.createObjectURL(new Blob([png], { type: 'image/png' }));
+            pngUrlCache.push(url);
+            const img = new Image();
+            img.src = url;
+            await img.decode();
+            ctx.drawImage(img, 0, 0, c.width, c.height);
+            ok = true;
+          }
+          try { gsModule.FS.unlink(inName); gsModule.FS.unlink(outName); } catch (_) {}
+        } catch (e) { console.warn('GS render page', pn, 'failed:', e && e.message); }
+      }
+      if (!ok) {
+        // Fallback: pdf.js render (won't include sig widget /AP but at
+        // least shows the page content).
+        const annMode = pdfjsLib.AnnotationMode ? pdfjsLib.AnnotationMode.ENABLE : undefined;
+        await page.render({
+          canvasContext: ctx, viewport: vp,
+          ...(annMode !== undefined ? { annotationMode: annMode } : {}),
+        }).promise;
+      }
+      return { canvas: c, viewport: vp };
+    };
+
+    for (const pn of [...changedPages].sort((a, b) => a - b)) {
+      const { canvas: c, viewport: vp } = await renderPageAsCanvas(pn);
+      const ctx = c.getContext('2d');
 
       const annots = annotsByPage.get(pn) || [];
       for (const a of annots) {
