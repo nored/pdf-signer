@@ -3723,12 +3723,12 @@ function renderPlacementPreview(p) {
     const wmCx = centerX + centerW / 2;
     const wmCy = h / 2;
     const wcw = wmSize * 0.5;
-    // SVG y-down so the vertex-at-bottom check is y-INCREASING to the vertex
-    // and y-DECREASING to the end — visually the same shape as the PDF's
-    // vertex-at-bottom (which uses y-up).
-    const wmXml = `<path d="M ${(wmCx - wcw*0.5).toFixed(2)} ${(wmCy).toFixed(2)}
-                             L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy + wcw*0.32).toFixed(2)}
-                             L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy - wcw*0.35).toFixed(2)}"
+    // SVG y-down: vertex y > start y (visually LOWER on screen), end y <
+    // vertex y (visually HIGHER on screen). Same visual as the PDF's
+    // vertex-at-bottom (which uses y-up with the signs flipped).
+    const wmXml = `<path d="M ${(wmCx - wcw*0.5).toFixed(2)} ${(wmCy - wcw*0.10).toFixed(2)}
+                             L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy + wcw*0.28).toFixed(2)}
+                             L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy - wcw*0.42).toFixed(2)}"
                        fill="none" stroke="rgba(114,214,163,0.75)" stroke-width="${Math.max(0.8, wmSize*0.08).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
 
     // Text baseline y in SVG needs to be a full baseline y; the nameLineY was
@@ -4946,28 +4946,25 @@ function drawCheckSeal(page, x, y, size) {
 }
 
 // Faint green watermark check behind the stamp-signature centre text.
-// Vertex-at-bottom orientation — PDF's y-up coordinate system means we
-// flip the y-offsets vs. the SVG preview (which is y-down): the vertex
-// y is ABOVE cy in the source but visually LOWER on the page.
-// Direct RGB (no alpha) so it renders identically in every viewer.
+// Vertex at the BOTTOM of the visible glyph — in PDF y-up coordinates
+// that means the vertex y is BELOW cy (numerically cy − offset). The
+// SVG preview mirrors the same visual with the y-down equivalent
+// (numerically wmCy + offset).
 function drawFaviconWatermark(page, x, y, size) {
   const { rgb } = window.PDFLib;
   const s = size;
   const cx = x + s / 2, cy = y + s / 2;
   const cw = s * 0.55;
   const thick = Math.max(1.2, s * 0.08);
-  // Very pale emerald green — text sits comfortably over it. Adjust the
-  // three floats toward 1 for a fainter mark, or toward 0 for a punchier
-  // green.
   const color = rgb(0.75, 0.94, 0.86);
   page.drawLine({
-    start: { x: cx - cw * 0.50, y: cy },
-    end:   { x: cx - cw * 0.13, y: cy + cw * 0.38 },
+    start: { x: cx - cw * 0.50, y: cy + cw * 0.10 },
+    end:   { x: cx - cw * 0.13, y: cy - cw * 0.28 },
     thickness: thick, color,
   });
   page.drawLine({
-    start: { x: cx - cw * 0.13, y: cy + cw * 0.38 },
-    end:   { x: cx + cw * 0.55, y: cy - cw * 0.42 },
+    start: { x: cx - cw * 0.13, y: cy - cw * 0.28 },
+    end:   { x: cx + cw * 0.55, y: cy + cw * 0.42 },
     thickness: thick, color,
   });
 }
@@ -7453,15 +7450,14 @@ function watermarkContentOps(x, y, s) {
   const thick = Math.max(1.2, s * 0.08);
   const ops = [];
   ops.push('q');
-  // Pale emerald green — RGB in the content stream matches drawFaviconWatermark.
   ops.push('0.75 0.94 0.86 RG');
   ops.push(`${pdfNum(thick)} w`);
   ops.push('1 J 1 j');
-  // Vertex-at-bottom check: y-offsets flipped vs. the SVG preview so the
-  // vertex sits BELOW cy visually in PDF y-up coordinates.
-  ops.push(`${pdfNum(cx - cw * 0.50)} ${pdfNum(cy)} m`);
-  ops.push(`${pdfNum(cx - cw * 0.13)} ${pdfNum(cy + cw * 0.38)} l`);
-  ops.push(`${pdfNum(cx + cw * 0.55)} ${pdfNum(cy - cw * 0.42)} l`);
+  // Vertex-at-bottom check in PDF y-up coords: vertex y = cy − 0.28·cw
+  // sits BELOW cy, end y = cy + 0.42·cw sits ABOVE cy.
+  ops.push(`${pdfNum(cx - cw * 0.50)} ${pdfNum(cy + cw * 0.10)} m`);
+  ops.push(`${pdfNum(cx - cw * 0.13)} ${pdfNum(cy - cw * 0.28)} l`);
+  ops.push(`${pdfNum(cx + cw * 0.55)} ${pdfNum(cy + cw * 0.42)} l`);
   ops.push('S');
   ops.push('Q');
   return ops.join('\n');
