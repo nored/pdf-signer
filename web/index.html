@@ -9383,55 +9383,66 @@ async function runAutoVerifyFromHash() {
     }
   } catch (_) {}
 
-  // A stamp-signature QR carries no vault key — there's nothing to decrypt.
-  // Show a lightweight "Signed by / on / cert URL" panel and stop. The vault
-  // flow below only runs when parsed.keyBytes is present.
-  if (!parsed.keyBytes) {
-    const isCertUrl = /\.pem($|\?)/i.test(parsed.url || '');
-    const fields = {
-      'Signed by':  esc(parsed.signer),
-      'Signed at':  esc(parsed.dateStr),
-    };
-    if (parsed.url) {
-      fields[isCertUrl ? "Signer's certificate" : 'Linked resource'] =
-        `<a href="${esc(parsed.url)}" target="_blank" rel="noopener"><code>${esc(parsed.url)}</code></a>`;
-    }
-    render('valid', {
-      label: 'Signed document',
-      detail: 'The QR carries only signer info — no encrypted vault to decrypt. Verify the signature by opening the PDF and letting your viewer check it against the signer\'s certificate (link above).',
-      fields,
-    });
-    return true;
-  }
+  // Two shapes of QR payload land here:
+  //   * Vault QR: carries `k` (AES key) so we fetch the encrypted vault
+  //     and decrypt to the signed PDF.
+  //   * Stamp QR: carries only signer metadata + cert URL. The verifier
+  //     asks the user to pick the PDF locally, then runs the SAME full
+  //     verification pipeline against those bytes (crypto check, chain
+  //     inspection, OCSP, trust lists, TSA, DSS/LTV, receipt download).
+  const isStampQr = !parsed.keyBytes;
 
   const initialFields = {
     'Signer (per QR)':  esc(parsed.signer),
     'Signed at':        esc(parsed.dateStr),
     'CSV in QR':        parsed.csv ? `<code>${esc(parsed.csv)}</code>` : '',
-    'Vault URL':        parsed.url ? `<code>${esc(parsed.url)}</code>` : '<span style="color:var(--muted)">(none — pick the local .vault file)</span>',
+    [isStampQr ? "Signer's certificate" : 'Vault URL']:
+      parsed.url
+        ? `<a href="${esc(parsed.url)}" target="_blank" rel="noopener"><code>${esc(parsed.url)}</code></a>`
+        : (isStampQr
+            ? '<span style="color:var(--muted)">(none)</span>'
+            : '<span style="color:var(--muted)">(none — pick the local .vault file)</span>'),
   };
-  render('pending', { detail: parsed.url ? 'Fetching the encrypted vault…' : 'Waiting for local .vault file…', fields: initialFields });
+  render('pending', {
+    detail: isStampQr
+      ? 'Pick the signed PDF you scanned this QR from — the verifier runs entirely in your browser.'
+      : (parsed.url ? 'Fetching the encrypted vault…' : 'Waiting for local .vault file…'),
+    fields: initialFields,
+  });
 
   try {
-    let cipherU8 = null;
-    if (parsed.url) {
-      const res = await fetch(parsed.url);
-      if (!res.ok) throw new Error('Vault fetch: HTTP ' + res.status);
-      cipherU8 = new Uint8Array(await res.arrayBuffer());
-    } else {
-      const f = await pickFile('.vault,application/octet-stream,*');
+    let plaintext = null;
+    if (isStampQr) {
+      const f = await pickFile('.pdf,application/pdf,*');
       if (!f) {
-        render('pending', { label: 'Cancelled', detail: 'No .vault file selected.', fields: initialFields,
-          cta: `<button id="btnPick" class="primary">Pick .vault file</button>`,
+        render('pending', { label: 'Cancelled', detail: 'No PDF selected.', fields: initialFields,
+          cta: `<button id="btnPick" class="primary">Pick signed PDF</button>`,
           wire: r => { r.querySelector('#btnPick').onclick = () => runAutoVerifyFromHash(); } });
         return true;
       }
-      cipherU8 = new Uint8Array(await f.arrayBuffer());
+      plaintext = new Uint8Array(await f.arrayBuffer());
+      render('pending', { detail: 'Checking the signatures inside the PDF…', fields: initialFields });
+    } else {
+      let cipherU8 = null;
+      if (parsed.url) {
+        const res = await fetch(parsed.url);
+        if (!res.ok) throw new Error('Vault fetch: HTTP ' + res.status);
+        cipherU8 = new Uint8Array(await res.arrayBuffer());
+      } else {
+        const f = await pickFile('.vault,application/octet-stream,*');
+        if (!f) {
+          render('pending', { label: 'Cancelled', detail: 'No .vault file selected.', fields: initialFields,
+            cta: `<button id="btnPick" class="primary">Pick .vault file</button>`,
+            wire: r => { r.querySelector('#btnPick').onclick = () => runAutoVerifyFromHash(); } });
+          return true;
+        }
+        cipherU8 = new Uint8Array(await f.arrayBuffer());
+      }
+
+      render('pending', { detail: 'Decrypting and checking the signature…', fields: initialFields });
+
+      plaintext = await aesGcmDecrypt(parsed.keyBytes, cipherU8);
     }
-
-    render('pending', { detail: 'Decrypting and checking the signature…', fields: initialFields });
-
-    const plaintext = await aesGcmDecrypt(parsed.keyBytes, cipherU8);
     const results = verifyPdfSignatures(plaintext);
     try { await verifyVaultTrustAsync(results); } catch (_) {}
     // Best-effort revocation check for the signer cert. Skipped if AIA
@@ -9441,7 +9452,8 @@ async function runAutoVerifyFromHash() {
     // AATL / EUTL cross-check — promote Trust badge to explicit list
     // membership when the chain touches a curated fingerprint.
     try { await verifyTrustListsAsync(results); } catch (_) {}
-    const csvOk   = parsed.csv && parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes);
+    // CSV cross-check only makes sense for vault QRs — deriveCsv needs the AES key.
+    const csvOk   = parsed.keyBytes && parsed.csv && parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes);
     const state = results.length && results.every(r => r.cryptoValid && r.totalCovered) ? 'valid'
                 : results.length && results.every(r => r.cryptoValid) ? 'modified'
                 : 'broken';
