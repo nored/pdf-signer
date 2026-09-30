@@ -3511,9 +3511,13 @@ async function showSignerAdditions({ allBytes, thisByteRange, prevByteRange, tit
       for (const ann of anns) {
         if (!ann.rect || ann.rect.length !== 4) continue;
         // pdf.js annotation.id is a string; obj number is typically its
-        // leading integer.
+        // leading integer. Only keep annotations whose obj number lives
+        // inside THIS signer's added-object set — that filters out
+        // annotations later signers appended (so Klaus's widget doesn't
+        // show up in Tim's "what he added" view) AND annotations that
+        // pre-existed and weren't touched by this signer.
         const idNum = parseInt(String(ann.id).replace(/[^0-9]/g, ''), 10);
-        if (prevByteRange && !addedObjNums.has(idNum)) continue;
+        if (!addedObjNums.has(idNum)) continue;
         // Skip if we already have this annotation from the raw parser
         // (avoid double-drawing the same rect).
         if (rectAnnots.some(r => r.objNum === idNum)) continue;
