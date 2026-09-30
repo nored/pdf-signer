@@ -8364,7 +8364,16 @@ $('btnSign').onclick = async () => {
     const certifyMode = doc.alreadySigned ? 'none' : lockmodeVal;
     const lockAfterSign = doc.alreadySigned && (lockmodeVal === 'locked');
     const lock = certifyMode === 'locked' || certifyMode === 'lock';
-    const stampEnabled = $('stampEnable').checked && !doc.alreadySigned;
+    // We need to build a vault (encrypt the signed PDF, upload it, embed a
+    // vault QR in the widget) whenever ANY signature uses the stamp
+    // appearance OR the per-page integrity strip is enabled. That way
+    // scanning the QR takes the recipient straight into the verifier's
+    // full report — same as vault QRs have always done.
+    const integrityStripEnabled = $('stampEnable').checked && !doc.alreadySigned;
+    const anyStampAppearance = doc.placements.some(p =>
+      p.type === 'digital' && (p.appearance || appearance) === 'stamp');
+    const needsVault = integrityStripEnabled || anyStampAppearance;
+    const stampEnabled = integrityStripEnabled; // keeps existing per-page-strip semantics
 
     // Custom signing time (backdate). Blank = now.
     const rawDate = ($('signDate').value || '').trim();
@@ -8394,11 +8403,20 @@ $('btnSign').onclick = async () => {
     // Vault key + QR payload must exist BEFORE drawing the stamp, because the
     // QR is drawn into the PDF that later gets encrypted with this same key.
     let vault = null;
-    if (stampEnabled) {
-      const host = document.querySelector('input[name="vaultHost"]:checked').value;
+    if (needsVault) {
+      const hostRadio = document.querySelector('input[name="vaultHost"]:checked');
+      let host = hostRadio ? hostRadio.value : 'github';
+      // Stamp-appearance signatures need a vault by construction. If the user
+      // hasn't configured a GitHub vault, silently fall back to a local
+      // .vault download so scanning the QR still leads somewhere the
+      // recipient can decrypt (they'll paste it into the verifier's
+      // "Verify from vault QR" panel).
       if (host === 'github' && !ghVault.config) {
-        toast('Configure GitHub vault first (or switch to local .vault)', 'err');
-        return;
+        if (integrityStripEnabled) {
+          toast('Configure GitHub vault first (or switch to local .vault)', 'err');
+          return;
+        }
+        host = 'local';
       }
       const key = new Uint8Array(32);
       crypto.getRandomValues(key);
@@ -8408,8 +8426,6 @@ $('btnSign').onclick = async () => {
       const filename = csv + '.vault';
       const url = host === 'github' ? ghRawUrl(ghVault.config, filename) : '';
       const signer = unlocked.meta.name;
-      // Prefer explicit verifierUrl from GH config; otherwise where the tool is
-      // currently served (works out of the box on GH Pages).
       const verifierUrl = (ghVault.config && ghVault.config.verifierUrl) || autoDetectVerifierUrl();
       vault = {
         host, key, csv, filename, url, signer, dateStr, verifierUrl,
@@ -8442,11 +8458,13 @@ $('btnSign').onclick = async () => {
         signingTime, tsaUrl, backdated, certVaultUrl,
         sigFieldMap: doc.sigFieldMap || {},
         lockAfterSign,
-        // QR points at the pdf-signer verifier landing page — same behaviour
-        // as the vault-stamp code path. Cert URL is passed inside a `#v=`
-        // payload so the verifier can display the signer and fetch the cert
-        // itself; scanning the QR must NOT land on the raw PEM.
-        qrPayload: buildStampVerifierUrl({
+        // Full vault QR (`#v={u,k,s,t,c}`) when a vault is being built —
+        // scanning it drops the recipient straight into the verifier's full
+        // report (fetch → decrypt → verify → chain/OCSP/TSA/receipt). Falls
+        // back to a plain metadata verifier URL only if a vault couldn't be
+        // built (which can't happen for a stamp-appearance sig thanks to
+        // needsVault above, but the fallback keeps the parameter well-typed).
+        qrPayload: vault ? vault.qrPayload : buildStampVerifierUrl({
           verifierUrl: (ghVault.config && ghVault.config.verifierUrl) ||
                        (typeof autoDetectVerifierUrl === 'function' ? autoDetectVerifierUrl() : '') ||
                        CANONICAL_VERIFIER_URL,
@@ -8472,8 +8490,12 @@ $('btnSign').onclick = async () => {
         sigPngU8: sigImage.pngU8,
         signingTime,
         sigFieldMap: doc.sigFieldMap || {},
-        stamp: stampEnabled ? {
-          enabled: true,
+        stamp: vault ? {
+          // `enabled` still gates the per-page integrity strip; the stamp
+          // *appearance* only reads qrPayload / csv / signer / dateStr from
+          // this object (so scanning its widget QR opens the full vault
+          // verifier) regardless of whether the strip is drawn.
+          enabled: stampEnabled,
           role: ($('stampRole').value || '').trim(),
           qrPayload: vault.qrPayload,
           csv: vault.csv,
@@ -8487,6 +8509,10 @@ $('btnSign').onclick = async () => {
     }
     const outBase = doc.file.name.replace(/\.pdf$/i, '');
     const outName = outBase + '-signed.pdf';
+
+    // Hand the user the signed PDF first — that's the primary artefact they
+    // asked for. Vault encryption + upload happens after, in the background.
+    download(outName, signed, 'application/pdf');
 
     if (vault) {
       $('btnSign').textContent = 'Encrypting vault…';
@@ -8505,8 +8531,6 @@ $('btnSign').onclick = async () => {
         download(outBase + '.vault', cipher, 'application/octet-stream');
       }
     }
-
-    download(outName, signed, 'application/pdf');
     toast('Done: ' + outName, 'ok');
     $('btnSign').textContent = 'Sign & Download';
   } catch (e) {
