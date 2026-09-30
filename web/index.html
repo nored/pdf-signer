@@ -9478,9 +9478,13 @@ async function runAutoVerifyFromHash() {
     try { await verifyTrustListsAsync(results); } catch (_) {}
     // CSV cross-check only makes sense for vault QRs — deriveCsv needs the AES key.
     const csvOk   = parsed.keyBytes && parsed.csv && parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes);
-    const state = results.length && results.every(r => r.cryptoValid && r.totalCovered) ? 'valid'
-                : results.length && results.every(r => r.cryptoValid) ? 'modified'
-                : 'broken';
+    // Use the multi-sig-aware helper — a first signer's ByteRange
+    // legitimately stops before EOF in an incremental multi-sig file, and
+    // that's "valid" as long as a later cryptoValid signature picks up
+    // from where they ended and covers to EOF. The naive inline check
+    // (every result totalCovered) reads a legitimate multi-sig chain as
+    // "modified" and voids the whole document — the wrong verdict.
+    const state = overallVerifyState(results);
     const first = results[0] || {};
     const detail = state === 'valid'    ? 'Cryptographic signature is valid and covers the entire document.'
                  : state === 'modified' ? 'Bytes were added after signing. The signature no longer covers the whole file. Treat this document as voided.'
