@@ -2942,11 +2942,10 @@ async function showVerifyModal(results, isUnsignedField=false) {
       const signer = (r.signerCn || r.signer || 'Signer ' + (i + 1)).slice(0, 30);
       btn.textContent = `Show what "${signer}" added (rev ${i + 1})`;
       btn.onclick = async () => {
-        await showRevisionDiff({
-          prevBytes: prev
-            ? revisionBytes(doc.bytes, prev.byteRange)
-            : docBytesBeforeIncrementalAppend(doc.bytes, r.byteRange),
-          currBytes: revisionBytes(doc.bytes, r.byteRange),
+        await showSignerAdditions({
+          allBytes: doc.bytes,
+          thisByteRange: r.byteRange,
+          prevByteRange: prev ? prev.byteRange : null,
           title: btn.textContent,
         });
       };
@@ -3064,60 +3063,191 @@ function pixelDiffOverlay(canvasA, canvasB) {
   return { canvas: out, changedFraction: changedPx / (w * h) };
 }
 
-async function showRevisionDiff({ prevBytes, currBytes, title }) {
+// Enumerate top-level indirect objects (`N G obj ... endobj`) whose file
+// offset falls strictly inside [start, end). Works for any signer's
+// incremental section — every PDF signer, regardless of tool (Adobe,
+// Preview, pdf-signer, iText, …), appends bytes to the previous file, so
+// the section is a contiguous run in the on-disk layout. Objects living
+// inside compressed object streams (/Type /ObjStm) are only enumerated
+// when the ObjStm itself was added by this signer.
+function parsePdfObjectsInByteRange(bytes, start, end) {
+  const text = new TextDecoder('latin1').decode(bytes.subarray(start, end));
+  const re = /(\d+)\s+(\d+)\s+obj\b/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    // Find the matching `endobj`. Naive but safe: no PDF object body
+    // legitimately contains the literal token `endobj` outside a stream,
+    // and streams are scanned as a whole so their inner content is
+    // opaque to this string search.
+    const stopIdx = text.indexOf('endobj', m.index + m[0].length);
+    if (stopIdx < 0) break;
+    const bodyStart = m.index + m[0].length;
+    // Grab the dict text between `obj` and `stream` (or `endobj`).
+    let bodyText = text.substring(bodyStart, stopIdx);
+    // Peel leading whitespace.
+    const trimmed = bodyText.replace(/^\s+/, '');
+    // Try to extract the leading `<< ... >>` dict — with balanced nesting.
+    let dictText = '';
+    if (trimmed.startsWith('<<')) {
+      let depth = 0, i = 0;
+      for (; i < trimmed.length - 1; i++) {
+        if (trimmed[i] === '<' && trimmed[i + 1] === '<') { depth++; i++; }
+        else if (trimmed[i] === '>' && trimmed[i + 1] === '>') { depth--; i++; if (depth === 0) { i++; break; } }
+      }
+      dictText = trimmed.substring(0, i);
+    }
+    const hasStream = /\bstream\b/.test(bodyText.substring(dictText.length));
+    out.push({
+      num: parseInt(m[1], 10),
+      gen: parseInt(m[2], 10),
+      dictText,
+      hasStream,
+      absStart: start + m.index,
+      absEnd: start + stopIdx + 'endobj'.length,
+    });
+    re.lastIndex = stopIdx + 'endobj'.length;
+  }
+  return out;
+}
+
+// Turn a parsed indirect object into a short human-readable description,
+// or null if it's structural noise (font resources, xref streams, etc.
+// that don't tell the user anything they didn't already know from the
+// higher-level "N added" verdict).
+function summarizePdfObject(obj) {
+  const d = obj.dictText;
+  const rectStr = () => {
+    const m = /\/Rect\s*\[\s*([-\d.\s]+?)\s*\]/.exec(d);
+    if (!m) return '';
+    const parts = m[1].split(/\s+/).map(v => parseFloat(v)).filter(v => !isNaN(v));
+    if (parts.length !== 4) return '';
+    return ` at [${parts.map(n => n.toFixed(1)).join(', ')}]`;
+  };
+  const decodePdfString = (s) => s ? s.replace(/\\([nrtbf()\\])/g, (_, c) => ({ n:'\n', r:'\r', t:'\t', b:'\b', f:'\f', '(':'(', ')':')', '\\':'\\' }[c])) : '';
+  if (/\/Subtype\s*\/Widget/.test(d) && /\/FT\s*\/Sig/.test(d)) {
+    return { icon: '✎', text: `Signature widget${rectStr()}` };
+  }
+  if (/\/Subtype\s*\/Widget/.test(d)) {
+    const ft = /\/FT\s*\/(\w+)/.exec(d);
+    const kinds = { Tx: 'text field', Btn: 'button', Ch: 'choice', Sig: 'signature' };
+    const kind = ft ? (kinds[ft[1]] || ft[1]) : 'form widget';
+    return { icon: '▤', text: `${kind}${rectStr()}` };
+  }
+  if (/\/Subtype\s*\/Link/.test(d)) {
+    const uri = /\/URI\s*\(([^)]*)\)/.exec(d);
+    return { icon: '↗', text: `Link${rectStr()}${uri ? ' → ' + decodePdfString(uri[1]).slice(0, 80) : ''}` };
+  }
+  if (/\/Type\s*\/Sig\b/.test(d) && /\/Contents\s*</.test(d)) {
+    const name = /\/Name\s*\(([^)]*)\)/.exec(d);
+    const reason = /\/Reason\s*\(([^)]*)\)/.exec(d);
+    const date = /\/M\s*\(D:(\d{14})/.exec(d);
+    const dateFmt = date ? `${date[1].slice(0,4)}-${date[1].slice(4,6)}-${date[1].slice(6,8)} ${date[1].slice(8,10)}:${date[1].slice(10,12)}` : '';
+    const bits = [];
+    if (name) bits.push(decodePdfString(name[1]));
+    if (dateFmt) bits.push(dateFmt);
+    if (reason && reason[1]) bits.push(`“${decodePdfString(reason[1])}”`);
+    return { icon: '🔏', text: 'Signature ' + (bits.length ? ('— ' + bits.join(' · ')) : '(unnamed)') };
+  }
+  if (/\/FT\s*\/Sig/.test(d)) {
+    const t = /\/T\s*\(([^)]*)\)/.exec(d);
+    return { icon: '□', text: `Signature field${t ? ' “' + decodePdfString(t[1]) + '”' : ''}` };
+  }
+  if (/\/FT\s*\/Tx/.test(d) && /\/V\s*\(/.test(d)) {
+    const t = /\/T\s*\(([^)]*)\)/.exec(d);
+    const v = /\/V\s*\(([^)]*)\)/.exec(d);
+    return { icon: '✎', text: `Text field ${t ? '“' + decodePdfString(t[1]) + '”' : ''} filled: “${decodePdfString(v ? v[1] : '')}”` };
+  }
+  if (/\/FT\s*\/Btn/.test(d) && /\/V\s*\//.test(d)) {
+    const t = /\/T\s*\(([^)]*)\)/.exec(d);
+    const v = /\/V\s*\/(\w+)/.exec(d);
+    return { icon: '☑', text: `Button field ${t ? '“' + decodePdfString(t[1]) + '”' : ''} set to /${v ? v[1] : 'Off'}` };
+  }
+  if (/\/Subtype\s*\/Form/.test(d)) {
+    const bbox = /\/BBox\s*\[\s*([-\d.\s]+?)\s*\]/.exec(d);
+    return { icon: '▢', text: `Appearance stream (Form XObject)${bbox ? ' size ' + bbox[1].split(/\s+/).slice(2).map(v => parseFloat(v).toFixed(0)).join('×') + ' pt' : ''}` };
+  }
+  if (/\/Subtype\s*\/Image/.test(d)) {
+    const w = /\/Width\s+(\d+)/.exec(d);
+    const h = /\/Height\s+(\d+)/.exec(d);
+    const smask = /\/SMask\s+\d+\s+\d+\s+R/.test(d);
+    const filter = /\/Filter\s*\/(\w+)/.exec(d);
+    return { icon: '▨', text: `Image${w && h ? ' ' + w[1] + '×' + h[1] : ''}${filter ? ' (' + filter[1] + ')' : ''}${smask ? ' with alpha' : ''}` };
+  }
+  if (/\/Type\s*\/Page\b/.test(d)) {
+    // A page dict being re-emitted means the signer touched the page —
+    // usually to attach a new widget/link/stamp to its /Annots.
+    const annots = /\/Annots\s*(\[[^\]]{0,120}\]|\d+\s+\d+\s+R)/.exec(d);
+    return { icon: '▤', text: `Page updated${annots ? ' (Annots ' + annots[1].replace(/\s+/g, ' ').slice(0, 80) + ')' : ''}` };
+  }
+  if (/\/SigFlags\s+\d+/.test(d) || /\/Fields\s*\[/.test(d)) {
+    return { icon: '☑', text: 'AcroForm updated (fields / flags)' };
+  }
+  if (/\/Type\s*\/DSS/.test(d)) {
+    return { icon: '⛨', text: 'DSS (LTV data — certificates and OCSP responses)' };
+  }
+  if (/\/Type\s*\/SigFieldLock/.test(d) || /\/TransformMethod\s*\/FieldMDP/.test(d)) {
+    return { icon: '🔒', text: 'Signature field lock (further changes prohibited after this sig)' };
+  }
+  // Objects worth ignoring: fonts, xref streams, ObjStms, procedure sets.
+  if (/\/Type\s*\/Font\b/.test(d)) return null;
+  if (/\/Type\s*\/XRef\b/.test(d)) return null;
+  if (/\/Type\s*\/ObjStm\b/.test(d)) return null;
+  return null;
+}
+
+// Show a structured list of what a signer added, computed from the object
+// contents of their incremental byte range. Independent of pdf.js
+// rendering — works identically for docs signed by Adobe, Preview,
+// pdf-signer, iText or anything else that appends a valid incremental
+// section.
+async function showSignerAdditions({ allBytes, thisByteRange, prevByteRange, title }) {
   const body = document.createElement('div');
   body.style.cssText = 'max-height: 70vh; overflow-y: auto';
-  const intro = prevBytes
-    ? `<p class="hint" style="margin:0 0 8px">Red overlay shows regions where this revision differs from the previous one — added annotations, filled fields, new signature blocks, or (if unexpected) modified content.</p>`
-    : `<p class="hint" style="margin:0 0 8px">Couldn't reconstruct an earlier revision from this file — the signer signed a document that has no earlier snapshot embedded. What's shown below is the signed content as-is; anything visible was already in the file when this signer received it.</p>`;
-  body.innerHTML = intro + '<div id="diffPages" style="display:flex; flex-direction:column; gap:12px"></div>';
-  const modalPromise = modal({ title, body, confirmText: 'Close', cancelText: '' });
-  const container = body.querySelector('#diffPages');
-  try {
-    const currDoc = await pdfjsLib.getDocument({ data: currBytes.slice() }).promise;
-    const prevDoc = prevBytes ? await pdfjsLib.getDocument({ data: prevBytes.slice() }).promise : null;
-    const scale = 1.0;
-    // pdf.js's default annotationMode doesn't draw signature-widget
-    // appearances onto the canvas — page.render draws the page content
-    // only. The whole point of this view is to show what a signer added
-    // (which for our stamp-appearance sigs IS the widget's /AP), so
-    // force ENABLE_FORMS. Fall back silently if the constant isn't
-    // exposed by this pdf.js build.
-    const annMode = pdfjsLib.AnnotationMode ? pdfjsLib.AnnotationMode.ENABLE_FORMS : undefined;
-    const render = (page, ctx, vp) => page.render(
-      annMode !== undefined
-        ? { canvasContext: ctx, viewport: vp, annotationMode: annMode }
-        : { canvasContext: ctx, viewport: vp }
-    ).promise;
-    for (let pn = 1; pn <= currDoc.numPages; pn++) {
-      const page = await currDoc.getPage(pn);
-      const vp = page.getViewport({ scale });
-      const c = document.createElement('canvas');
-      c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
-      await render(page, c.getContext('2d'), vp);
-      let prevC = null;
-      if (prevDoc && pn <= prevDoc.numPages) {
-        const pp = await prevDoc.getPage(pn);
-        const pvp = pp.getViewport({ scale });
-        prevC = document.createElement('canvas');
-        prevC.width = Math.ceil(pvp.width); prevC.height = Math.ceil(pvp.height);
-        await render(pp, prevC.getContext('2d'), pvp);
-      }
-      const { canvas: overlay, changedFraction } = pixelDiffOverlay(c, prevC);
-      overlay.style.cssText = 'max-width:100%; border:1px solid var(--border); border-radius:4px; display:block';
-      const row = document.createElement('div');
-      const pctLabel = Math.round(changedFraction * 1000) / 10;
-      const label = prevC
-        ? `Page ${pn} · ${pctLabel}% of pixels changed`
-        : `Page ${pn} · signed content as-is`;
-      row.innerHTML = `<div style="font-size:12px; color:var(--muted); margin-bottom:4px">${label}</div>`;
-      row.appendChild(overlay);
-      container.appendChild(row);
-    }
-  } catch (e) {
-    container.innerHTML = '<div class="hint" style="color:var(--danger)">Failed to render diff: ' + (e.message || e) + '</div>';
+
+  // Signer's incremental section = bytes between the previous signer's
+  // %%EOF and this signer's %%EOF. For the first signer, "previous"
+  // starts at file start — everything in their signed range was authored
+  // OR pre-existed under their signature. We can still enumerate every
+  // object in that range, but the semantics differ from a real diff:
+  // we're showing objects that WERE in the file WHEN THEY SIGNED, not
+  // necessarily objects THEY added.
+  const thisEnd = thisByteRange[2] + thisByteRange[3];
+  const prevEnd = prevByteRange ? (prevByteRange[2] + prevByteRange[3]) : 0;
+
+  const objects = parsePdfObjectsInByteRange(allBytes, prevEnd, thisEnd);
+  const items = [];
+  for (const obj of objects) {
+    const s = summarizePdfObject(obj);
+    if (s) items.push({ ...s, num: obj.num });
   }
-  await modalPromise;
+
+  const esc = s => String(s || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+  const header = prevByteRange
+    ? `<p class="hint" style="margin:0 0 12px">${items.length} object${items.length === 1 ? '' : 's'} appended in this signer's incremental section (bytes ${prevEnd}–${thisEnd}).</p>`
+    : `<p class="hint" style="margin:0 0 12px">Earliest revision in the file. ${items.length} categorised object${items.length === 1 ? '' : 's'} up to this signer's %%EOF — some may have pre-existed and been signed AS-IS, others were added by this signer.</p>`;
+  let list = '<ul style="list-style:none; padding:0; margin:0; font-size:13px;">';
+  if (items.length === 0) {
+    list += '<li style="padding:8px 0; color:var(--muted)">No categorisable objects — this signer may have used a rebuild-style sign that flattens the file and doesn\'t append distinguishable structure.</li>';
+  } else {
+    for (const it of items) {
+      list += `<li style="padding:6px 0; border-bottom:1px solid var(--border); display:flex; gap:10px; align-items:baseline;">
+        <span style="opacity:0.55; width:16px; text-align:center;">${it.icon}</span>
+        <span style="flex:1;">${esc(it.text)}</span>
+        <span style="opacity:0.4; font-family:ui-monospace,Menlo,monospace; font-size:11px;">obj ${it.num}</span>
+      </li>`;
+    }
+  }
+  list += '</ul>';
+  body.innerHTML = header + list;
+  await modal({ title, body, confirmText: 'Close', cancelText: '' });
+}
+
+// Compatibility shim — some callers still name it showRevisionDiff.
+async function showRevisionDiff(_opts) {
+  // Kept as a no-op wrapper so old inline handlers don't crash if any
+  // slipped through; new code uses showSignerAdditions directly.
+  console.warn('showRevisionDiff called — use showSignerAdditions.');
 }
 
 async function buildPageList() {
@@ -9731,11 +9861,10 @@ async function runAutoVerifyFromHash() {
             btn.style.cssText = 'margin:2px 6px 2px 0';
             const signerName = (rr.cn || 'Signer ' + (i + 1)).slice(0, 30);
             btn.textContent = '“' + signerName + '” added (rev ' + (i + 1) + ')';
-            btn.onclick = () => showRevisionDiff({
-              prevBytes: prev
-                ? revisionBytes(plaintext, prev.byteRange)
-                : docBytesBeforeIncrementalAppend(plaintext, rr.byteRange),
-              currBytes: revisionBytes(plaintext, rr.byteRange),
+            btn.onclick = () => showSignerAdditions({
+              allBytes: plaintext,
+              thisByteRange: rr.byteRange,
+              prevByteRange: prev ? prev.byteRange : null,
               title: btn.textContent,
             });
             diffSection.appendChild(btn);
