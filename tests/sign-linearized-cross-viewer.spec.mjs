@@ -63,10 +63,15 @@ test('sign a linearized PDF: opens in pdf.js, Poppler, and Preview.app', async (
   const outPath = await download.path();
   const outBytes = new Uint8Array(fs.readFileSync(outPath));
 
-  // Keep a stable copy where the user can inspect it.
-  const previewCopy = PRESIGNED_FIXTURE.replace(/\.pdf$/i, '-linearized-signed.pdf');
-  fs.writeFileSync(previewCopy, outBytes);
-  console.log('kept', previewCopy, 'size=', outBytes.length);
+  // Only write an on-disk copy when the caller explicitly asks — otherwise
+  // the test bloats the user's Downloads folder with a signed PDF they
+  // never look at. Poppler / Preview / pdf.js are all fed from `outPath`
+  // (Playwright's own download location, cleaned up per test run).
+  if (process.env.PDFSIGNER_KEEP_OUTPUT) {
+    const previewCopy = PRESIGNED_FIXTURE.replace(/\.pdf$/i, '-linearized-signed.pdf');
+    fs.writeFileSync(previewCopy, outBytes);
+    console.log('kept', previewCopy, 'size=', outBytes.length);
+  }
 
   // 1. Both signatures verify cryptographically via pdf-signer's own verifier.
   const verify = await page.evaluate(async ({ b64 }) => {
