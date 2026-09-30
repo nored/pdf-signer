@@ -7874,7 +7874,15 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
       `${widgetNum} 0 obj\n<< /Type /Annot /Subtype /Widget /F 132\n` +
       `   /Rect [${pdfNum(p.xPdf)} ${pdfNum(p.yPdf)} ${pdfNum(p.xPdf + p.wPdf)} ${pdfNum(p.yPdf + p.hPdf)}]\n` +
       `   /P ${pageRef.objectNumber} ${pageRef.generationNumber} R\n` +
-      `   /AP << /N ${apNum} 0 R >>\n   /Parent ${sigFieldNum} 0 R\n>>\nendobj\n`
+      `   /AP << /N ${apNum} 0 R >>\n   /Parent ${sigFieldNum} 0 R\n` +
+      // Zero-width border and empty MK dict — some viewers (Acrobat,
+      // Firefox's pdf.js) draw a default blue/black rectangle around
+      // signature widgets otherwise, ignoring the appearance stream's
+      // own borderless design.
+      `   /Border [0 0 0]\n` +
+      `   /BS << /Type /Border /W 0 /S /S >>\n` +
+      `   /MK << >>\n` +
+      `>>\nendobj\n`
     });
     widgetObjs.push({ num: widgetNum, pageIndex: p.pageIndex });
 
