@@ -3077,25 +3077,40 @@ async function showRevisionDiff({ prevBytes, currBytes, title }) {
     const currDoc = await pdfjsLib.getDocument({ data: currBytes.slice() }).promise;
     const prevDoc = prevBytes ? await pdfjsLib.getDocument({ data: prevBytes.slice() }).promise : null;
     const scale = 1.0;
+    // pdf.js's default annotationMode doesn't draw signature-widget
+    // appearances onto the canvas — page.render draws the page content
+    // only. The whole point of this view is to show what a signer added
+    // (which for our stamp-appearance sigs IS the widget's /AP), so
+    // force ENABLE_FORMS. Fall back silently if the constant isn't
+    // exposed by this pdf.js build.
+    const annMode = pdfjsLib.AnnotationMode ? pdfjsLib.AnnotationMode.ENABLE_FORMS : undefined;
+    const render = (page, ctx, vp) => page.render(
+      annMode !== undefined
+        ? { canvasContext: ctx, viewport: vp, annotationMode: annMode }
+        : { canvasContext: ctx, viewport: vp }
+    ).promise;
     for (let pn = 1; pn <= currDoc.numPages; pn++) {
       const page = await currDoc.getPage(pn);
       const vp = page.getViewport({ scale });
       const c = document.createElement('canvas');
       c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
-      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      await render(page, c.getContext('2d'), vp);
       let prevC = null;
       if (prevDoc && pn <= prevDoc.numPages) {
         const pp = await prevDoc.getPage(pn);
         const pvp = pp.getViewport({ scale });
         prevC = document.createElement('canvas');
         prevC.width = Math.ceil(pvp.width); prevC.height = Math.ceil(pvp.height);
-        await pp.render({ canvasContext: prevC.getContext('2d'), viewport: pvp }).promise;
+        await render(pp, prevC.getContext('2d'), pvp);
       }
       const { canvas: overlay, changedFraction } = pixelDiffOverlay(c, prevC);
       overlay.style.cssText = 'max-width:100%; border:1px solid var(--border); border-radius:4px; display:block';
       const row = document.createElement('div');
       const pctLabel = Math.round(changedFraction * 1000) / 10;
-      row.innerHTML = `<div style="font-size:12px; color:var(--muted); margin-bottom:4px">Page ${pn} · ${pctLabel}% of pixels changed</div>`;
+      const label = prevC
+        ? `Page ${pn} · ${pctLabel}% of pixels changed`
+        : `Page ${pn} · signed content as-is`;
+      row.innerHTML = `<div style="font-size:12px; color:var(--muted); margin-bottom:4px">${label}</div>`;
       row.appendChild(overlay);
       container.appendChild(row);
     }
