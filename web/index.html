@@ -2938,12 +2938,12 @@ async function showVerifyModal(results, isUnsignedField=false) {
       const btn = document.createElement('button');
       btn.style.cssText = 'margin:2px 6px 2px 0';
       const signer = (r.signerCn || r.signer || 'Signer ' + (i + 1)).slice(0, 30);
-      btn.textContent = i === 0
-        ? `Show what "${signer}" signed (rev 1)`
-        : `Show what "${signer}" added (rev ${i + 1})`;
+      btn.textContent = `Show what "${signer}" added (rev ${i + 1})`;
       btn.onclick = async () => {
         await showRevisionDiff({
-          prevBytes: prev ? revisionBytes(doc.bytes, prev.byteRange) : null,
+          prevBytes: prev
+            ? revisionBytes(doc.bytes, prev.byteRange)
+            : docBytesBeforeIncrementalAppend(doc.bytes, r.byteRange),
           currBytes: revisionBytes(doc.bytes, r.byteRange),
           title: btn.textContent,
         });
@@ -2961,6 +2961,39 @@ async function showVerifyModal(results, isUnsignedField=false) {
 // inside the range as a hole for the CMS placeholder).
 function revisionBytes(bytes, byteRange) {
   const end = byteRange[1] + byteRange[2] + byteRange[3];
+  return bytes.slice(0, end);
+}
+
+// Return the bytes of the document as it existed BEFORE the first signer
+// signed it — i.e. carve out the incremental section this signer appended
+// and hand back the earlier revision.
+//
+// In a multi-revision PDF, each revision ends with a `%%EOF` marker. The
+// first signer's incremental append introduced the LAST such marker inside
+// their signed byte range; the one immediately before it is the end of
+// the pre-signature revision. Truncating there gives us a valid PDF that
+// pdf.js can render, which the diff view can then compare against the
+// signed revision to show what the first signer actually added.
+//
+// For linearized files the very first `%%EOF` is the linearization hint,
+// not a real revision boundary — we skip it by picking the second-to-last
+// marker within the signed range rather than the first.
+function docBytesBeforeIncrementalAppend(bytes, byteRange) {
+  const signedEnd = byteRange[2] + byteRange[3];
+  // Enumerate every `%%EOF` position strictly inside [0, signedEnd].
+  const eofs = [];
+  for (let i = 0; i + 4 < signedEnd; i++) {
+    if (bytes[i] === 0x25 && bytes[i+1] === 0x25 &&
+        bytes[i+2] === 0x45 && bytes[i+3] === 0x4F && bytes[i+4] === 0x46) {
+      eofs.push(i);
+      i += 4; // skip past this marker
+    }
+  }
+  if (eofs.length < 2) return null; // no earlier revision to recover
+  // Truncate at the end of the second-to-last marker (inclusive of any
+  // trailing CR/LF so the resulting file is well-formed).
+  let end = eofs[eofs.length - 2] + 5;
+  while (end < bytes.length && (bytes[end] === 0x0A || bytes[end] === 0x0D)) end++;
   return bytes.slice(0, end);
 }
 
@@ -2988,10 +3021,11 @@ function pixelDiffOverlay(canvasA, canvasB) {
   const outCtx = out.getContext('2d');
   outCtx.drawImage(canvasA, 0, 0);
   if (!canvasB) {
-    // No previous revision — everything is "new".
-    outCtx.fillStyle = 'rgba(220,53,69,0.28)';
-    outCtx.fillRect(0, 0, w, h);
-    return { canvas: out, changedFraction: 1 };
+    // No previous revision to diff against — return the page rendered
+    // as-is, with no red overlay. Blanket-painting the whole page red
+    // in this case is misleading; the caller shows an explanatory note
+    // in the modal intro instead.
+    return { canvas: out, changedFraction: 0 };
   }
   const scratch = document.createElement('canvas');
   scratch.width = w; scratch.height = h;
@@ -3033,7 +3067,10 @@ function pixelDiffOverlay(canvasA, canvasB) {
 async function showRevisionDiff({ prevBytes, currBytes, title }) {
   const body = document.createElement('div');
   body.style.cssText = 'max-height: 70vh; overflow-y: auto';
-  body.innerHTML = '<p class="hint" style="margin:0 0 8px">Red overlay shows regions where this revision differs from the previous one — added annotations, filled fields, new signature blocks, or (if unexpected) modified content.</p><div id="diffPages" style="display:flex; flex-direction:column; gap:12px"></div>';
+  const intro = prevBytes
+    ? `<p class="hint" style="margin:0 0 8px">Red overlay shows regions where this revision differs from the previous one — added annotations, filled fields, new signature blocks, or (if unexpected) modified content.</p>`
+    : `<p class="hint" style="margin:0 0 8px">Couldn't reconstruct an earlier revision from this file — the signer signed a document that has no earlier snapshot embedded. What's shown below is the signed content as-is; anything visible was already in the file when this signer received it.</p>`;
+  body.innerHTML = intro + '<div id="diffPages" style="display:flex; flex-direction:column; gap:12px"></div>';
   const modalPromise = modal({ title, body, confirmText: 'Close', cancelText: '' });
   const container = body.querySelector('#diffPages');
   try {
@@ -9678,9 +9715,11 @@ async function runAutoVerifyFromHash() {
             const btn = document.createElement('button');
             btn.style.cssText = 'margin:2px 6px 2px 0';
             const signerName = (rr.cn || 'Signer ' + (i + 1)).slice(0, 30);
-            btn.textContent = (i === 0 ? '“' + signerName + '” signed' : '“' + signerName + '” added') + ' (rev ' + (i + 1) + ')';
+            btn.textContent = '“' + signerName + '” added (rev ' + (i + 1) + ')';
             btn.onclick = () => showRevisionDiff({
-              prevBytes: prev ? revisionBytes(plaintext, prev.byteRange) : null,
+              prevBytes: prev
+                ? revisionBytes(plaintext, prev.byteRange)
+                : docBytesBeforeIncrementalAppend(plaintext, rr.byteRange),
               currBytes: revisionBytes(plaintext, rr.byteRange),
               title: btn.textContent,
             });
