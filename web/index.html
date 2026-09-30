@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PDF Signer</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='28' fill='%2310b981'/><path d='M20 34 L30 44 L48 22' fill='none' stroke='%23fff' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text x='32' y='52' font-size='54' text-anchor='middle' font-family='Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif'>&#128271;</text></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/forge/1.3.1/forge.min.js"></script>
@@ -3196,51 +3196,182 @@ function summarizePdfObject(obj) {
   return null;
 }
 
-// Show a structured list of what a signer added, computed from the object
-// contents of their incremental byte range. Independent of pdf.js
-// rendering — works identically for docs signed by Adobe, Preview,
-// pdf-signer, iText or anything else that appends a valid incremental
-// section.
+// Visual "what did this signer add" — parses the signer's incremental
+// object range for annotations with a /Rect and /P (widgets, links,
+// stamps, freetexts, etc.), then renders each affected page and paints
+// a labelled highlight over each new annotation. Works independently of
+// pdf.js's ability to render widget /AP streams (which it doesn't
+// reliably do for signature widgets) — we don't need it to; we know
+// WHERE the annotations landed and we paint that region ourselves.
 async function showSignerAdditions({ allBytes, thisByteRange, prevByteRange, title }) {
   const body = document.createElement('div');
-  body.style.cssText = 'max-height: 70vh; overflow-y: auto';
+  body.style.cssText = 'max-height: 78vh; overflow-y: auto';
+  const modalPromise = modal({ title, body, confirmText: 'Close', cancelText: '' });
+  body.innerHTML = '<p class="hint" style="margin:0 0 12px">Parsing this signer\'s additions…</p>';
 
-  // Signer's incremental section = bytes between the previous signer's
-  // %%EOF and this signer's %%EOF. For the first signer, "previous"
-  // starts at file start — everything in their signed range was authored
-  // OR pre-existed under their signature. We can still enumerate every
-  // object in that range, but the semantics differ from a real diff:
-  // we're showing objects that WERE in the file WHEN THEY SIGNED, not
-  // necessarily objects THEY added.
+  // Signer's incremental byte range.
   const thisEnd = thisByteRange[2] + thisByteRange[3];
   const prevEnd = prevByteRange ? (prevByteRange[2] + prevByteRange[3]) : 0;
-
   const objects = parsePdfObjectsInByteRange(allBytes, prevEnd, thisEnd);
-  const items = [];
+
+  // Classify each object: rectangular annotations get plotted on the
+  // page; sig dicts, page updates and lock/DSS objects feed the header.
+  const rectAnnots = [];
+  let sigInfo = null;
+  let lockAfter = false;
+  let dssAdded = false;
+  const changedPageRefs = new Set();
+
+  const decode = (s) => (s || '').replace(/\\([nrtbf()\\])/g, (_, c) => ({ n:'\n', r:'\r', t:'\t', b:'\b', f:'\f', '(':'(', ')':')', '\\':'\\' }[c]));
+
   for (const obj of objects) {
-    const s = summarizePdfObject(obj);
-    if (s) items.push({ ...s, num: obj.num });
+    const d = obj.dictText;
+    const rectM = /\/Rect\s*\[\s*([-\d.\s]+?)\s*\]/.exec(d);
+    const pageM = /\/P\s+(\d+)\s+\d+\s+R/.exec(d);
+    if (rectM && pageM) {
+      const rect = rectM[1].split(/\s+/).map(v => parseFloat(v)).filter(v => !isNaN(v));
+      if (rect.length === 4) {
+        const pageRef = parseInt(pageM[1], 10);
+        let kind = null, fill = null, stroke = null;
+        if (/\/Subtype\s*\/Widget/.test(d) && /\/FT\s*\/Sig/.test(d)) {
+          kind = 'Signature'; fill = 'rgba(16,185,129,0.22)'; stroke = 'rgba(16,185,129,0.9)';
+        } else if (/\/Subtype\s*\/Widget/.test(d)) {
+          kind = 'Form widget'; fill = 'rgba(47,111,235,0.22)'; stroke = 'rgba(47,111,235,0.9)';
+        } else if (/\/Subtype\s*\/Link/.test(d)) {
+          kind = 'Link'; fill = 'rgba(217,154,43,0.22)'; stroke = 'rgba(217,154,43,0.9)';
+        } else if (/\/Subtype\s*\/Stamp/.test(d)) {
+          kind = 'Stamp'; fill = 'rgba(153,102,204,0.22)'; stroke = 'rgba(153,102,204,0.9)';
+        } else if (/\/Subtype\s*\/(Highlight|Underline|Squiggly|StrikeOut)/.test(d)) {
+          const sub = /\/Subtype\s*\/(\w+)/.exec(d)[1];
+          kind = sub; fill = 'rgba(255,235,59,0.35)'; stroke = 'rgba(200,180,20,0.9)';
+        } else if (/\/Subtype\s*\/FreeText/.test(d)) {
+          kind = 'Text note'; fill = 'rgba(220,53,69,0.22)'; stroke = 'rgba(220,53,69,0.9)';
+        }
+        if (kind) {
+          rectAnnots.push({ objNum: obj.num, rect, pageRef, kind, fill, stroke });
+          changedPageRefs.add(pageRef);
+        }
+      }
+    }
+    if (/\/Type\s*\/Sig\b/.test(d) && /\/Contents\s*</.test(d) && !sigInfo) {
+      const nameM = /\/Name\s*\(([^)]*)\)/.exec(d);
+      const dateM = /\/M\s*\(D:(\d{14})/.exec(d);
+      const reasonM = /\/Reason\s*\(([^)]*)\)/.exec(d);
+      const locationM = /\/Location\s*\(([^)]*)\)/.exec(d);
+      sigInfo = {
+        name: nameM ? decode(nameM[1]) : '',
+        date: dateM ? `${dateM[1].slice(0,4)}-${dateM[1].slice(4,6)}-${dateM[1].slice(6,8)} ${dateM[1].slice(8,10)}:${dateM[1].slice(10,12)}` : '',
+        reason: reasonM ? decode(reasonM[1]) : '',
+        location: locationM ? decode(locationM[1]) : '',
+      };
+    }
+    if (/\/Type\s*\/Page\b/.test(d)) changedPageRefs.add(obj.num);
+    if (/\/TransformMethod\s*\/FieldMDP/.test(d) || /\/Type\s*\/SigFieldLock/.test(d)) lockAfter = true;
+    if (/\/Type\s*\/DSS\b/.test(d)) dssAdded = true;
   }
 
   const esc = s => String(s || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-  const header = prevByteRange
-    ? `<p class="hint" style="margin:0 0 12px">${items.length} object${items.length === 1 ? '' : 's'} appended in this signer's incremental section (bytes ${prevEnd}–${thisEnd}).</p>`
-    : `<p class="hint" style="margin:0 0 12px">Earliest revision in the file. ${items.length} categorised object${items.length === 1 ? '' : 's'} up to this signer's %%EOF — some may have pre-existed and been signed AS-IS, others were added by this signer.</p>`;
-  let list = '<ul style="list-style:none; padding:0; margin:0; font-size:13px;">';
-  if (items.length === 0) {
-    list += '<li style="padding:8px 0; color:var(--muted)">No categorisable objects — this signer may have used a rebuild-style sign that flattens the file and doesn\'t append distinguishable structure.</li>';
-  } else {
-    for (const it of items) {
-      list += `<li style="padding:6px 0; border-bottom:1px solid var(--border); display:flex; gap:10px; align-items:baseline;">
-        <span style="opacity:0.55; width:16px; text-align:center;">${it.icon}</span>
-        <span style="flex:1;">${esc(it.text)}</span>
-        <span style="opacity:0.4; font-family:ui-monospace,Menlo,monospace; font-size:11px;">obj ${it.num}</span>
-      </li>`;
-    }
+
+  // Header card: who signed, when, why.
+  let header = '';
+  if (sigInfo && (sigInfo.name || sigInfo.date)) {
+    header += `<div style="padding:10px 14px; background:rgba(16,185,129,0.10); border-left:3px solid #10b981; margin-bottom:14px; border-radius:2px;">
+      <div style="font-weight:600; font-size:14px;">${esc(sigInfo.name) || '(unnamed signer)'}${sigInfo.date ? ' &middot; <span style="opacity:0.75; font-weight:400;">' + esc(sigInfo.date) + '</span>' : ''}</div>
+      ${sigInfo.reason ? '<div style="margin-top:2px; opacity:0.85;">Reason: ' + esc(sigInfo.reason) + '</div>' : ''}
+      ${sigInfo.location ? '<div style="margin-top:2px; opacity:0.85;">Location: ' + esc(sigInfo.location) + '</div>' : ''}
+    </div>`;
   }
-  list += '</ul>';
-  body.innerHTML = header + list;
-  await modal({ title, body, confirmText: 'Close', cancelText: '' });
+  const flags = [];
+  if (lockAfter) flags.push('🔒 Signature field locked — no further changes permitted after this signature');
+  if (dssAdded) flags.push('⛨ Long-term validation data (DSS) added — certs and OCSP responses embedded');
+  if (flags.length) header += '<ul style="list-style:none; padding:0; margin:0 0 14px; font-size:13px;">' + flags.map(f => `<li style="padding:3px 0;">${f}</li>`).join('') + '</ul>';
+
+  // Load with pdf.js and map object numbers → page numbers.
+  const pagesContainer = document.createElement('div');
+  pagesContainer.style.cssText = 'display:flex; flex-direction:column; gap:16px;';
+  try {
+    const currDoc = await pdfjsLib.getDocument({ data: allBytes.slice() }).promise;
+    const pageByRef = new Map();
+    for (let i = 1; i <= currDoc.numPages; i++) {
+      const p = await currDoc.getPage(i);
+      pageByRef.set(p.ref.num, i);
+    }
+
+    // Group annots by page number.
+    const annotsByPage = new Map();
+    for (const a of rectAnnots) {
+      const pn = pageByRef.get(a.pageRef);
+      if (!pn) continue;
+      if (!annotsByPage.has(pn)) annotsByPage.set(pn, []);
+      annotsByPage.get(pn).push(a);
+    }
+    const changedPages = new Set(annotsByPage.keys());
+    for (const objNum of changedPageRefs) {
+      const pn = pageByRef.get(objNum);
+      if (pn) changedPages.add(pn);
+    }
+
+    body.innerHTML = header;
+    body.appendChild(pagesContainer);
+
+    if (changedPages.size === 0) {
+      pagesContainer.innerHTML = '<p class="hint">No page-level visible changes detected. The signer may have added structure (DSS, field lock, etc.) without touching any page.</p>';
+      await modalPromise;
+      return;
+    }
+
+    const annMode = pdfjsLib.AnnotationMode ? pdfjsLib.AnnotationMode.ENABLE : undefined;
+    for (const pn of [...changedPages].sort((a, b) => a - b)) {
+      const page = await currDoc.getPage(pn);
+      const vp = page.getViewport({ scale: 1.5 });
+      const c = document.createElement('canvas');
+      c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+      const ctx = c.getContext('2d');
+      await page.render({
+        canvasContext: ctx, viewport: vp,
+        ...(annMode !== undefined ? { annotationMode: annMode } : {}),
+      }).promise;
+
+      const annots = annotsByPage.get(pn) || [];
+      for (const a of annots) {
+        const [x1, y1, x2, y2] = a.rect;
+        const [tx1, ty1] = vp.convertToViewportPoint(x1, y1);
+        const [tx2, ty2] = vp.convertToViewportPoint(x2, y2);
+        const left = Math.min(tx1, tx2), top = Math.min(ty1, ty2);
+        const w = Math.abs(tx2 - tx1), h = Math.abs(ty2 - ty1);
+        ctx.fillStyle = a.fill;
+        ctx.fillRect(left, top, w, h);
+        ctx.strokeStyle = a.stroke;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(left, top, w, h);
+        // Label chip at top-left of the rect.
+        ctx.font = '600 12px -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif';
+        const label = a.kind;
+        const tw = ctx.measureText(label).width;
+        const chipH = 18;
+        const chipY = top - chipH - 2 < 0 ? top + 2 : top - chipH - 2;
+        ctx.fillStyle = a.stroke;
+        ctx.fillRect(left, chipY, tw + 12, chipH);
+        ctx.fillStyle = '#fff';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, left + 6, chipY + chipH / 2);
+      }
+
+      c.style.cssText = 'max-width:100%; border:1px solid var(--border); border-radius:4px; display:block; box-shadow:0 1px 3px rgba(0,0,0,.08)';
+      const row = document.createElement('div');
+      const summary = annots.length
+        ? annots.map(a => a.kind).join(' · ')
+        : 'page dict updated (annotation list changed)';
+      row.innerHTML = `<div style="font-size:12px; color:var(--muted); margin-bottom:6px; font-weight:500">Page ${pn} — ${esc(summary)}</div>`;
+      row.appendChild(c);
+      pagesContainer.appendChild(row);
+    }
+  } catch (e) {
+    pagesContainer.innerHTML = `<p class="hint" style="color:var(--danger)">Rendering failed: ${esc(e.message || e)}</p>`;
+    body.innerHTML = header;
+    body.appendChild(pagesContainer);
+  }
+  await modalPromise;
 }
 
 // Compatibility shim — some callers still name it showRevisionDiff.
