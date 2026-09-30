@@ -3723,12 +3723,12 @@ function renderPlacementPreview(p) {
     const wmCx = centerX + centerW / 2;
     const wmCy = h / 2;
     const wcw = wmSize * 0.5;
-    // SVG y-down: vertex y > start y (visually LOWER on screen), end y <
-    // vertex y (visually HIGHER on screen). Same visual as the PDF's
-    // vertex-at-bottom (which uses y-up with the signs flipped).
-    const wmXml = `<path d="M ${(wmCx - wcw*0.5).toFixed(2)} ${(wmCy - wcw*0.10).toFixed(2)}
-                             L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy + wcw*0.28).toFixed(2)}
-                             L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy - wcw*0.42).toFixed(2)}"
+    // SVG y-down — same numeric offsets as the PDF now that both draw the
+    // vertex "high" numerically and rely on the coord system flip to place
+    // it visually low.
+    const wmXml = `<path d="M ${(wmCx - wcw*0.5).toFixed(2)} ${(wmCy + wcw*0.10).toFixed(2)}
+                             L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy - wcw*0.28).toFixed(2)}
+                             L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy + wcw*0.42).toFixed(2)}"
                        fill="none" stroke="rgba(114,214,163,0.75)" stroke-width="${Math.max(0.8, wmSize*0.08).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
 
     // Text baseline y in SVG needs to be a full baseline y; the nameLineY was
@@ -3744,8 +3744,6 @@ function renderPlacementPreview(p) {
 
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"
       style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none; display:block;" class="stamp-svg">
-      <!-- Accent border -->
-      <rect x="0.625" y="0.625" width="${(w-1.25).toFixed(2)}" height="${(h-1.25).toFixed(2)}" fill="none" stroke="#2f6feb" stroke-width="1.25"/>
       <!-- Watermark check -->
       ${wmXml}
       <!-- Signature image (or placeholder) -->
@@ -4809,15 +4807,9 @@ function drawStampSigAppearance(page, p, opts) {
   const { fonts, meta, reason, dateStr, qrPayload, sigImgObj } = opts;
   const x1 = p.xPdf, y1 = p.yPdf, w = p.wPdf, h = p.hPdf;
   const pad = 5;
-  const accent = rgb(0.185, 0.435, 0.921);
-  // Transparent background — the stamp sits on top of the page content, no
-  // white fill obscuring the text underneath. Only the accent border is
-  // drawn so the stamp's outline still reads as a distinct block.
-  page.drawRectangle({
-    x: x1 + 0.625, y: y1 + 0.625,
-    width: w - 1.25, height: h - 1.25,
-    borderColor: accent, borderWidth: 1.25,
-  });
+  // Borderless — the stamp sits flat on the page. The dashed .placement
+  // wrapper in the browser preview still shows the drop target while
+  // authoring, but the printed PDF carries no rectangle around the content.
 
   const innerH = h - 2 * pad;
   const sideSize = Math.max(24, Math.min(innerH, Math.min(h - 2 * pad, w * 0.28)));
@@ -4958,13 +4950,13 @@ function drawFaviconWatermark(page, x, y, size) {
   const thick = Math.max(1.2, s * 0.08);
   const color = rgb(0.75, 0.94, 0.86);
   page.drawLine({
-    start: { x: cx - cw * 0.50, y: cy + cw * 0.10 },
-    end:   { x: cx - cw * 0.13, y: cy - cw * 0.28 },
+    start: { x: cx - cw * 0.50, y: cy - cw * 0.10 },
+    end:   { x: cx - cw * 0.13, y: cy + cw * 0.28 },
     thickness: thick, color,
   });
   page.drawLine({
-    start: { x: cx - cw * 0.13, y: cy - cw * 0.28 },
-    end:   { x: cx + cw * 0.55, y: cy + cw * 0.42 },
+    start: { x: cx - cw * 0.13, y: cy + cw * 0.28 },
+    end:   { x: cx + cw * 0.55, y: cy - cw * 0.42 },
     thickness: thick, color,
   });
 }
@@ -7453,11 +7445,9 @@ function watermarkContentOps(x, y, s) {
   ops.push('0.75 0.94 0.86 RG');
   ops.push(`${pdfNum(thick)} w`);
   ops.push('1 J 1 j');
-  // Vertex-at-bottom check in PDF y-up coords: vertex y = cy − 0.28·cw
-  // sits BELOW cy, end y = cy + 0.42·cw sits ABOVE cy.
-  ops.push(`${pdfNum(cx - cw * 0.50)} ${pdfNum(cy + cw * 0.10)} m`);
-  ops.push(`${pdfNum(cx - cw * 0.13)} ${pdfNum(cy - cw * 0.28)} l`);
-  ops.push(`${pdfNum(cx + cw * 0.55)} ${pdfNum(cy + cw * 0.42)} l`);
+  ops.push(`${pdfNum(cx - cw * 0.50)} ${pdfNum(cy - cw * 0.10)} m`);
+  ops.push(`${pdfNum(cx - cw * 0.13)} ${pdfNum(cy + cw * 0.28)} l`);
+  ops.push(`${pdfNum(cx + cw * 0.55)} ${pdfNum(cy - cw * 0.42)} l`);
   ops.push('S');
   ops.push('Q');
   return ops.join('\n');
@@ -7539,11 +7529,9 @@ function buildStampSigAppearanceStream({
 
   const lines = [];
   lines.push('q');
-  // Transparent background — draw only the accent border so page content
-  // underneath the stamp stays legible.
-  lines.push('0.185 0.435 0.921 RG');
-  lines.push('1.25 w');
-  lines.push(`0.625 0.625 ${pdfNum(w - 1.25)} ${pdfNum(h - 1.25)} re S`);
+  // Borderless: no rectangle around the stamp — the sig image + name + QR
+  // read as a block on their own, and the page content underneath stays
+  // completely unobscured.
 
   // Left column: signature image via /XObject Do, if one is embedded. When
   // none is embedded, draw a dashed placeholder so the slot reads as
