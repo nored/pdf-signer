@@ -3076,18 +3076,11 @@ function parsePdfObjectsInByteRange(bytes, start, end) {
   const out = [];
   let m;
   while ((m = re.exec(text)) !== null) {
-    // Find the matching `endobj`. Naive but safe: no PDF object body
-    // legitimately contains the literal token `endobj` outside a stream,
-    // and streams are scanned as a whole so their inner content is
-    // opaque to this string search.
     const stopIdx = text.indexOf('endobj', m.index + m[0].length);
     if (stopIdx < 0) break;
     const bodyStart = m.index + m[0].length;
-    // Grab the dict text between `obj` and `stream` (or `endobj`).
     let bodyText = text.substring(bodyStart, stopIdx);
-    // Peel leading whitespace.
     const trimmed = bodyText.replace(/^\s+/, '');
-    // Try to extract the leading `<< ... >>` dict — with balanced nesting.
     let dictText = '';
     if (trimmed.startsWith('<<')) {
       let depth = 0, i = 0;
@@ -3097,18 +3090,100 @@ function parsePdfObjectsInByteRange(bytes, start, end) {
       }
       dictText = trimmed.substring(0, i);
     }
-    const hasStream = /\bstream\b/.test(bodyText.substring(dictText.length));
+    // Capture the stream data offset+length for objects that carry a stream,
+    // so ObjStm/XRef/appearance streams can be inflated by callers.
+    let streamStart = -1, streamEnd = -1;
+    const afterDict = bodyText.substring(bodyText.indexOf(dictText) + dictText.length);
+    const streamKwM = /^\s*stream\r?\n/.exec(afterDict);
+    if (streamKwM) {
+      const lenM = /\/Length\s+(\d+)/.exec(dictText);
+      if (lenM) {
+        const relStreamStart = bodyText.indexOf(dictText) + dictText.length + streamKwM[0].length;
+        streamStart = start + bodyStart + relStreamStart;
+        streamEnd = streamStart + parseInt(lenM[1], 10);
+      }
+    }
     out.push({
       num: parseInt(m[1], 10),
       gen: parseInt(m[2], 10),
       dictText,
-      hasStream,
+      hasStream: streamStart >= 0,
+      streamStart, streamEnd,
       absStart: start + m.index,
       absEnd: start + stopIdx + 'endobj'.length,
     });
     re.lastIndex = stopIdx + 'endobj'.length;
   }
   return out;
+}
+
+// Inflate a FlateDecode stream using the browser's native DecompressionStream.
+async function inflatePdfStream(bytes) {
+  const ds = new DecompressionStream('deflate');
+  const writer = ds.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const chunks = [];
+  const reader = ds.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const total = chunks.reduce((s, c) => s + c.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
+// Decompress an /Type /ObjStm and enumerate the compressed objects inside.
+// Adobe stores form fields, widgets, sig fields and metadata inside ObjStms
+// on any linearized or object-stream file; without this expansion the
+// per-signer diff sees only the outer stream wrapper and misses everything
+// meaningful the signer did.
+async function expandObjStm(bytes, streamObj) {
+  const filterM = /\/Filter\s*\/(\w+)/.exec(streamObj.dictText);
+  if (!filterM || filterM[1] !== 'FlateDecode') return [];
+  if (streamObj.streamStart < 0) return [];
+  let decompressed;
+  try {
+    decompressed = await inflatePdfStream(bytes.subarray(streamObj.streamStart, streamObj.streamEnd));
+  } catch (_) { return []; }
+  const nM = /\/N\s+(\d+)/.exec(streamObj.dictText);
+  const firstM = /\/First\s+(\d+)/.exec(streamObj.dictText);
+  if (!nM || !firstM) return [];
+  const N = parseInt(nM[1], 10);
+  const First = parseInt(firstM[1], 10);
+  const headerText = new TextDecoder('latin1').decode(decompressed.subarray(0, First));
+  const tokens = headerText.trim().split(/\s+/);
+  const results = [];
+  for (let i = 0; i < N; i++) {
+    if (i * 2 + 1 >= tokens.length) break;
+    const objnum = parseInt(tokens[i * 2], 10);
+    const off = parseInt(tokens[i * 2 + 1], 10);
+    const nextOff = i + 1 < N
+      ? parseInt(tokens[(i + 1) * 2 + 1], 10)
+      : (decompressed.length - First);
+    const bodyBytes = decompressed.subarray(First + off, First + nextOff);
+    const bodyText = new TextDecoder('latin1').decode(bodyBytes).trim();
+    let dictText = bodyText;
+    if (bodyText.startsWith('<<')) {
+      let depth = 0, i2 = 0;
+      for (; i2 < bodyText.length - 1; i2++) {
+        if (bodyText[i2] === '<' && bodyText[i2 + 1] === '<') { depth++; i2++; }
+        else if (bodyText[i2] === '>' && bodyText[i2 + 1] === '>') { depth--; i2++; if (depth === 0) { i2++; break; } }
+      }
+      dictText = bodyText.substring(0, i2);
+    }
+    results.push({
+      num: objnum, gen: 0, dictText,
+      hasStream: false, streamStart: -1, streamEnd: -1,
+      absStart: -1, absEnd: -1,
+      inObjStm: streamObj.num,
+    });
+  }
+  return results;
 }
 
 // Turn a parsed indirect object into a short human-readable description,
@@ -3212,7 +3287,22 @@ async function showSignerAdditions({ allBytes, thisByteRange, prevByteRange, tit
   // Signer's incremental byte range.
   const thisEnd = thisByteRange[2] + thisByteRange[3];
   const prevEnd = prevByteRange ? (prevByteRange[2] + prevByteRange[3]) : 0;
-  const objects = parsePdfObjectsInByteRange(allBytes, prevEnd, thisEnd);
+  // Parse top-level objects, then expand every /Type /ObjStm found.
+  // Adobe- and Preview-produced files stash form widgets, sig fields,
+  // filled form values, catalogs and page trees inside compressed
+  // object streams. Without this expansion, "what Tim added" on an
+  // Adobe rebuild sign collapses to a single "page dict updated" note
+  // and hides Tim's sig, his form field values ("5.0" grades), etc.
+  const topLevel = parsePdfObjectsInByteRange(allBytes, prevEnd, thisEnd);
+  const objects = [...topLevel];
+  for (const obj of topLevel) {
+    if (/\/Type\s*\/ObjStm/.test(obj.dictText)) {
+      try {
+        const inner = await expandObjStm(allBytes, obj);
+        objects.push(...inner);
+      } catch (_) { /* corrupted stream — skip */ }
+    }
+  }
 
   // Classify each object: rectangular annotations get plotted on the
   // page; sig dicts, page updates and lock/DSS objects feed the header.
