@@ -1011,9 +1011,11 @@
               <input type="radio" name="lockmode" value="certify"> Certify, allow further signatures <span class="info-hint" title="DocMDP P=3: certifies the document but permits form-fill, annotations, and further signatures downstream. Anything else invalidates this signature. Most consumer PDF tools rewrite the file and will break it.">ⓘ</span>
             </label>
           </div>
-          <div id="alreadySignedNote" class="hint" style="display:none; margin-top:6px; color:#b57920">
-            PDF already signed by someone else. Your signature is added and the file is re-saved so every viewer (Preview, Adobe, Firefox, Evince, Chrome) opens it cleanly. The prior signer's visible mark stays in place; strict Adobe verification will report their cryptographic signature as invalidated by the re-save.
-          </div>
+          <!-- alreadySignedNote intentionally removed — the top verify
+               banner already communicates "signed, unchanged since signing"
+               and the extra paragraph read as clutter that leaked
+               implementation details into the UI. -->
+          <div id="alreadySignedNote" style="display:none"></div>
 
           <details style="margin-top:10px">
             <summary>Trusted timestamp (RFC 3161)</summary>
