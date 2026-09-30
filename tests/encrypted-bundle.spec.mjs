@@ -3,13 +3,17 @@ import { test, expect, createIdentity } from './fixtures.mjs';
 test('encrypted bundle round-trip: export → wipe → import', async ({ page }) => {
   await createIdentity(page, { label: 'Round-trip', name: 'Ada RT', email: 'ada@rt.edu' });
 
-  // Export.
+  // Export. createIdentity already cancels the auto-open Export modal; click
+  // btnExportId to open a fresh one.
   await page.click('#btnExportId');
+  await page.locator('#bpw').waitFor({ state: 'visible', timeout: 10_000 });
   await page.fill('#bpw', 'bundlepassword1');
   await page.fill('#bpw2', 'bundlepassword1');
+  // The sidebar also has an "Export" button, so scope the modal button lookup
+  // to inside the modal to avoid a strict-mode selector collision.
   const [dl] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('button', { name: 'Export' }).click(),
+    page.locator('#modalRoot').getByRole('button', { name: 'Export' }).click(),
   ]);
   const bundlePath = await dl.path();
   const fs = await import('fs/promises');
@@ -38,12 +42,17 @@ test('encrypted bundle round-trip: export → wipe → import', async ({ page })
     window.pickFile = async () => file;
     setTimeout(() => { window.pickFile = orig; }, 5000);
   }, { b64: bundleBytes.toString('base64'), name: 'round-trip.pdfsigner.json' });
+  // #btnImportId is inside a collapsed <details id="idSettings"> after reload;
+  // open it before clicking.
+  await page.evaluate(() => { const d = document.getElementById('idSettings'); if (d) d.open = true; });
   await page.click('#btnImportId');
+  await page.locator('#bpw').waitFor({ state: 'visible', timeout: 10_000 });
   await page.fill('#bpw', 'bundlepassword1');
-  await page.getByRole('button', { name: 'Decrypt' }).click();
+  await page.locator('#modalRoot').getByRole('button', { name: 'Decrypt' }).click();
   // Then unlock the p12 with the identity password.
+  await page.locator('#pw').waitFor({ state: 'visible', timeout: 10_000 });
   await page.fill('#pw', 'hunter2xx');
-  await page.getByRole('button', { name: 'Import' }).click();
+  await page.locator('#modalRoot').getByRole('button', { name: 'Import' }).click();
 
   await expect(page.locator('#idText')).toHaveText(/Ready/);
   await expect(page.locator('#idName')).toContainText('Ada RT');

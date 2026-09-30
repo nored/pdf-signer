@@ -11,7 +11,16 @@ export default defineConfig({
   use: {
     headless: true,
     viewport: { width: 1400, height: 900 },
-    launchOptions: { args: ['--disable-web-security'] },
+    launchOptions: {
+      args: [
+        '--disable-web-security',
+        // Chromium's password manager remembers the p12 password entered by
+        // one test and autofills it into the wrong field on subsequent tests,
+        // clobbering the identity-creation form. Disable the whole stack.
+        '--disable-features=AutofillServerCommunication,PasswordManagerOnboarding,ImprovedPasswordChangeService,PasswordLeakToggleMove,AutofillEnableAccountWalletStorage',
+        '--disable-save-password-bubble',
+      ],
+    },
     acceptDownloads: true,
     ignoreHTTPSErrors: true,
     trace: 'on-first-retry',

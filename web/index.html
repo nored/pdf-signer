@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PDF Signer</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='2' y='2' width='60' height='60' rx='12' fill='%232f6feb'/><path d='M12 18 L52 18 L52 34 L32 58 L12 34 Z' fill='%23fff' fill-opacity='0.14' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/><path d='M20 34 L30 44 L48 24' fill='none' stroke='%23fff' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/forge/1.3.1/forge.min.js"></script>
@@ -978,7 +979,8 @@
         <summary>Signature appearance</summary>
         <div style="margin-top:8px">
           <div class="radio-group">
-            <label><input type="radio" name="appearance" value="text" checked> Text (name · date · reason · location)</label>
+            <label><input type="radio" name="appearance" value="stamp" checked> Stamp (QR seal · digitally signed by · date · reason)</label>
+            <label><input type="radio" name="appearance" value="text"> Text (name · date · reason · location)</label>
             <label><input type="radio" name="appearance" value="image"> Image only (your signature PNG)</label>
             <label><input type="radio" name="appearance" value="both"> Image + text</label>
           </div>
@@ -1010,7 +1012,7 @@
             </label>
           </div>
           <div id="alreadySignedNote" class="hint" style="display:none; margin-top:6px; color:#b57920">
-            PDF already signed. Adding your signature as an incremental approval sig — certification/locking unavailable on follow-ups.
+            PDF already signed by someone else. Your signature is added and the file is re-saved so every viewer (Preview, Adobe, Firefox, Evince, Chrome) opens it cleanly. The prior signer's visible mark stays in place; strict Adobe verification will report their cryptographic signature as invalidated by the re-save.
           </div>
 
           <details style="margin-top:10px">
@@ -2548,30 +2550,52 @@ async function openPdf(file) {
 function reflectAlreadySignedInUi() {
   const on = !!doc.alreadySigned;
   const note = $('alreadySignedNote'); if (note) note.style.display = on ? '' : 'none';
-  const group = $('lockmodeGroup'); if (group) group.style.display = on ? 'none' : '';
-  // Text and stamp tools are unsafe on an already-signed doc — they would
-  // modify page content and void the existing signature.
-  const textBtn = $('btnPlaceText'); if (textBtn) { textBtn.disabled = on; textBtn.title = on ? 'Disabled — a text box would modify the page and void the existing signature' : 'Place a text field'; }
-  const stampBtn = $('btnPlaceStamp'); if (stampBtn) { stampBtn.disabled = on; stampBtn.title = on ? 'Disabled — a stamp would modify the page and void the existing signature' : 'Place a verification stamp'; }
+  // Lock/certify group stays visible. Only "Lock document" is meaningful on a
+  // follow-up sig (via signature /Lock + FieldMDP /Action /All; the ISO spec
+  // forbids DocMDP after the first sig, so full certification is disabled
+  // instead of hiding the whole group).
+  const certifyRadio = document.querySelector('input[name="lockmode"][value="certify"]');
+  if (certifyRadio) {
+    certifyRadio.disabled = on;
+    const label = certifyRadio.closest('label');
+    if (label) label.title = on
+      ? 'Certification is only allowed as the first signature (ISO 32000-1 §12.8.2.2).'
+      : label.title;
+    if (on && certifyRadio.checked) {
+      const voidR = document.querySelector('input[name="lockmode"][value="void"]');
+      if (voidR) voidR.checked = true;
+    }
+  }
+  // Page-content tools stay unsafe on already-signed docs (they'd modify page
+  // content and void the prior sig). Users get the same effect via the "Stamp"
+  // appearance option, which lives inside the sig widget's Form XObject.
+  const textBtn = $('btnPlaceText'); if (textBtn) { textBtn.disabled = on; textBtn.title = on ? 'Disabled while the doc is already signed — a text box would modify the page and void the prior signature. Use the Stamp appearance to add a signed mark instead.' : 'Place a text field'; }
+  const stampBtn = $('btnPlaceStamp'); if (stampBtn) { stampBtn.disabled = on; stampBtn.title = on ? 'Disabled while the doc is already signed — this stamp writes to the page and would void the prior signature. Pick the Stamp appearance under Signature appearance to add a QR-sealed mark that stays valid.' : 'Place a verification stamp'; }
   const redactBtn = $('btnPlaceRedact'); if (redactBtn) { redactBtn.disabled = on; redactBtn.title = on ? 'Disabled — redaction rewrites the page and would void the existing signature' : 'Redact — permanently destroys the text and images under the box'; }
-  // The stamp checkbox itself — if on, disable it and force off.
+  // Per-page QR strip: disabled on already-signed (it writes to page content).
   const stampEnable = $('stampEnable');
   if (stampEnable) {
     stampEnable.disabled = on;
     if (on && stampEnable.checked) { stampEnable.checked = false; stampEnable.dispatchEvent(new Event('change')); }
   }
-  // Appearance: only text-only is supported for follow-up signatures.
+  // Appearance radios: stamp + text stay available (both are widget-local, so
+  // they don't touch page content). Image/both use PNG in the widget which the
+  // incremental path doesn't emit yet — keep those disabled on already-signed.
   document.querySelectorAll('input[name="appearance"]').forEach(r => {
     if (on) {
-      r.disabled = r.value !== 'text';
+      const allowed = (r.value === 'stamp' || r.value === 'text');
+      r.disabled = !allowed;
       if (r.disabled && r.checked) r.checked = false;
     } else {
       r.disabled = false;
     }
   });
   if (on) {
-    const t = document.querySelector('input[name="appearance"][value="text"]');
-    if (t) t.checked = true;
+    const anyChecked = document.querySelector('input[name="appearance"]:checked');
+    if (!anyChecked) {
+      const s = document.querySelector('input[name="appearance"][value="stamp"]');
+      if (s) s.checked = true;
+    }
   }
 }
 
@@ -3396,11 +3420,18 @@ function onPageClick(e) {
   const isText   = currentTool === 'text';
   const isStamp  = currentTool === 'stamp';
   const isRedact = currentTool === 'redact';
+  // Signatures with the "stamp" appearance need room for three columns
+  // (sig image + name+date+reason + QR); the plain-text default is fine
+  // at 220×72 but the stamp needs ~360×80 to fit "Digitally signed by
+  // [Long Name]" on one line without truncating.
+  const sigStampAppearance = !isText && !isStamp && !isRedact &&
+    document.querySelector('input[name="appearance"]:checked')?.value === 'stamp';
   const wPdf = isStamp ? Math.min(500, meta.viewport.viewBox[2] - 20)
              : isRedact ? 180
              : isText   ? 180
+             : sigStampAppearance ? 320
              :            220;
-  const hPdf = isStamp ? 44 : (isRedact ? 20 : (isText ? 22 : 72));
+  const hPdf = isStamp ? 44 : (isRedact ? 20 : (isText ? 22 : (sigStampAppearance ? 64 : 72)));
   pushUndo();
   const p = {
     id: placementIdSeq++,
@@ -3556,12 +3587,194 @@ function renderPlacementPreview(p) {
   if (p.type === 'text' || p.type === 'stamp') return; // own DOM, no live-render needed
   const preview = p.el.querySelector('.preview');
   if (!preview) return;
+  const appearance = p.appearance || 'text';
+
+  // Rebuild the standard slot skeleton whenever it's missing (the stamp
+  // branch may have replaced the whole subtree with an SVG last time).
+  if (!preview.querySelector('.img-slot') || !preview.querySelector('.text-slot')) {
+    preview.innerHTML = `
+      <div class="img-slot"></div>
+      <div class="text-slot">
+        <div class="name"></div>
+        <div class="meta"></div>
+      </div>`;
+  }
   const imgSlot = preview.querySelector('.img-slot');
   const nameEl = preview.querySelector('.name');
   const metaEl = preview.querySelector('.meta');
   imgSlot.innerHTML = '';
 
-  const appearance = p.appearance || 'text';
+  // Stamp appearance: mirror the exact layout that lands in the PDF —
+  //   [ sig image ] [ watermark check + "Digitally signed by NAME" + date + reason ] [ QR ]
+  // Uses a real QR from qrcode-generator with the same payload the sign flow
+  // will use, an inline SVG check watermark matching the PDF version, and
+  // matched fonts so what the user sees on-screen is what the PDF renders.
+  if (appearance === 'stamp') {
+    preview.classList.remove('image-only');
+    // Render the whole stamp as ONE SVG whose viewBox matches the placement's
+    // PDF dimensions. That guarantees every element scales together: the QR,
+    // the watermark, the border, the text, the sig image, and their spacing
+    // all shrink and grow in lockstep with the box, no CSS layout gymnastics
+    // and no overlaps at any size.
+    //
+    // Coordinates below are in the placement's PDF-point units (p.wPdf,
+    // p.hPdf), so the numbers and helpers are the same as the ones used by
+    // drawStampSigAppearance / buildStampSigAppearanceStream — what you see
+    // in the preview is what lands in the PDF, aside from font metrics
+    // (browser Helvetica vs. PDF Helvetica differ by a few percent).
+
+    // This branch owns the DOM under .preview — replace it with a single SVG.
+    preview.style.cssText = 'position:absolute; inset:0; pointer-events:none;';
+
+    const w = Math.max(1, p.wPdf);
+    const h = Math.max(1, p.hPdf);
+    const pad = 5;
+    const innerH = Math.max(1, h - 2 * pad);
+    const sideSize = Math.max(20, Math.min(innerH, w * 0.28));
+    const qrX = w - pad - sideSize;
+    const qrY = (h - sideSize) / 2;
+    const imgX = pad;
+    const imgY = (h - sideSize) / 2;
+    const centerX = imgX + sideSize + 8;
+    const centerW = Math.max(10, qrX - centerX - 8);
+
+    const escXml = s => String(s || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+    const nameFont = ({
+      'serif-italic': "Georgia,'Times New Roman',serif",
+      'serif':        "'Times New Roman',Times,serif",
+      'serif-bold':   "'Times New Roman',Times,serif",
+      'sans':         "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif",
+      'sans-bold':    "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif",
+      'mono':         "ui-monospace,'SF Mono',Menlo,Consolas,monospace",
+    })[p.nameFont || 'serif-italic'];
+    const nameStyle  = (p.nameFont || 'serif-italic') === 'serif-italic' ? 'italic' : 'normal';
+    const nameWeight = (p.nameFont === 'serif-bold' || p.nameFont === 'sans-bold') ? '700' : '400';
+    const helvFont   = "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif";
+
+    // Font sizing — matches the PDF branch.
+    let nameSize = Math.max(6, Math.min(12, Math.floor(h * 0.20)));
+    const bodySize = Math.max(5, Math.min(9,  Math.floor(h * 0.13)));
+    // Cheap advance estimate (~0.5 × size for Helvetica); shrink the whole
+    // "Digitally signed by NAME" line to fit centerW.
+    const displayName = identity.meta?.name || 'Your name';
+    const label = 'Digitally signed by ';
+    const estLine = (sz) => (label.length + displayName.length) * sz * 0.5;
+    if (estLine(nameSize) > centerW) {
+      nameSize = Math.max(5, Math.floor(nameSize * (centerW / estLine(nameSize)) * 0.95));
+    }
+    const labelAdvance = nameSize * 0.5 * label.length;
+    const nameLineY = h - pad - nameSize * 0.15; // SVG baseline near top
+
+    // QR — same builder as the signer.
+    let qrModules = null;
+    try {
+      const verifierUrl = (typeof ghVault !== 'undefined' && ghVault?.config?.verifierUrl) ||
+                          (typeof autoDetectVerifierUrl === 'function' ? autoDetectVerifierUrl() : '') ||
+                          (typeof CANONICAL_VERIFIER_URL === 'string' ? CANONICAL_VERIFIER_URL : 'https://pdf-signer.local/');
+      const previewName = identity?.meta?.name || 'Your name';
+      const previewDate = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+      const url = (typeof buildStampVerifierUrl === 'function')
+        ? buildStampVerifierUrl({ verifierUrl, certVaultUrl: identity?.certVaultUrl || '', signer: previewName, dateStr: previewDate })
+        : verifierUrl;
+      const qr = qrcode(0, 'M');
+      qr.addData(url);
+      qr.make();
+      const count = qr.getModuleCount();
+      qrModules = { count, isDark: (r, c) => qr.isDark(r, c) };
+    } catch (_) { qrModules = null; }
+
+    let qrRects = '';
+    if (qrModules) {
+      const cell = sideSize / qrModules.count;
+      for (let r = 0; r < qrModules.count; r++) {
+        for (let c = 0; c < qrModules.count; c++) {
+          if (!qrModules.isDark(r, c)) continue;
+          const x = (qrX + c * cell).toFixed(3);
+          const y = (qrY + (qrModules.count - 1 - r) * cell).toFixed(3);
+          const s = (cell + 0.15).toFixed(3);
+          qrRects += `<rect x="${x}" y="${y}" width="${s}" height="${s}" fill="#000"/>`;
+        }
+      }
+    }
+
+    const reason = ($('reason')?.value || '').trim();
+    const dateStr = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+    const bodyLines = [`Date: ${dateStr}`];
+    if (reason) bodyLines.push(`Reason: ${reason}`);
+    let bodyY = nameLineY + nameSize * 0.85 + bodySize + 3;
+    const bodyTspans = bodyLines.map((t, i) => {
+      const y = bodyY + i * (bodySize + 2);
+      return `<text x="${centerX.toFixed(2)}" y="${(h - y).toFixed(2)}" font-family="${helvFont}" font-size="${bodySize}" fill="#444">${escXml(t)}</text>`;
+    }).join('');
+
+    // Signature image slot: either the user's PNG (as <image>) or a dashed
+    // placeholder rectangle with a "signature" label.
+    const sigImageHref = sigImage.dataUrl || null;
+    const sigImageXml = sigImageHref
+      ? `<image href="${sigImageHref}" x="${imgX}" y="${imgY}" width="${sideSize}" height="${sideSize}" preserveAspectRatio="xMidYMid meet"/>`
+      : (() => {
+          const labelSize = Math.max(5, Math.min(8, sideSize * 0.14));
+          return `<rect x="${imgX + 1}" y="${imgY + 1}" width="${sideSize - 2}" height="${sideSize - 2}" fill="none" stroke="rgba(114,128,150,0.55)" stroke-width="0.6" stroke-dasharray="2 2"/>
+            <text x="${imgX + sideSize / 2}" y="${imgY + sideSize / 2 + labelSize / 3}" font-family="${helvFont}" font-size="${labelSize}" fill="rgba(89,111,235,0.6)" text-anchor="middle">signature</text>`;
+        })();
+
+    // Watermark check inside the centre column.
+    const wmSize = Math.min(innerH * 0.9, centerW * 0.6);
+    const wmCx = centerX + centerW / 2;
+    const wmCy = h / 2;
+    const wcw = wmSize * 0.5;
+    const wmXml = `<path d="M ${(wmCx - wcw*0.5).toFixed(2)} ${(wmCy).toFixed(2)}
+                             L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy - wcw*0.32).toFixed(2)}
+                             L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy + wcw*0.35).toFixed(2)}"
+                       fill="none" stroke="rgba(153,183,240,0.7)" stroke-width="${Math.max(0.8, wmSize*0.08).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+
+    // Text baseline y in SVG needs to be a full baseline y; the nameLineY was
+    // computed in the same PDF orientation the drawing code uses (origin top-
+    // left). We flip the y for SVG since our viewBox has y-down.
+    const svgNameY = pad + nameSize;
+    const svgBodyBaseY = svgNameY + 4 + bodySize;
+    const svgBodyXml = bodyLines.map((t, i) => {
+      const y = svgBodyBaseY + i * (bodySize + 2);
+      if (y > h - pad) return '';
+      return `<text x="${centerX.toFixed(2)}" y="${y.toFixed(2)}" font-family="${helvFont}" font-size="${bodySize}" fill="#444">${escXml(t)}</text>`;
+    }).join('');
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"
+      style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none; display:block;" class="stamp-svg">
+      <!-- Accent border -->
+      <rect x="0.625" y="0.625" width="${(w-1.25).toFixed(2)}" height="${(h-1.25).toFixed(2)}" fill="none" stroke="#2f6feb" stroke-width="1.25"/>
+      <!-- Watermark check -->
+      ${wmXml}
+      <!-- Signature image (or placeholder) -->
+      ${sigImageXml}
+      <!-- QR white backdrop + modules -->
+      <rect x="${qrX}" y="${qrY}" width="${sideSize}" height="${sideSize}" fill="#fff"/>
+      ${qrRects}
+      <!-- "Digitally signed by" label + Name -->
+      <text x="${centerX.toFixed(2)}" y="${svgNameY.toFixed(2)}" font-family="${helvFont}" font-size="${nameSize}" fill="rgba(96,96,96,0.9)">${escXml(label)}</text>
+      <text x="${(centerX + labelAdvance).toFixed(2)}" y="${svgNameY.toFixed(2)}" font-family="${nameFont}" font-style="${nameStyle}" font-weight="${nameWeight}" font-size="${nameSize}" fill="#000">${escXml(displayName)}</text>
+      <!-- Date / Reason -->
+      ${svgBodyXml}
+    </svg>`;
+
+    // Replace .preview contents with the SVG. On the next non-stamp render
+    // renderPlacementPreview rebuilds the standard slot skeleton, so
+    // switching appearance mid-session works.
+    preview.innerHTML = svg;
+    return;
+  }
+
+  // Original text / image / both layouts.
+  preview.classList.remove('image-only');
+  preview.style.cssText = '';
+  imgSlot.style.cssText = '';
+  const textSlot = preview.querySelector('.text-slot');
+  if (textSlot) textSlot.style.cssText = '';
+  const qrSlot = preview.querySelector('.qr-slot');
+  if (qrSlot) qrSlot.remove();
+  nameEl.style.cssText = '';
+  metaEl.style.cssText = '';
+
   const wantImage = (appearance === 'image' || appearance === 'both') && sigImage.dataUrl;
   const wantText = appearance !== 'image' || !sigImage.dataUrl;
 
@@ -4577,10 +4790,191 @@ function pickNameFont(fonts, key) {
   }
 }
 
+// Stamp-signature appearance drawn onto a fresh page (parallels the
+// buildStampSigAppearanceStream used in the incremental path). Same layout
+// on both paths so the visible mark is identical whether the doc was fresh
+// or already signed.
+//
+// Layout (left → right):
+//   [ sig image ] [ watermark seal + "Digitally signed by NAME" + date + reason ] [ QR ]
+//
+// The seal is drawn as a faint watermark centred behind the text. The
+// signature image and QR fall back to placeholders (or are omitted) when
+// unavailable so the box always renders something.
+function drawStampSigAppearance(page, p, opts) {
+  const { rgb } = window.PDFLib;
+  const { fonts, meta, reason, dateStr, qrPayload, sigImgObj } = opts;
+  const x1 = p.xPdf, y1 = p.yPdf, w = p.wPdf, h = p.hPdf;
+  const pad = 5;
+  const accent = rgb(0.185, 0.435, 0.921);
+  // Transparent background — the stamp sits on top of the page content, no
+  // white fill obscuring the text underneath. Only the accent border is
+  // drawn so the stamp's outline still reads as a distinct block.
+  page.drawRectangle({
+    x: x1 + 0.625, y: y1 + 0.625,
+    width: w - 1.25, height: h - 1.25,
+    borderColor: accent, borderWidth: 1.25,
+  });
+
+  const innerH = h - 2 * pad;
+  const sideSize = Math.max(24, Math.min(innerH, Math.min(h - 2 * pad, w * 0.28)));
+  const qrX     = x1 + w - pad - sideSize;
+  const qrY     = y1 + (h - sideSize) / 2;
+
+  // Left column: signature image. Always reserved so the layout doesn't
+  // shift depending on whether the user has uploaded a PNG yet — when they
+  // haven't, we draw a light "signature" placeholder to make it obvious
+  // that this slot expects an uploaded signature image.
+  const imgX = x1 + pad;
+  const imgY = y1 + (h - sideSize) / 2;
+  if (sigImgObj) {
+    drawImageFit(page, sigImgObj, imgX, imgY, sideSize, sideSize);
+  } else {
+    // Dashed accent border + faint "signature" label so the empty slot is
+    // clearly a placeholder rather than a rendering bug.
+    page.drawRectangle({
+      x: imgX + 1, y: imgY + 1,
+      width: sideSize - 2, height: sideSize - 2,
+      borderColor: rgb(0.7, 0.78, 0.95), borderWidth: 0.75,
+      borderDashArray: [3, 3],
+    });
+    const labelSize = Math.max(6, Math.min(9, Math.floor(sideSize * 0.14)));
+    const labelText = 'signature';
+    const labelW = fonts.helv.widthOfTextAtSize(labelText, labelSize);
+    page.drawText(labelText, {
+      x: imgX + (sideSize - labelW) / 2,
+      y: imgY + (sideSize - labelSize) / 2,
+      size: labelSize, font: fonts.helv,
+      color: rgb(0.55, 0.62, 0.85),
+    });
+  }
+
+  // Centre column: watermark seal (faint) behind text, then labelled name +
+  // body lines.
+  const centerX = imgX + sideSize + 8;
+  const centerW = qrX - centerX - 8;
+
+  const wmSize = Math.min(innerH * 1.05, centerW * 0.65);
+  const wmX = centerX + (centerW - wmSize) / 2;
+  const wmY = y1 + (h - wmSize) / 2;
+  drawFaviconWatermark(page, wmX, wmY, wmSize, 0.10);
+
+  // Text: "Digitally signed by NAME" on one line — shrink the font so the
+  // whole line fits inside the centre column, never wrap or overflow.
+  const nameFont = pickNameFont(fonts, p.nameFont || 'serif-italic');
+  const label = 'Digitally signed by ';
+  let nameSize = Math.max(8, Math.min(12, Math.floor(h * 0.20)));
+  const measure = (sz) =>
+    fonts.helv.widthOfTextAtSize(label, sz) + nameFont.widthOfTextAtSize(meta.name, sz);
+  if (measure(nameSize) > centerW) {
+    // Scale down proportionally to fit, with a 5 % safety margin, but never
+    // below 6 pt (below that the text is unreadable and the design breaks —
+    // callers should widen the placement).
+    nameSize = Math.max(6, Math.floor(nameSize * (centerW / measure(nameSize)) * 0.95));
+  }
+  const labelW = fonts.helv.widthOfTextAtSize(label, nameSize);
+  const nameLineY = y1 + h - pad - nameSize;
+  page.drawText(label, {
+    x: centerX, y: nameLineY, size: nameSize,
+    font: fonts.helv, color: rgb(0.4, 0.4, 0.4),
+  });
+  page.drawText(meta.name, {
+    x: centerX + labelW, y: nameLineY, size: nameSize,
+    font: nameFont, color: rgb(0, 0, 0),
+  });
+  const bodySize = Math.max(6, Math.min(9, Math.floor(h * 0.13)));
+  let cursorY = nameLineY - (bodySize + 3);
+  const fitBody = (text) => {
+    let sz = bodySize;
+    if (fonts.helv.widthOfTextAtSize(text, sz) > centerW) {
+      sz = Math.max(6, Math.floor(sz * (centerW / fonts.helv.widthOfTextAtSize(text, sz)) * 0.95));
+    }
+    return sz;
+  };
+  if (cursorY >= y1 + pad) {
+    const t = `Date: ${dateStr}`;
+    page.drawText(t, {
+      x: centerX, y: cursorY, size: fitBody(t),
+      font: fonts.helv, color: rgb(0.32, 0.32, 0.32),
+    });
+  }
+  if (reason) {
+    cursorY -= (bodySize + 2);
+    if (cursorY >= y1 + pad) {
+      const t = `Reason: ${reason}`;
+      page.drawText(t, {
+        x: centerX, y: cursorY, size: fitBody(t),
+        font: fonts.helv, color: rgb(0.32, 0.32, 0.32),
+      });
+    }
+  }
+
+  // Right column: QR code (falls back to a seal if we have no payload).
+  // When a real http(s) URL is used, also add a Link annotation over the QR
+  // rectangle so clicking it in a desktop viewer follows the URL.
+  if (qrPayload) {
+    try {
+      drawQrCode(page, String(qrPayload), qrX, qrY, sideSize);
+      addUriLinkAnnotation(page, [qrX, qrY, qrX + sideSize, qrY + sideSize], String(qrPayload));
+    } catch (_) { drawCheckSeal(page, qrX, qrY, sideSize); }
+  } else {
+    drawCheckSeal(page, qrX, qrY, sideSize);
+  }
+}
+
+// Circular accent-blue seal with a white check inside. Fallback used when a
+// stamp signature has no QR payload.
+function drawCheckSeal(page, x, y, size) {
+  const { rgb } = window.PDFLib;
+  const cx = x + size / 2, cy = y + size / 2, r = size * 0.42;
+  page.drawCircle({ x: cx, y: cy, size: r, color: rgb(0.185, 0.435, 0.921) });
+  const cw = r * 0.9;
+  const thick = Math.max(1.2, r * 0.18);
+  page.drawLine({
+    start: { x: cx - cw * 0.35, y: cy - cw * 0.02 },
+    end:   { x: cx - cw * 0.08, y: cy - cw * 0.28 },
+    thickness: thick, color: rgb(1, 1, 1),
+  });
+  page.drawLine({
+    start: { x: cx - cw * 0.08, y: cy - cw * 0.28 },
+    end:   { x: cx + cw * 0.35, y: cy + cw * 0.28 },
+    thickness: thick, color: rgb(1, 1, 1),
+  });
+}
+
+// Faint watermark behind the stamp-signature centre text: a single big
+// check mark in a very pale accent tint, sized so it sits *behind* the
+// three text rows without obscuring them. Direct RGB (no alpha) so it
+// renders identically in every viewer.
+function drawFaviconWatermark(page, x, y, size) {
+  const { rgb } = window.PDFLib;
+  const s = size;
+  const cx = x + s / 2, cy = y + s / 2;
+  const cw = s * 0.55;
+  // Very pale — text sits comfortably over it. Adjust these three floats
+  // upward toward 1 to make the mark even lighter.
+  const thick = Math.max(1.2, s * 0.08);
+  const color = rgb(0.90, 0.94, 0.99);
+  page.drawLine({
+    start: { x: cx - cw * 0.50, y: cy },
+    end:   { x: cx - cw * 0.13, y: cy - cw * 0.38 },
+    thickness: thick, color,
+  });
+  page.drawLine({
+    start: { x: cx - cw * 0.13, y: cy - cw * 0.38 },
+    end:   { x: cx + cw * 0.55, y: cy + cw * 0.42 },
+    thickness: thick, color,
+  });
+}
+
 function drawDigitalAppearance(page, p, opts) {
   const { PDFLib } = window;
   const { rgb } = PDFLib;
-  const { fonts, sigImgObj, meta, reason, location, dateStr, appearance } = opts;
+  const { fonts, sigImgObj, meta, reason, location, dateStr, appearance, qrPayload } = opts;
+  if ((p.appearance || appearance) === 'stamp') {
+    drawStampSigAppearance(page, p, { fonts, meta, reason, location, dateStr, qrPayload, sigImgObj });
+    return;
+  }
   const useImage = (appearance === 'image' || appearance === 'both') && sigImgObj;
   const useText  = (appearance === 'text'  || appearance === 'both') || !useImage;
   const nameFont = pickNameFont(fonts, p.nameFont || 'serif-italic');
@@ -4784,9 +5178,23 @@ function decodeVaultPayload(b64u) {
     signer: o.s || '',
     dateStr: o.t || '',
     csv: o.c || '',
-    keyBytes: b64urlDec(o.k),
+    // A stamp-signature payload has no vault key — the verifier code checks
+    // for `keyBytes` being non-null before it tries to decrypt.
+    keyBytes: o.k ? b64urlDec(o.k) : null,
   };
 }
+// Build a scannable URL for a *stamp signature* (no encrypted vault): the QR
+// points at the pdf-signer verifier page with the cert URL, signer name and
+// date embedded in a `#v=` payload the verifier can display. No key/CSV
+// because there's nothing to decrypt — the verifier just shows metadata and
+// (optionally) fetches the cert to display trust info.
+function buildStampVerifierUrl({ verifierUrl, certVaultUrl, signer, dateStr }) {
+  const base = String(verifierUrl || CANONICAL_VERIFIER_URL).replace(/#.*$/, '');
+  const obj = { u: certVaultUrl || '', s: signer || '', t: dateStr || '' };
+  const payload = b64urlEnc(new TextEncoder().encode(JSON.stringify(obj)));
+  return base + '#v=' + payload;
+}
+
 function buildVaultQr({ key, signer, dateStr, csv, url, verifierUrl }) {
   const payload = encodeVaultPayload({ key, signer, dateStr, csv, url });
   if (verifierUrl) {
@@ -5756,11 +6164,18 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   }
 
   // 1. Draw visible appearance for signature placements.
+  //    The stamp appearance always wants a QR payload: prefer the per-page
+  //    integrity-stamp payload (encrypted-vault mode), fall back to the
+  //    published cert URL, and finally to a self-referential app URL so the
+  //    scan lands somewhere useful even without a vault.
+  const stampQrPayload = (stamp && stamp.qrPayload) || certVaultUrl ||
+    (typeof autoDetectVerifierUrl === 'function' ? autoDetectVerifierUrl() : '');
   for (const p of sigPlacements) {
     const page = pdfDoc.getPage(p.pageIndex);
     drawDigitalAppearance(page, p, {
       fonts, sigImgObj, meta, reason, location, dateStr,
       appearance: p.appearance || appearance || 'text',
+      qrPayload: stampQrPayload,
     });
   }
   // 2. Draw filled-in text fields.
@@ -5870,10 +6285,23 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
     sigFieldRef = context.register(sigField);
     for (const p of newSigs) {
       const page = pdfDoc.getPage(p.pageIndex);
+      // Widget rect covers the visible sig mark. For the stamp appearance
+      // with a QR column, exclude the QR area so the Link annotation
+      // sitting over the QR receives the click instead of the widget
+      // stealing it. The signature is still valid — the widget only needs
+      // to reference /V for that; its rect is just the interactive region.
+      let wRectRight = p.xPdf + p.wPdf;
+      if ((p.appearance || appearance) === 'stamp' && (stamp && stamp.qrPayload || certVaultUrl ||
+           (typeof autoDetectVerifierUrl === 'function' && autoDetectVerifierUrl()))) {
+        const pad = 5;
+        const innerH = p.hPdf - 2 * pad;
+        const sideSize = Math.max(24, Math.min(innerH, Math.min(p.hPdf - 2 * pad, p.wPdf * 0.28)));
+        wRectRight = p.xPdf + p.wPdf - pad - sideSize - 2;
+      }
       const widget = context.obj({
         Type: PDFName.of('Annot'),
         Subtype: PDFName.of('Widget'),
-        Rect: [p.xPdf, p.yPdf, p.xPdf + p.wPdf, p.yPdf + p.hPdf],
+        Rect: [p.xPdf, p.yPdf, wRectRight, p.yPdf + p.hPdf],
         F: PDFNumber.of(132),
         P: page.ref,
         Parent: sigFieldRef,
@@ -7006,6 +7434,212 @@ function buildSigAppearanceStream({ name, dateStr, reason, location, w, h, nameF
   return lines.join('\n') + '\n';
 }
 
+// Content-stream helpers for the stamp appearance layout below. Written as
+// string builders so both the fresh-sign and incremental paths can share
+// wording (fresh path draws via pdf-lib primitives, incremental writes raw
+// content-stream ops).
+
+// Faint check-mark watermark as content-stream operators. Matches
+// drawFaviconWatermark exactly (single big check, light accent RGB, no
+// alpha). Simple by design — reads well at every stamp size.
+function watermarkContentOps(x, y, s) {
+  const cx = x + s / 2, cy = y + s / 2;
+  const cw = s * 0.55;
+  // Match drawFaviconWatermark: very pale tint + thinner strokes so text
+  // reads cleanly over the mark.
+  const thick = Math.max(1.2, s * 0.08);
+  const ops = [];
+  ops.push('q');
+  ops.push('0.90 0.94 0.99 RG');
+  ops.push(`${pdfNum(thick)} w`);
+  ops.push('1 J 1 j');
+  ops.push(`${pdfNum(cx - cw * 0.50)} ${pdfNum(cy)} m`);
+  ops.push(`${pdfNum(cx - cw * 0.13)} ${pdfNum(cy - cw * 0.38)} l`);
+  ops.push(`${pdfNum(cx + cw * 0.55)} ${pdfNum(cy + cw * 0.42)} l`);
+  ops.push('S');
+  ops.push('Q');
+  return ops.join('\n');
+}
+
+// QR content-stream operators. `xy` gives lower-left corner, `size` is
+// square edge. Uses the qrcode-generator library.
+function qrContentOps(payload, x, y, size) {
+  const qr = qrcode(0, 'M');
+  qr.addData(String(payload));
+  qr.make();
+  const count = qr.getModuleCount();
+  const cell = size / count;
+  const ops = [];
+  ops.push('1 1 1 rg');
+  ops.push(`${pdfNum(x)} ${pdfNum(y)} ${pdfNum(size)} ${pdfNum(size)} re f`);
+  ops.push('0 0 0 rg');
+  for (let r = 0; r < count; r++) {
+    for (let c = 0; c < count; c++) {
+      if (!qr.isDark(r, c)) continue;
+      const mx = x + c * cell;
+      const my = y + (count - 1 - r) * cell;
+      ops.push(`${pdfNum(mx)} ${pdfNum(my)} ${pdfNum(cell + 0.15)} ${pdfNum(cell + 0.15)} re`);
+    }
+  }
+  ops.push('f');
+  return ops.join('\n');
+}
+
+// Check-seal circle + check content-stream fallback for missing QR/image.
+function sealContentOps(x, y, size) {
+  const cx = x + size / 2, cy = y + size / 2, r = size * 0.42;
+  const K = 0.5522847498 * r;
+  const ops = [];
+  ops.push('0.185 0.435 0.921 rg');
+  ops.push(`${pdfNum(cx + r)} ${pdfNum(cy)} m`);
+  ops.push(`${pdfNum(cx + r)} ${pdfNum(cy + K)} ${pdfNum(cx + K)} ${pdfNum(cy + r)} ${pdfNum(cx)} ${pdfNum(cy + r)} c`);
+  ops.push(`${pdfNum(cx - K)} ${pdfNum(cy + r)} ${pdfNum(cx - r)} ${pdfNum(cy + K)} ${pdfNum(cx - r)} ${pdfNum(cy)} c`);
+  ops.push(`${pdfNum(cx - r)} ${pdfNum(cy - K)} ${pdfNum(cx - K)} ${pdfNum(cy - r)} ${pdfNum(cx)} ${pdfNum(cy - r)} c`);
+  ops.push(`${pdfNum(cx + K)} ${pdfNum(cy - r)} ${pdfNum(cx + r)} ${pdfNum(cy - K)} ${pdfNum(cx + r)} ${pdfNum(cy)} c`);
+  ops.push('f');
+  const cw = r * 0.9;
+  ops.push('1 1 1 RG');
+  ops.push(`${pdfNum(Math.max(1.2, r * 0.18))} w`);
+  ops.push('1 J 1 j');
+  ops.push(`${pdfNum(cx - cw * 0.35)} ${pdfNum(cy - cw * 0.02)} m`);
+  ops.push(`${pdfNum(cx - cw * 0.08)} ${pdfNum(cy - cw * 0.28)} l`);
+  ops.push(`${pdfNum(cx + cw * 0.35)} ${pdfNum(cy + cw * 0.28)} l`);
+  ops.push('S');
+  return ops.join('\n');
+}
+
+// Stamp-style signature appearance:
+//   [ sig image ] [ watermark + "Digitally signed by NAME" + date + reason ] [ QR ]
+// Renders inside the widget's Form XObject only, so it is safe on already-
+// signed documents (no page-content modification, prior signatures' byte
+// ranges stay intact).
+function buildStampSigAppearanceStream({
+  name, dateStr, reason, w, h, nameFontResource, qrPayload,
+  sigImgResource, sigImgAspect,
+}) {
+  const pad = 5;
+  const innerH = h - 2 * pad;
+  const sideSize = Math.max(24, Math.min(innerH, Math.min(h - 2 * pad, w * 0.28)));
+  const qrX     = w - pad - sideSize;
+  const qrY     = (h - sideSize) / 2;
+  const imgX    = pad;
+  const imgY    = (h - sideSize) / 2;
+  const centerX = imgX + sideSize + 8;
+  const centerW = qrX - centerX - 8;
+
+  const lines = [];
+  lines.push('q');
+  // Transparent background — draw only the accent border so page content
+  // underneath the stamp stays legible.
+  lines.push('0.185 0.435 0.921 RG');
+  lines.push('1.25 w');
+  lines.push(`0.625 0.625 ${pdfNum(w - 1.25)} ${pdfNum(h - 1.25)} re S`);
+
+  // Left column: signature image via /XObject Do, if one is embedded. When
+  // none is embedded, draw a dashed placeholder so the slot reads as
+  // "signature goes here" rather than a rendering bug.
+  if (sigImgResource) {
+    // Fit within sideSize × sideSize while preserving aspect.
+    const ar = sigImgAspect || 1;
+    let iw = sideSize, ih = sideSize;
+    if (ar >= 1) ih = sideSize / ar;
+    else         iw = sideSize * ar;
+    const ix = imgX + (sideSize - iw) / 2;
+    const iy = imgY + (sideSize - ih) / 2;
+    lines.push('q');
+    lines.push(`${pdfNum(iw)} 0 0 ${pdfNum(ih)} ${pdfNum(ix)} ${pdfNum(iy)} cm`);
+    lines.push(`/${sigImgResource} Do`);
+    lines.push('Q');
+  } else {
+    // Dashed light-accent rectangle + faint "signature" label.
+    lines.push('q');
+    lines.push('0.7 0.78 0.95 RG');
+    lines.push('0.75 w');
+    lines.push('[3 3] 0 d');
+    lines.push(`${pdfNum(imgX + 1)} ${pdfNum(imgY + 1)} ${pdfNum(sideSize - 2)} ${pdfNum(sideSize - 2)} re S`);
+    lines.push('Q');
+    const labelSize = Math.max(6, Math.min(9, Math.floor(sideSize * 0.14)));
+    const labelText = 'signature';
+    // Approximate label width using the 0.5 heuristic.
+    const labelW = labelText.length * labelSize * 0.5;
+    lines.push('BT');
+    lines.push('0.55 0.62 0.85 rg');
+    lines.push(`/F1 ${labelSize} Tf`);
+    lines.push(`${pdfNum(imgX + (sideSize - labelW) / 2)} ${pdfNum(imgY + (sideSize - labelSize) / 2)} Td`);
+    lines.push(`(${escapePdfString(labelText)}) Tj`);
+    lines.push('ET');
+  }
+
+  // Centre watermark (faint), then text overlay.
+  const wmSize = Math.min(innerH * 1.05, centerW * 0.75);
+  const wmX = centerX + (centerW - wmSize) / 2;
+  const wmY = (h - wmSize) / 2;
+  lines.push(watermarkContentOps(wmX, wmY, wmSize, 0.12));
+
+  // "Digitally signed by NAME" on a single line — shrink until it fits.
+  // We don't have real font metrics in the content-stream path, so use the
+  // standard-14 average glyph advance (~0.5 × font size for Helvetica /
+  // Times) to estimate the width. A conservative 5 % safety margin keeps the
+  // line from touching the QR column.
+  const label = 'Digitally signed by ';
+  let nameSize = Math.max(8, Math.min(12, Math.floor(h * 0.20)));
+  const estimateLine = (sz) => (label.length + name.length) * sz * 0.5;
+  if (estimateLine(nameSize) > centerW) {
+    nameSize = Math.max(6, Math.floor(nameSize * (centerW / estimateLine(nameSize)) * 0.95));
+  }
+  const bodySize = Math.max(6, Math.min(9, Math.floor(h * 0.13)));
+  const nameLineY = h - pad - nameSize;
+  // Muted label.
+  lines.push('BT');
+  lines.push('0.4 0.4 0.4 rg');
+  lines.push(`/F1 ${nameSize} Tf`);
+  lines.push(`${pdfNum(centerX)} ${pdfNum(nameLineY)} Td`);
+  lines.push(`(${escapePdfString(label)}) Tj`);
+  lines.push('ET');
+  // Name in the chosen font, positioned right after the label. Estimated
+  // advance uses the same 0.5 × size heuristic.
+  const labelAdvance = nameSize * 0.5 * label.length;
+  lines.push('BT');
+  lines.push('0 0 0 rg');
+  lines.push(`/${nameFontResource} ${nameSize} Tf`);
+  lines.push(`${pdfNum(centerX + labelAdvance)} ${pdfNum(nameLineY)} Td`);
+  lines.push(`(${escapePdfString(name)}) Tj`);
+  lines.push('ET');
+
+  // Date + optional reason on their own lines, each shrunk to fit centerW.
+  let cursorY = nameLineY - (bodySize + 3);
+  const bodyItems = [`Date: ${dateStr}`];
+  if (reason) bodyItems.push(`Reason: ${reason}`);
+  lines.push('BT');
+  lines.push('0.32 0.32 0.32 rg');
+  for (const bl of bodyItems) {
+    if (cursorY < pad) break;
+    let sz = bodySize;
+    const est = bl.length * sz * 0.5;
+    if (est > centerW) sz = Math.max(6, Math.floor(sz * (centerW / est) * 0.95));
+    lines.push(`/F1 ${sz} Tf`);
+    lines.push(`1 0 0 1 ${pdfNum(centerX)} ${pdfNum(cursorY)} Tm`);
+    lines.push(`(${escapePdfString(bl)}) Tj`);
+    cursorY -= (sz + 2);
+  }
+  lines.push('ET');
+
+  // Right column: QR (falls back to seal if no payload).
+  let drewQr = false;
+  if (qrPayload && typeof qrcode === 'function') {
+    try {
+      lines.push(qrContentOps(qrPayload, qrX, qrY, sideSize));
+      drewQr = true;
+    } catch (_) { /* fall through */ }
+  }
+  if (!drewQr) {
+    lines.push(sealContentOps(qrX, qrY, sideSize));
+  }
+
+  lines.push('Q');
+  return lines.join('\n') + '\n';
+}
+
 // PDF standard 14 font PostScript names by our nameFont key
 function stdFontNameFor(key) {
   switch (key) {
@@ -7019,7 +7653,7 @@ function stdFontNameFor(key) {
   }
 }
 
-async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated, certVaultUrl, sigFieldMap }) {
+async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated, certVaultUrl, sigFieldMap, lockAfterSign, qrPayload, sigPngU8 }) {
   const { PDFDocument, PDFName, PDFArray, PDFRef, PDFNumber } = window.PDFLib;
   const parsed = parsePdfForIncremental(bytes);
   const now = signingTime instanceof Date ? signingTime : new Date();
@@ -7093,21 +7727,73 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // object number.
   const sigFieldNum = newSigs.length > 0 ? alloc() : null;
 
+  // If any stamp-appearance placement can use the user's signature PNG,
+  // convert it to JPEG (browser Canvas → toBlob) and emit a single Image
+  // XObject shared by every appearance. JPEG keeps things simple: no need
+  // to pull in a Flate library, and PDF's /DCTDecode filter is native.
+  let sigImgResource = null;
+  let sigImgAspect = null;
+  const wantsSigImg = sigPngU8 && sigPngU8.length && newSigs.concat(routedSigs.map(x => x.p)).some(p => p.appearance === 'stamp');
+  if (wantsSigImg) {
+    try {
+      const blob = new Blob([sigPngU8], { type: 'image/png' });
+      const bmp = await createImageBitmap(blob);
+      const canvas = document.createElement('canvas');
+      canvas.width = bmp.width;
+      canvas.height = bmp.height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(bmp, 0, 0);
+      const jpegBlob = await new Promise((res, rej) =>
+        canvas.toBlob(b => b ? res(b) : rej(new Error('toBlob failed')), 'image/jpeg', 0.9));
+      const jpegBuf = new Uint8Array(await jpegBlob.arrayBuffer());
+      const imgNum = alloc();
+      const bodyPre = `${imgNum} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${bmp.width} /Height ${bmp.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBuf.length} >>\nstream\n`;
+      const bodyPost = `\nendstream\nendobj\n`;
+      // Latin-1 encode: JPEG is binary; treat each byte as a latin1 char.
+      let bin = '';
+      for (let i = 0; i < jpegBuf.length; i++) bin += String.fromCharCode(jpegBuf[i]);
+      objBodies.push({ num: imgNum, body: bodyPre + bin + bodyPost });
+      sigImgResource = 'SigImg';
+      sigImgAspect = bmp.width / bmp.height;
+      // Remember the object number so the Form XObject's /Resources /XObject
+      // dict can reference it.
+      sigImgResource = { name: 'SigImg', objNum: imgNum };
+    } catch (e) {
+      console.warn('sig image embedding failed for incremental sign:', e && e.message);
+      sigImgResource = null;
+    }
+  }
+
   // Fresh field placements: emit an appearance stream + a widget annotation
   // pointing at the new sigFieldNum (which we'll emit as one shared field).
   for (const p of newSigs) {
     const nameFontRec = fontResourceRegistry.get(stdFontNameFor(p.nameFont || 'serif-italic'));
     const w = p.wPdf, h = p.hPdf;
-    const stream = buildSigAppearanceStream({
-      name: meta.name, dateStr, reason: reason || '', location: location || '',
-      w, h, nameFontResource: nameFontRec.resName,
-    });
+    const useStamp = (p.appearance === 'stamp');
+    const stream = useStamp
+      ? buildStampSigAppearanceStream({
+          name: meta.name, dateStr, reason: reason || '', location: location || '',
+          w, h, nameFontResource: nameFontRec.resName,
+          qrPayload: qrPayload || certVaultUrl || '',
+          sigImgResource: sigImgResource ? sigImgResource.name : null,
+          sigImgAspect,
+        })
+      : buildSigAppearanceStream({
+          name: meta.name, dateStr, reason: reason || '', location: location || '',
+          w, h, nameFontResource: nameFontRec.resName,
+        });
     const apNum = alloc();
     let fontSubdict = '';
     for (const [, rec] of fontResourceRegistry) fontSubdict += `/${rec.resName} ${rec.objNum} 0 R `;
+    const xobjLine = (useStamp && sigImgResource)
+      ? ` /XObject << /${sigImgResource.name} ${sigImgResource.objNum} 0 R >>`
+      : '';
+    const procSetOps = (useStamp && sigImgResource) ? '[/PDF /Text /ImageC]' : '[/PDF /Text]';
     objBodies.push({ num: apNum, body:
       `${apNum} 0 obj\n<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 ${pdfNum(w)} ${pdfNum(h)}]\n` +
-      `   /Resources << /Font << ${fontSubdict}>> /ProcSet [/PDF /Text] >>\n` +
+      `   /Resources << /Font << ${fontSubdict}>>${xobjLine} /ProcSet ${procSetOps} >>\n` +
       `   /Length ${stream.length}\n>>\nstream\n${stream}endstream\nendobj\n`
     });
 
@@ -7122,6 +7808,26 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
       `   /AP << /N ${apNum} 0 R >>\n   /Parent ${sigFieldNum} 0 R\n>>\nendobj\n`
     });
     widgetObjs.push({ num: widgetNum, pageIndex: p.pageIndex });
+
+    // If this placement uses the stamp appearance AND has a real http(s)
+    // QR payload, add a Link annotation over the QR area (absolute page
+    // coords) so clicking it in Preview / Adobe follows the URL. The QR
+    // itself sits in the widget's Form XObject and isn't clickable.
+    const qrUrl = useStamp ? String(qrPayload || certVaultUrl || '') : '';
+    if (qrUrl && /^https?:\/\//i.test(qrUrl)) {
+      const pad = 5;
+      const wSize = Math.max(24, Math.min(p.hPdf - 2 * pad, Math.min(p.hPdf - 2 * pad, p.wPdf * 0.28)));
+      const qrX0 = p.xPdf + p.wPdf - pad - wSize;
+      const qrY0 = p.yPdf + (p.hPdf - wSize) / 2;
+      const linkNum = alloc();
+      objBodies.push({ num: linkNum, body:
+        `${linkNum} 0 obj\n<< /Type /Annot /Subtype /Link /F 4\n` +
+        `   /Rect [${pdfNum(qrX0)} ${pdfNum(qrY0)} ${pdfNum(qrX0 + wSize)} ${pdfNum(qrY0 + wSize)}]\n` +
+        `   /Border [0 0 0]\n` +
+        `   /A << /Type /Action /S /URI /URI (${escapePdfString(qrUrl)}) >>\n>>\nendobj\n`
+      });
+      widgetObjs.push({ num: linkNum, pageIndex: p.pageIndex });
+    }
   }
 
   // Routed placements: emit an appearance stream, then splice /V and /AP
@@ -7135,16 +7841,29 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     const rect = target.rect;
     const w = Math.abs(rect[2] - rect[0]);
     const h = Math.abs(rect[3] - rect[1]);
-    const stream = buildSigAppearanceStream({
-      name: meta.name, dateStr, reason: reason || '', location: location || '',
-      w, h, nameFontResource: nameFontRec.resName,
-    });
+    const useStamp = (p.appearance === 'stamp');
+    const stream = useStamp
+      ? buildStampSigAppearanceStream({
+          name: meta.name, dateStr, reason: reason || '', location: location || '',
+          w, h, nameFontResource: nameFontRec.resName,
+          qrPayload: qrPayload || certVaultUrl || '',
+          sigImgResource: sigImgResource ? sigImgResource.name : null,
+          sigImgAspect,
+        })
+      : buildSigAppearanceStream({
+          name: meta.name, dateStr, reason: reason || '', location: location || '',
+          w, h, nameFontResource: nameFontRec.resName,
+        });
     const apNum = alloc();
     let fontSubdict = '';
     for (const [, rec] of fontResourceRegistry) fontSubdict += `/${rec.resName} ${rec.objNum} 0 R `;
+    const xobjLine = (useStamp && sigImgResource)
+      ? ` /XObject << /${sigImgResource.name} ${sigImgResource.objNum} 0 R >>`
+      : '';
+    const procSetOps = (useStamp && sigImgResource) ? '[/PDF /Text /ImageC]' : '[/PDF /Text]';
     objBodies.push({ num: apNum, body:
       `${apNum} 0 obj\n<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 ${pdfNum(w)} ${pdfNum(h)}]\n` +
-      `   /Resources << /Font << ${fontSubdict}>> /ProcSet [/PDF /Text] >>\n` +
+      `   /Resources << /Font << ${fontSubdict}>>${xobjLine} /ProcSet ${procSetOps} >>\n` +
       `   /Length ${stream.length}\n>>\nstream\n${stream}endstream\nendobj\n`
     });
     const orig = await readOriginalObjectBytes(bytes, xref.entries, target.fieldObjNum);
@@ -7164,6 +7883,16 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
 
   // Sig dict + sig field bodies.
   const certUrlLine = certVaultUrl ? `   /PdfsignerCertUrl (${escapePdfString(certVaultUrl)})\n` : '';
+  // Second-signer "Lock" — a follow-up signature cannot be a certification
+  // signature under ISO 32000-1 §12.8.2.2 (DocMDP must be the first sig, no
+  // prior incremental updates). The standard mechanism instead is a signature
+  // field lock with FieldMDP /Action /All: viewers that honor it (Adobe,
+  // strict PAdES verifiers) refuse further form-fill / signatures after this
+  // signature. Emit /Reference on the sig dict AND /Lock on the sig field.
+  const referenceLine = lockAfterSign
+    ? `   /Reference [ << /Type /SigRef /TransformMethod /FieldMDP\n` +
+      `                   /TransformParams << /Type /TransformParams /Action /All /V /1.2 >> >> ]\n`
+    : '';
   objBodies.push({ num: sigDictNum, body:
     `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached\n` +
     `   /ByteRange [0 9999999999 9999999999 9999999999]\n` +
@@ -7171,13 +7900,17 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     `   /M (${pdfDate(now)})\n   /Name (${escapePdfString(meta.name)})\n` +
     `   /Reason (${escapePdfString(reason || '')})\n   /Location (${escapePdfString(location || '')})\n` +
     certUrlLine +
+    referenceLine +
     `>>\nendobj\n`
   });
   if (sigFieldNum !== null && widgetObjs.length > 0) {
     const kidsStr = widgetObjs.map(w => `${w.num} 0 R`).join(' ');
     const sigFieldName = `Signature-${now.getTime().toString(36)}`;
+    const lockDict = lockAfterSign
+      ? ` /Lock << /Type /SigFieldLock /Action /All >>`
+      : '';
     objBodies.push({ num: sigFieldNum, body:
-      `${sigFieldNum} 0 obj\n<< /FT /Sig /T (${sigFieldName}) /V ${sigDictNum} 0 R /Kids [${kidsStr}] >>\nendobj\n`
+      `${sigFieldNum} 0 obj\n<< /FT /Sig /T (${sigFieldName}) /V ${sigDictNum} 0 R /Kids [${kidsStr}]${lockDict} >>\nendobj\n`
     });
   }
 
@@ -7342,13 +8075,44 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
       }
     }
     if (!pageSpliced) {
-      // Fallback: pdf-lib re-serialise of the whole page dict.
+      // Fallback: pdf-lib re-serialise of the whole page dict, with an
+      // INLINE /Annots array that always includes the new widget refs.
+      //
+      // Rationale: when /Annots is originally an indirect ref like `57 0 R`
+      // to an array object inside an object stream, resolving+mutating the
+      // pdf-lib array in memory doesn't reach the file — obj 57 stays in
+      // the ObjStm untouched, so the widget isn't linked to any page and
+      // the visible signature disappears entirely. Force the /Annots entry
+      // to an inline array of refs (existing + new) so the re-emitted page
+      // dict carries everything the viewer needs to render both the prior
+      // annotations and our new widget.
       const pageObj = page.node;
-      let annots = pageObj.get(annotsKey);
-      if (annots instanceof PDFRef) annots = ctx.lookup(annots);
-      if (!(annots instanceof PDFArray)) { annots = ctx.obj([]); pageObj.set(annotsKey, annots); }
-      for (const wNum of wNums) annots.push(PDFRef.of(wNum, 0));
-      objBodies.push({ num: pageRef.objectNumber, body: `${pageRef.objectNumber} 0 obj\n${pageObj.toString()}\nendobj\n` });
+      let annotsField = pageObj.get(annotsKey);
+      const existingRefs = [];
+      const preserveInline = [];
+      if (annotsField) {
+        const arr = (annotsField instanceof PDFRef) ? ctx.lookup(annotsField) : annotsField;
+        if (arr && typeof arr.asArray === 'function') {
+          for (const el of arr.asArray()) {
+            if (el instanceof PDFRef) {
+              existingRefs.push(`${el.objectNumber} ${el.generationNumber} R`);
+            } else {
+              // Inline non-ref annotations (rare) — keep verbatim.
+              preserveInline.push(el);
+            }
+          }
+        }
+      }
+      const newRefStrings = wNums.map(n => `${n} 0 R`);
+      const allRefs = existingRefs.concat(newRefStrings);
+      // Re-emit the page dict with /Annots as an inline array.
+      pageObj.delete(annotsKey);
+      const pageBodyNoAnnots = pageObj.toString();
+      // Insert /Annots [...] before the closing >> of the dict.
+      const closeIdx = pageBodyNoAnnots.lastIndexOf('>>');
+      const inlineAnnots = ` /Annots [${allRefs.join(' ')}] `;
+      const patchedBody = pageBodyNoAnnots.slice(0, closeIdx) + inlineAnnots + pageBodyNoAnnots.slice(closeIdx);
+      objBodies.push({ num: pageRef.objectNumber, body: `${pageRef.objectNumber} 0 obj\n${patchedBody}\nendobj\n` });
     }
   }
 
@@ -7408,10 +8172,30 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   } catch (e) { console.warn('DSS embedding skipped:', e && e.message); }
 
   // ── Assemble the incremental append ──
+  //
+  // If the previous xref is an xref STREAM (common in Adobe-produced files,
+  // including all linearized PDFs), emit our incremental section as an xref
+  // stream too so the chain is homogeneous. Emitting a classical xref table
+  // in front of a stream chain trips strict readers (Apple Preview refuses
+  // the file entirely, Poppler warns, some strict PAdES verifiers fail).
+  // When the input uses a classical xref table, we keep emitting classical
+  // so pdf-signer's own outputs stay round-trippable through this same
+  // incremental path.
   const originalBytes = parsed.bytes;
+  const prevXrefIsStream = (() => {
+    const off = parsed.prevXrefOffset;
+    const head = new TextDecoder('latin1').decode(originalBytes.subarray(off, Math.min(off + 4, originalBytes.length)));
+    return head !== 'xref';
+  })();
+
   // Ensure the previous file ends with a newline before we glue on.
   const needsSep = originalBytes[originalBytes.length - 1] !== 0x0a;
   let appendStr = needsSep ? '\n' : '';
+
+  // If we'll emit an xref stream, its object needs an object number so it can
+  // (and MUST, per §7.5.8.2) reference itself via /Index; reserve that number
+  // NOW so it lands in the xref entries alongside everything else.
+  const xrefStreamNum = prevXrefIsStream ? alloc() : null;
 
   // Assign offsets and concatenate object bodies.
   const offsetsByNum = {};
@@ -7422,36 +8206,108 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   }
   appendStr += bodyStr;
 
-  // xref section — one subsection per contiguous run of object numbers, plus a
-  // free entry for object 0 in the first subsection whose run starts at 0.
-  const nums = Object.keys(offsetsByNum).map(n => +n).sort((a, b) => a - b);
-  const runs = [];
-  {
-    let run = [nums[0]];
-    for (let i = 1; i < nums.length; i++) {
-      if (nums[i] === nums[i - 1] + 1) run.push(nums[i]);
-      else { runs.push(run); run = [nums[i]]; }
+  const nums0 = Object.keys(offsetsByNum).map(n => +n).sort((a, b) => a - b);
+  const maxNum0 = Math.max(...nums0, xrefStreamNum || 0);
+  const newSize = Math.max(parsed.size, maxNum0 + 1);
+
+  if (prevXrefIsStream) {
+    // ── Emit an xref stream (PDF §7.5.8) ──
+    // Widths: /W [1 5 2] — 1-byte type, 5-byte offset (enough for 1 TB), 2-byte gen.
+    const W = [1, 5, 2];
+    const entrySize = W[0] + W[1] + W[2];
+
+    // The xref stream itself occupies a fixed number of bytes we can compute
+    // once we know its full text (dict + stream data). We assemble the object
+    // in-place at the end of the append so its offset is knowable up front.
+    const xrefStreamOffset = originalBytes.length + appendStr.length;
+    offsetsByNum[xrefStreamNum] = xrefStreamOffset;
+
+    // Build the sorted entry list INCLUDING the xref stream object itself.
+    const numsWithSelf = nums0.concat([xrefStreamNum]).sort((a, b) => a - b);
+
+    // Group into contiguous runs — that's /Index [first count first count ...].
+    const runs = [];
+    {
+      let run = [numsWithSelf[0]];
+      for (let i = 1; i < numsWithSelf.length; i++) {
+        if (numsWithSelf[i] === numsWithSelf[i - 1] + 1) run.push(numsWithSelf[i]);
+        else { runs.push(run); run = [numsWithSelf[i]]; }
+      }
+      runs.push(run);
     }
-    runs.push(run);
-  }
-  const xrefOffset = originalBytes.length + appendStr.length;
-  let xrefStr = 'xref\n';
-  for (const r of runs) {
-    xrefStr += `${r[0]} ${r.length}\n`;
-    for (const n of r) {
-      xrefStr += `${String(offsetsByNum[n]).padStart(10, '0')} 00000 n \n`;
+    const indexEntries = [];
+    for (const r of runs) indexEntries.push(r[0], r.length);
+
+    // Binary stream data — one entry per object in numsWithSelf order.
+    const streamData = new Uint8Array(numsWithSelf.length * entrySize);
+    let pos = 0;
+    for (const n of numsWithSelf) {
+      const off = offsetsByNum[n];
+      streamData[pos++] = 1; // type 1 = in-use, uncompressed
+      // 5-byte big-endian offset (JavaScript numbers give safe integer up to 2^53).
+      streamData[pos++] = Math.floor(off / 0x100000000) & 0xff;
+      streamData[pos++] = (off >>> 24) & 0xff;
+      streamData[pos++] = (off >>> 16) & 0xff;
+      streamData[pos++] = (off >>> 8)  & 0xff;
+      streamData[pos++] = off & 0xff;
+      // 2-byte generation (always 0 for new objects).
+      streamData[pos++] = 0;
+      streamData[pos++] = 0;
     }
+
+    const dictParts = [
+      '/Type /XRef',
+      `/Size ${newSize}`,
+      `/W [${W.join(' ')}]`,
+      `/Index [${indexEntries.join(' ')}]`,
+      `/Prev ${parsed.prevXrefOffset}`,
+      `/Root ${parsed.rootRef.num} ${parsed.rootRef.gen} R`,
+    ];
+    if (parsed.infoRef) dictParts.push(`/Info ${parsed.infoRef.num} ${parsed.infoRef.gen} R`);
+    if (parsed.idHex)   dictParts.push(`/ID [${parsed.idHex}]`);
+    dictParts.push(`/Length ${streamData.length}`);
+    const streamHead = `${xrefStreamNum} 0 obj\n<< ${dictParts.join(' ')} >>\nstream\n`;
+    const streamTail = `\nendstream\nendobj\n`;
+
+    // Splice the binary stream data into the append string as latin1 chars.
+    let streamStr = '';
+    // Chunk to keep String.fromCharCode.apply happy on very large streams.
+    const CH = 0x8000;
+    for (let i = 0; i < streamData.length; i += CH) {
+      streamStr += String.fromCharCode.apply(null, streamData.subarray(i, Math.min(i + CH, streamData.length)));
+    }
+
+    appendStr += streamHead + streamStr + streamTail + `startxref\n${xrefStreamOffset}\n%%EOF\n`;
+  } else {
+    // ── Classical xref table (§7.5.4) ──
+    // one subsection per contiguous run of object numbers.
+    const runs = [];
+    {
+      let run = [nums0[0]];
+      for (let i = 1; i < nums0.length; i++) {
+        if (nums0[i] === nums0[i - 1] + 1) run.push(nums0[i]);
+        else { runs.push(run); run = [nums0[i]]; }
+      }
+      runs.push(run);
+    }
+    const xrefOffset = originalBytes.length + appendStr.length;
+    let xrefStr = 'xref\n';
+    for (const r of runs) {
+      xrefStr += `${r[0]} ${r.length}\n`;
+      for (const n of r) {
+        xrefStr += `${String(offsetsByNum[n]).padStart(10, '0')} 00000 n \n`;
+      }
+    }
+    const trailerParts = [
+      `/Size ${newSize}`,
+      `/Prev ${parsed.prevXrefOffset}`,
+      `/Root ${parsed.rootRef.num} ${parsed.rootRef.gen} R`,
+    ];
+    if (parsed.infoRef) trailerParts.push(`/Info ${parsed.infoRef.num} ${parsed.infoRef.gen} R`);
+    if (parsed.idHex)   trailerParts.push(`/ID [${parsed.idHex}]`);
+    const trailerStr = `trailer\n<< ${trailerParts.join(' ')} >>\n`;
+    appendStr += xrefStr + trailerStr + `startxref\n${xrefOffset}\n%%EOF\n`;
   }
-  const newSize = Math.max(parsed.size, Math.max(...nums) + 1);
-  const trailerParts = [
-    `/Size ${newSize}`,
-    `/Prev ${parsed.prevXrefOffset}`,
-    `/Root ${parsed.rootRef.num} ${parsed.rootRef.gen} R`,
-  ];
-  if (parsed.infoRef) trailerParts.push(`/Info ${parsed.infoRef.num} ${parsed.infoRef.gen} R`);
-  if (parsed.idHex)   trailerParts.push(`/ID [${parsed.idHex}]`);
-  const trailerStr = `trailer\n<< ${trailerParts.join(' ')} >>\n`;
-  appendStr += xrefStr + trailerStr + `startxref\n${xrefOffset}\n%%EOF\n`;
 
   const appendU8 = latin1Encode(appendStr);
   const combined = new Uint8Array(originalBytes.length + appendU8.length);
@@ -7502,7 +8358,11 @@ $('btnSign').onclick = async () => {
 
     const appearance = document.querySelector('input[name="appearance"]:checked').value;
     const lockmodeVal = document.querySelector('input[name="lockmode"]:checked').value;
-    const certifyMode = doc.alreadySigned ? 'none' : lockmodeVal; // approval-only for follow-ups
+    // Follow-up sigs cannot certify (ISO 32000-1 §12.8.2.2). "Lock" maps to
+    // a signature field-lock instead of DocMDP — see makeIncrementalSignedPdf
+    // for the /Lock + FieldMDP emission.
+    const certifyMode = doc.alreadySigned ? 'none' : lockmodeVal;
+    const lockAfterSign = doc.alreadySigned && (lockmodeVal === 'locked');
     const lock = certifyMode === 'locked' || certifyMode === 'lock';
     const stampEnabled = $('stampEnable').checked && !doc.alreadySigned;
 
@@ -7560,11 +8420,19 @@ $('btnSign').onclick = async () => {
     let signed;
     if (doc.alreadySigned) {
       // Incremental append — keeps prior signatures valid. Only signature
-      // placements are honored here (text boxes / stamps would modify page
-      // content and void the prior signature).
+      // placements are honored here (text boxes / page-content stamps would
+      // modify the page and void the prior signature; the "stamp" *appearance*
+      // stays inside the widget and is safe).
+      const sigPlacements = doc.placements.filter(p => p.type === 'digital');
+      // Force stamp/text appearances on placements that inherited unsupported
+      // ones (image/both need PNG XObject embedding into the incremental
+      // section, which we don't emit yet).
+      for (const p of sigPlacements) {
+        if (p.appearance !== 'stamp' && p.appearance !== 'text') p.appearance = appearance;
+      }
       signed = await makeIncrementalSignedPdf({
         bytes: doc.bytes,
-        placements: doc.placements.filter(p => p.type === 'digital'),
+        placements: sigPlacements,
         meta: unlocked.meta,
         reason: $('reason').value.trim(),
         location: $('location').value.trim(),
@@ -7573,6 +8441,20 @@ $('btnSign').onclick = async () => {
         chain: unlocked.chain,
         signingTime, tsaUrl, backdated, certVaultUrl,
         sigFieldMap: doc.sigFieldMap || {},
+        lockAfterSign,
+        // QR points at the pdf-signer verifier landing page — same behaviour
+        // as the vault-stamp code path. Cert URL is passed inside a `#v=`
+        // payload so the verifier can display the signer and fetch the cert
+        // itself; scanning the QR must NOT land on the raw PEM.
+        qrPayload: buildStampVerifierUrl({
+          verifierUrl: (ghVault.config && ghVault.config.verifierUrl) ||
+                       (typeof autoDetectVerifierUrl === 'function' ? autoDetectVerifierUrl() : '') ||
+                       CANONICAL_VERIFIER_URL,
+          certVaultUrl,
+          signer: unlocked.meta.name,
+          dateStr: signingTime.toISOString().slice(0, 19).replace('T', ' ') + ' UTC',
+        }),
+        sigPngU8: sigImage.pngU8,
       });
     } else {
       signed = await makeSignedPdf({
@@ -8500,6 +9382,27 @@ async function runAutoVerifyFromHash() {
       setTimeout(() => showVerifierHelp(), 300);
     }
   } catch (_) {}
+
+  // A stamp-signature QR carries no vault key — there's nothing to decrypt.
+  // Show a lightweight "Signed by / on / cert URL" panel and stop. The vault
+  // flow below only runs when parsed.keyBytes is present.
+  if (!parsed.keyBytes) {
+    const isCertUrl = /\.pem($|\?)/i.test(parsed.url || '');
+    const fields = {
+      'Signed by':  esc(parsed.signer),
+      'Signed at':  esc(parsed.dateStr),
+    };
+    if (parsed.url) {
+      fields[isCertUrl ? "Signer's certificate" : 'Linked resource'] =
+        `<a href="${esc(parsed.url)}" target="_blank" rel="noopener"><code>${esc(parsed.url)}</code></a>`;
+    }
+    render('valid', {
+      label: 'Signed document',
+      detail: 'The QR carries only signer info — no encrypted vault to decrypt. Verify the signature by opening the PDF and letting your viewer check it against the signer\'s certificate (link above).',
+      fields,
+    });
+    return true;
+  }
 
   const initialFields = {
     'Signer (per QR)':  esc(parsed.signer),

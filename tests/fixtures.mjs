@@ -60,16 +60,47 @@ export async function dropPdf(page, bytes, name = 'fixture.pdf') {
 
 // Create an identity via the New identity modal.
 export async function createIdentity(page, { label = 'Test', name = 'Prof. Ada Lovelace', email = 'ada@example.edu', password = 'hunter2xx' } = {}) {
+  // The "New identity" button lives inside a collapsed <details id="idSettings">
+  // in the current UI. Open it before clicking.
+  await page.evaluate(() => { const d = document.getElementById('idSettings'); if (d) d.open = true; });
   await page.click('#btnCreateId');
-  await page.fill('#label', label);
-  await page.fill('#name', name);
-  await page.fill('#email', email);
-  await page.fill('#pw', password);
-  await page.fill('#pw2', password);
+  // Set values directly via the DOM instead of page.fill for the password
+  // fields — Chromium's password manager persists credentials across tests
+  // within the same browser process and autofills them into the wrong field
+  // when a second test opens the same modal, clobbering the identity form.
+  // Direct value + input event bypasses autofill entirely.
+  await page.evaluate(({ label, name, email, password }) => {
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = v;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    set('label', label);
+    set('name', name);
+    set('email', email);
+    set('pw', password);
+    set('pw2', password);
+  }, { label, name, email, password });
   await page.getByRole('button', { name: 'Generate' }).click();
-  // The auto-export dialog appears after generation. Cancel it for the test.
-  const cancel = page.getByRole('button', { name: 'Cancel' });
-  if (await cancel.isVisible().catch(() => false)) await cancel.click();
+  // Wait for the identity to be created (#idText flips to Ready).
   await expect(page.locator('#idText')).toHaveText(/Ready/);
+  // The app auto-clicks Export right after — a modal appears (or is about to
+  // appear). Wait for it to be interactable and close it so it doesn't block
+  // the next click in the test. It's actually the "Export identity bundle"
+  // modal with its Cancel button, opened from btnExportId.click() at the end
+  // of btnCreateId's handler.
+  const cancel = page.getByRole('button', { name: 'Cancel' });
+  try {
+    await cancel.waitFor({ state: 'visible', timeout: 2000 });
+    await cancel.click();
+  } catch (_) { /* no dialog appeared — nothing to close */ }
+  // Ensure the modal backdrop is gone before returning so later clicks aren't
+  // intercepted by it.
+  await page.waitForFunction(() => {
+    const m = document.getElementById('modalRoot');
+    return !m || m.style.display === 'none';
+  }, { timeout: 3000 }).catch(() => {});
   return password;
 }
