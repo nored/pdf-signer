@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PDF Signer</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='2' y='2' width='60' height='60' rx='12' fill='%232f6feb'/><path d='M12 18 L52 18 L52 34 L32 58 L12 34 Z' fill='%23fff' fill-opacity='0.14' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/><path d='M20 34 L30 44 L48 24' fill='none' stroke='%23fff' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='28' fill='%2310b981'/><path d='M20 34 L30 44 L48 22' fill='none' stroke='%23fff' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/forge/1.3.1/forge.min.js"></script>
@@ -3723,10 +3723,13 @@ function renderPlacementPreview(p) {
     const wmCx = centerX + centerW / 2;
     const wmCy = h / 2;
     const wcw = wmSize * 0.5;
+    // SVG y-down so the vertex-at-bottom check is y-INCREASING to the vertex
+    // and y-DECREASING to the end — visually the same shape as the PDF's
+    // vertex-at-bottom (which uses y-up).
     const wmXml = `<path d="M ${(wmCx - wcw*0.5).toFixed(2)} ${(wmCy).toFixed(2)}
-                             L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy - wcw*0.32).toFixed(2)}
-                             L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy + wcw*0.35).toFixed(2)}"
-                       fill="none" stroke="rgba(153,183,240,0.7)" stroke-width="${Math.max(0.8, wmSize*0.08).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+                             L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy + wcw*0.32).toFixed(2)}
+                             L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy - wcw*0.35).toFixed(2)}"
+                       fill="none" stroke="rgba(114,214,163,0.75)" stroke-width="${Math.max(0.8, wmSize*0.08).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
 
     // Text baseline y in SVG needs to be a full baseline y; the nameLineY was
     // computed in the same PDF orientation the drawing code uses (origin top-
@@ -4942,27 +4945,29 @@ function drawCheckSeal(page, x, y, size) {
   });
 }
 
-// Faint watermark behind the stamp-signature centre text: a single big
-// check mark in a very pale accent tint, sized so it sits *behind* the
-// three text rows without obscuring them. Direct RGB (no alpha) so it
-// renders identically in every viewer.
+// Faint green watermark check behind the stamp-signature centre text.
+// Vertex-at-bottom orientation — PDF's y-up coordinate system means we
+// flip the y-offsets vs. the SVG preview (which is y-down): the vertex
+// y is ABOVE cy in the source but visually LOWER on the page.
+// Direct RGB (no alpha) so it renders identically in every viewer.
 function drawFaviconWatermark(page, x, y, size) {
   const { rgb } = window.PDFLib;
   const s = size;
   const cx = x + s / 2, cy = y + s / 2;
   const cw = s * 0.55;
-  // Very pale — text sits comfortably over it. Adjust these three floats
-  // upward toward 1 to make the mark even lighter.
   const thick = Math.max(1.2, s * 0.08);
-  const color = rgb(0.90, 0.94, 0.99);
+  // Very pale emerald green — text sits comfortably over it. Adjust the
+  // three floats toward 1 for a fainter mark, or toward 0 for a punchier
+  // green.
+  const color = rgb(0.75, 0.94, 0.86);
   page.drawLine({
     start: { x: cx - cw * 0.50, y: cy },
-    end:   { x: cx - cw * 0.13, y: cy - cw * 0.38 },
+    end:   { x: cx - cw * 0.13, y: cy + cw * 0.38 },
     thickness: thick, color,
   });
   page.drawLine({
-    start: { x: cx - cw * 0.13, y: cy - cw * 0.38 },
-    end:   { x: cx + cw * 0.55, y: cy + cw * 0.42 },
+    start: { x: cx - cw * 0.13, y: cy + cw * 0.38 },
+    end:   { x: cx + cw * 0.55, y: cy - cw * 0.42 },
     thickness: thick, color,
   });
 }
@@ -7445,17 +7450,18 @@ function buildSigAppearanceStream({ name, dateStr, reason, location, w, h, nameF
 function watermarkContentOps(x, y, s) {
   const cx = x + s / 2, cy = y + s / 2;
   const cw = s * 0.55;
-  // Match drawFaviconWatermark: very pale tint + thinner strokes so text
-  // reads cleanly over the mark.
   const thick = Math.max(1.2, s * 0.08);
   const ops = [];
   ops.push('q');
-  ops.push('0.90 0.94 0.99 RG');
+  // Pale emerald green — RGB in the content stream matches drawFaviconWatermark.
+  ops.push('0.75 0.94 0.86 RG');
   ops.push(`${pdfNum(thick)} w`);
   ops.push('1 J 1 j');
+  // Vertex-at-bottom check: y-offsets flipped vs. the SVG preview so the
+  // vertex sits BELOW cy visually in PDF y-up coordinates.
   ops.push(`${pdfNum(cx - cw * 0.50)} ${pdfNum(cy)} m`);
-  ops.push(`${pdfNum(cx - cw * 0.13)} ${pdfNum(cy - cw * 0.38)} l`);
-  ops.push(`${pdfNum(cx + cw * 0.55)} ${pdfNum(cy + cw * 0.42)} l`);
+  ops.push(`${pdfNum(cx - cw * 0.13)} ${pdfNum(cy + cw * 0.38)} l`);
+  ops.push(`${pdfNum(cx + cw * 0.55)} ${pdfNum(cy - cw * 0.42)} l`);
   ops.push('S');
   ops.push('Q');
   return ops.join('\n');
@@ -7758,9 +7764,11 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   const sigFieldNum = newSigs.length > 0 ? alloc() : null;
 
   // If any stamp-appearance placement can use the user's signature PNG,
-  // convert it to JPEG (browser Canvas → toBlob) and emit a single Image
-  // XObject shared by every appearance. JPEG keeps things simple: no need
-  // to pull in a Flate library, and PDF's /DCTDecode filter is native.
+  // embed it as an Image XObject with its alpha channel preserved as a
+  // separate /SMask (soft mask) image. Previously we flattened to JPEG,
+  // which gave the sig image a solid white background — the user asked
+  // for a transparent stamp. Both the RGB and the alpha stream are
+  // FlateDecode-compressed via the browser's CompressionStream (native).
   let sigImgResource = null;
   let sigImgAspect = null;
   const wantsSigImg = sigPngU8 && sigPngU8.length && newSigs.concat(routedSigs.map(x => x.p)).some(p => p.appearance === 'stamp');
@@ -7772,24 +7780,68 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
       canvas.width = bmp.width;
       canvas.height = bmp.height;
       const ctx = canvas.getContext('2d');
-      ctx.fillStyle = 'white';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(bmp, 0, 0);
-      const jpegBlob = await new Promise((res, rej) =>
-        canvas.toBlob(b => b ? res(b) : rej(new Error('toBlob failed')), 'image/jpeg', 0.9));
-      const jpegBuf = new Uint8Array(await jpegBlob.arrayBuffer());
+      const imgData = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
+      const pixels = bmp.width * bmp.height;
+      const rgb   = new Uint8Array(pixels * 3);
+      const alpha = new Uint8Array(pixels);
+      for (let i = 0, j = 0, k = 0; i < imgData.length; i += 4, j += 3, k++) {
+        rgb[j]     = imgData[i];
+        rgb[j + 1] = imgData[i + 1];
+        rgb[j + 2] = imgData[i + 2];
+        alpha[k]   = imgData[i + 3];
+      }
+      // Flate-compress via native CompressionStream — no external library.
+      const deflate = async (u8) => {
+        const cs = new CompressionStream('deflate');
+        const writer = cs.writable.getWriter();
+        writer.write(u8);
+        writer.close();
+        const chunks = [];
+        let total = 0;
+        const reader = cs.readable.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          total += value.length;
+        }
+        const out = new Uint8Array(total);
+        let off = 0;
+        for (const c of chunks) { out.set(c, off); off += c.length; }
+        return out;
+      };
+      const rgbFlate = await deflate(rgb);
+      const alphaFlate = await deflate(alpha);
+
+      // Latin-1 encode binary chunks so they can be concatenated into our
+      // string-based objBodies pipeline.
+      const bin = (u8) => {
+        let s = '';
+        const CH = 0x8000;
+        for (let i = 0; i < u8.length; i += CH) {
+          s += String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + CH, u8.length)));
+        }
+        return s;
+      };
+
+      // Alpha as an 8-bit greyscale soft mask.
+      const smaskNum = alloc();
+      const smaskDict = `<< /Type /XObject /Subtype /Image /Width ${bmp.width} /Height ${bmp.height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${alphaFlate.length} >>`;
+      objBodies.push({ num: smaskNum, body:
+        `${smaskNum} 0 obj\n${smaskDict}\nstream\n${bin(alphaFlate)}\nendstream\nendobj\n`
+      });
+
+      // Colour image with /SMask referencing the alpha object.
       const imgNum = alloc();
-      const bodyPre = `${imgNum} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${bmp.width} /Height ${bmp.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBuf.length} >>\nstream\n`;
-      const bodyPost = `\nendstream\nendobj\n`;
-      // Latin-1 encode: JPEG is binary; treat each byte as a latin1 char.
-      let bin = '';
-      for (let i = 0; i < jpegBuf.length; i++) bin += String.fromCharCode(jpegBuf[i]);
-      objBodies.push({ num: imgNum, body: bodyPre + bin + bodyPost });
-      sigImgResource = 'SigImg';
-      sigImgAspect = bmp.width / bmp.height;
-      // Remember the object number so the Form XObject's /Resources /XObject
-      // dict can reference it.
+      const imgDict = `<< /Type /XObject /Subtype /Image /Width ${bmp.width} /Height ${bmp.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /SMask ${smaskNum} 0 R /Length ${rgbFlate.length} >>`;
+      objBodies.push({ num: imgNum, body:
+        `${imgNum} 0 obj\n${imgDict}\nstream\n${bin(rgbFlate)}\nendstream\nendobj\n`
+      });
+
       sigImgResource = { name: 'SigImg', objNum: imgNum };
+      sigImgAspect = bmp.width / bmp.height;
     } catch (e) {
       console.warn('sig image embedding failed for incremental sign:', e && e.message);
       sigImgResource = null;
