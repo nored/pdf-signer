@@ -7516,7 +7516,15 @@ function sealContentOps(x, y, size) {
 function buildStampSigAppearanceStream({
   name, dateStr, reason, w, h, nameFontResource, qrPayload,
   sigImgResource, sigImgAspect,
+  measureHelv, measureName,
 }) {
+  // `measureHelv(text, size)` and `measureName(text, size)` return real
+  // Standard-14 font widths. When absent (older callers) we fall back to a
+  // conservative 0.55 × size heuristic — that's over-estimated for narrow
+  // characters and under-estimated for wide caps, but at least the sizing
+  // pass sees "too wide" rather than "just barely" and shrinks accordingly.
+  const _mh = measureHelv || ((t, s) => String(t).length * s * 0.55);
+  const _mn = measureName || ((t, s) => String(t).length * s * 0.55);
   const pad = 5;
   const innerH = h - 2 * pad;
   const sideSize = Math.max(24, Math.min(innerH, Math.min(h - 2 * pad, w * 0.28)));
@@ -7576,18 +7584,17 @@ function buildStampSigAppearanceStream({
   const wmY = (h - wmSize) / 2;
   lines.push(watermarkContentOps(wmX, wmY, wmSize, 0.12));
 
-  // "Digitally signed by NAME" on a single line — shrink until it fits.
-  // We don't have real font metrics in the content-stream path, so use the
-  // standard-14 average glyph advance (~0.5 × font size for Helvetica /
-  // Times) to estimate the width. A conservative 5 % safety margin keeps the
-  // line from touching the QR column.
+  // "Digitally signed by NAME" on a single line — shrink until it fits,
+  // using real font metrics so the line width matches what a viewer draws.
   const label = 'Digitally signed by ';
-  let nameSize = Math.max(8, Math.min(12, Math.floor(h * 0.20)));
-  const estimateLine = (sz) => (label.length + name.length) * sz * 0.5;
-  if (estimateLine(nameSize) > centerW) {
-    nameSize = Math.max(6, Math.floor(nameSize * (centerW / estimateLine(nameSize)) * 0.95));
+  let nameSize = Math.max(6, Math.min(12, Math.floor(h * 0.20)));
+  const lineWidth = (sz) => _mh(label, sz) + _mn(name, sz);
+  if (lineWidth(nameSize) > centerW) {
+    // Scale down proportionally with a small safety margin so we don't
+    // touch the QR column at all.
+    nameSize = Math.max(5, Math.floor(nameSize * (centerW / lineWidth(nameSize)) * 0.96));
   }
-  const bodySize = Math.max(6, Math.min(9, Math.floor(h * 0.13)));
+  const bodySize = Math.max(5, Math.min(9, Math.floor(h * 0.13)));
   const nameLineY = h - pad - nameSize;
   // Muted label.
   lines.push('BT');
@@ -7596,9 +7603,10 @@ function buildStampSigAppearanceStream({
   lines.push(`${pdfNum(centerX)} ${pdfNum(nameLineY)} Td`);
   lines.push(`(${escapePdfString(label)}) Tj`);
   lines.push('ET');
-  // Name in the chosen font, positioned right after the label. Estimated
-  // advance uses the same 0.5 × size heuristic.
-  const labelAdvance = nameSize * 0.5 * label.length;
+  // Name in the chosen font, positioned right after the label — the exact
+  // rendered width of the label string, so the name starts precisely where
+  // the label ends (no gap, no overlap).
+  const labelAdvance = _mh(label, nameSize);
   lines.push('BT');
   lines.push('0 0 0 rg');
   lines.push(`/${nameFontResource} ${nameSize} Tf`);
@@ -7615,8 +7623,9 @@ function buildStampSigAppearanceStream({
   for (const bl of bodyItems) {
     if (cursorY < pad) break;
     let sz = bodySize;
-    const est = bl.length * sz * 0.5;
-    if (est > centerW) sz = Math.max(6, Math.floor(sz * (centerW / est) * 0.95));
+    if (_mh(bl, sz) > centerW) {
+      sz = Math.max(5, Math.floor(sz * (centerW / _mh(bl, sz)) * 0.96));
+    }
     lines.push(`/F1 ${sz} Tf`);
     lines.push(`1 0 0 1 ${pdfNum(centerX)} ${pdfNum(cursorY)} Tm`);
     lines.push(`(${escapePdfString(bl)}) Tj`);
@@ -7654,7 +7663,7 @@ function stdFontNameFor(key) {
 }
 
 async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated, certVaultUrl, sigFieldMap, lockAfterSign, qrPayload, sigPngU8 }) {
-  const { PDFDocument, PDFName, PDFArray, PDFRef, PDFNumber } = window.PDFLib;
+  const { PDFDocument, PDFName, PDFArray, PDFRef, PDFNumber, StandardFonts } = window.PDFLib;
   const parsed = parsePdfForIncremental(bytes);
   const now = signingTime instanceof Date ? signingTime : new Date();
   const dateStr = now.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
@@ -7685,6 +7694,27 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   const pdfDoc = await PDFDocument.load(bytes);
   const ctx = pdfDoc.context;
   const pages = pdfDoc.getPages();
+
+  // Embed the Standard 14 fonts on a throwaway pdf-lib document so we can
+  // measure exact glyph widths for the stamp appearance's centre-column
+  // text. The content-stream we emit references its own font objects (F1,
+  // F2 …), but pdf-lib's font metric tables live in the embedded font
+  // instances and are the fastest way to get accurate widths without
+  // parsing AFM data ourselves.
+  const measureDoc = await PDFDocument.create();
+  const measureFonts = {
+    'Helvetica':          await measureDoc.embedFont(StandardFonts.Helvetica),
+    'Helvetica-Bold':     await measureDoc.embedFont(StandardFonts.HelveticaBold),
+    'Times-Roman':        await measureDoc.embedFont(StandardFonts.TimesRoman),
+    'Times-Bold':         await measureDoc.embedFont(StandardFonts.TimesRomanBold),
+    'Times-Italic':       await measureDoc.embedFont(StandardFonts.TimesRomanItalic),
+    'Courier':            await measureDoc.embedFont(StandardFonts.Courier),
+  };
+  const measure = (psName, text, size) => {
+    const f = measureFonts[psName] || measureFonts['Helvetica'];
+    try { return f.widthOfTextAtSize(String(text), size); }
+    catch (_) { return String(text).length * size * 0.5; }
+  };
 
   // ALSO parse the raw xref so we can read back an object's ORIGINAL bytes
   // and byte-preserve-splice into its /Fields / /Annots array. That's what
@@ -7770,6 +7800,7 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // pointing at the new sigFieldNum (which we'll emit as one shared field).
   for (const p of newSigs) {
     const nameFontRec = fontResourceRegistry.get(stdFontNameFor(p.nameFont || 'serif-italic'));
+    const nameFontPs  = stdFontNameFor(p.nameFont || 'serif-italic');
     const w = p.wPdf, h = p.hPdf;
     const useStamp = (p.appearance === 'stamp');
     const stream = useStamp
@@ -7779,6 +7810,8 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
           qrPayload: qrPayload || certVaultUrl || '',
           sigImgResource: sigImgResource ? sigImgResource.name : null,
           sigImgAspect,
+          measureHelv: (t, s) => measure('Helvetica', t, s),
+          measureName: (t, s) => measure(nameFontPs, t, s),
         })
       : buildSigAppearanceStream({
           name: meta.name, dateStr, reason: reason || '', location: location || '',
@@ -7836,6 +7869,7 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   const routedObjNums = new Set();
   for (const { p, target } of routedSigs) {
     const nameFontRec = fontResourceRegistry.get(stdFontNameFor(p.nameFont || 'serif-italic'));
+    const nameFontPs  = stdFontNameFor(p.nameFont || 'serif-italic');
     // Render at the field's own rect so the appearance box matches what the
     // form author placed (users see their sig inside the form's box).
     const rect = target.rect;
@@ -7849,6 +7883,8 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
           qrPayload: qrPayload || certVaultUrl || '',
           sigImgResource: sigImgResource ? sigImgResource.name : null,
           sigImgAspect,
+          measureHelv: (t, s) => measure('Helvetica', t, s),
+          measureName: (t, s) => measure(nameFontPs, t, s),
         })
       : buildSigAppearanceStream({
           name: meta.name, dateStr, reason: reason || '', location: location || '',
