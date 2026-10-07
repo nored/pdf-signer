@@ -4057,18 +4057,18 @@ function onPageClick(e) {
   const isText   = currentTool === 'text';
   const isStamp  = currentTool === 'stamp';
   const isRedact = currentTool === 'redact';
-  // Signatures with the "stamp" appearance need room for three columns
-  // (sig image + name+date+reason + QR); the plain-text default is fine
-  // at 220×72 but the stamp needs ~360×80 to fit "Digitally signed by
-  // [Long Name]" on one line without truncating.
+  // Default placement sizes. ~20 % smaller than the original values
+  // (220×72 → 176×58, 320×64 → 256×52, 180×22 → 144×18, 180×20 → 144×16,
+  // 500×44 → 400×36) — the previous defaults consistently landed too
+  // large on real documents and had to be hand-shrunk every time.
   const sigStampAppearance = !isText && !isStamp && !isRedact &&
     document.querySelector('input[name="appearance"]:checked')?.value === 'stamp';
-  const wPdf = isStamp ? Math.min(500, meta.viewport.viewBox[2] - 20)
-             : isRedact ? 180
-             : isText   ? 180
-             : sigStampAppearance ? 320
-             :            220;
-  const hPdf = isStamp ? 44 : (isRedact ? 20 : (isText ? 22 : (sigStampAppearance ? 64 : 72)));
+  const wPdf = isStamp ? Math.min(400, meta.viewport.viewBox[2] - 20)
+             : isRedact ? 144
+             : isText   ? 144
+             : sigStampAppearance ? 256
+             :            176;
+  const hPdf = isStamp ? 36 : (isRedact ? 16 : (isText ? 18 : (sigStampAppearance ? 52 : 58)));
   pushUndo();
   const p = {
     id: placementIdSeq++,
@@ -4604,9 +4604,12 @@ $('stampEnable').addEventListener('change', () => {
 function defaultStampBox(pageMeta, orientation='horizontal') {
   const [_,__,pageW, pageH] = pageMeta.viewport.viewBox;
   if (orientation === 'vertical') {
-    return { xPdf: 4, yPdf: 40, wPdf: 32, hPdf: pageH - 80 };
+    // Narrower spine strip (32 → 26) and shorter run (pageH − 80 is kept).
+    return { xPdf: 4, yPdf: 40, wPdf: 26, hPdf: pageH - 80 };
   }
-  return { xPdf: 0, yPdf: 0, wPdf: pageW, hPdf: 58 };
+  // Bottom banner height dropped from 58 → 46 to match the smaller
+  // default placements elsewhere.
+  return { xPdf: 0, yPdf: 0, wPdf: pageW, hPdf: 46 };
 }
 function autoSeedStampsIfNone() {
   if (!doc.pdfjs) return;
