@@ -967,26 +967,27 @@
 
     <details class="section-details" id="signSection" style="opacity:.5; pointer-events:none" open>
       <summary><h2>Placements</h2></summary>
-      <details class="collapse" id="stampSection" style="margin-top:10px">
-        <summary>Integrity stamp <span id="stampHeaderNote" style="opacity:.6">· off</span></summary>
-        <div style="margin-top:8px">
-          <label class="lock-row"><input type="checkbox" id="stampEnable"> Stamp every page with QR + verification code</label>
-          <div class="hint">On sign, a random AES-256 key encrypts the signed PDF into a <b>.vault</b> file. The QR carries the key and (if uploaded) the vault URL — anyone who scans the QR can fetch, decrypt and verify.</div>
-          <div id="stampOptions" style="display:none; margin-top:6px">
-            <label>Signer role <span style="color:var(--muted)">(optional)</span></label>
-            <input type="text" id="stampRole" placeholder="e.g. Notary, HR Manager, Reviewer">
-            <label>Vault hosting</label>
-            <div class="radio-group">
-              <label><input type="radio" name="vaultHost" value="github" checked> Auto-upload to your GitHub repo</label>
-              <label><input type="radio" name="vaultHost" value="local"> Local .vault file only</label>
-            </div>
-            <div id="ghVaultBlock" style="border:1px dashed var(--border); border-radius:6px; padding:8px; margin-top:6px; font-size:12px; color:var(--muted);">
-              <span id="ghConfigSummary2">GitHub vault: not configured yet.</span>
-            </div>
-            <label class="lock-row"><input type="checkbox" id="vaultKeepLocal" checked> Also download a local .vault copy</label>
+      <div id="stampSection" style="margin-top:10px">
+        <label class="lock-row">
+          <input type="checkbox" id="stampEnable">
+          <span>Stamp every page with QR + verification code</span>
+          <span class="info-hint" title="On sign, a random AES-256 key encrypts the signed PDF into a .vault file. The QR carries the key and (if uploaded) the vault URL — anyone who scans the QR can fetch, decrypt and verify.">ⓘ</span>
+          <span id="stampHeaderNote" style="opacity:.6; margin-left:auto; font-size:11px;">· off</span>
+        </label>
+        <div id="stampOptions" style="display:none; margin-top:6px">
+          <label>Signer role <span style="color:var(--muted)">(optional)</span></label>
+          <input type="text" id="stampRole" placeholder="e.g. Notary, HR Manager, Reviewer">
+          <label>Vault hosting</label>
+          <div class="radio-group">
+            <label><input type="radio" name="vaultHost" value="github" checked> Auto-upload to your GitHub repo</label>
+            <label><input type="radio" name="vaultHost" value="local"> Local .vault file only</label>
           </div>
+          <div id="ghVaultBlock" style="border:1px dashed var(--border); border-radius:6px; padding:8px; margin-top:6px; font-size:12px; color:var(--muted);">
+            <span id="ghConfigSummary2">GitHub vault: not configured yet.</span>
+          </div>
+          <label class="lock-row"><input type="checkbox" id="vaultKeepLocal" checked> Also download a local .vault copy</label>
         </div>
-      </details>
+      </div>
       <div class="hint" id="toolHint">Pick a tool from the floating bar above the page, click to drop it. Drag to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo.</div>
       <div class="placement-list" id="placementList"></div>
       <button id="btnClearPlacements" class="danger" style="width:auto; padding:6px 10px; font-size:12px; margin-top:6px; display:none" title="Remove every placement (signatures, text boxes, stamps, redactions) on all pages">Clear all placements</button>
