@@ -1571,6 +1571,17 @@ const doc = {
   pageMeta: [], // {index, width, height, viewport, wrapEl, canvasEl, rendered, page}
   placements: [], // {id, pageIndex, xPdf, yPdf, wPdf, hPdf, type: 'digital'|'image', el, labelEl}
   selectedPlacementId: null,
+  // Names of pre-existing empty signature AcroForm fields that the user
+  // explicitly removed in the UI. The sign path flattens these widgets out
+  // of the output so "removed in the live view" matches "gone from the
+  // downloaded PDF". Reset on every new file open / close.
+  removedSigFields: new Set(),
+  // Stamp placements the user had customized (position/size/orientation)
+  // right before they unchecked "Stamp every page". Rechecking the box
+  // restores these verbatim instead of re-seeding fresh defaults, so a
+  // careful hand-placement survives an accidental uncheck. Reset on new
+  // file open / close.
+  stashedStamps: [],
 };
 let currentTool = null;   // 'sig' or null (armed to place, or idle)
 let placementIdSeq = 1;
@@ -1601,6 +1612,7 @@ function snapshotPlacements() {
     underline: !!p.underline,
     align: p.align || 'left',
     bgColor: p.bgColor || null,
+    formFieldName: p.formFieldName || null,
   }));
 }
 function pushUndo() {
@@ -1611,6 +1623,12 @@ function pushUndo() {
 function restorePlacements(snap) {
   for (const p of doc.placements) if (p.el?.parentNode) p.el.parentNode.removeChild(p.el);
   doc.placements = snap.map(s => ({ ...s }));
+  // Undo over a removed sig placement must also un-schedule the widget's
+  // flattening at sign time, otherwise the restored placement would be
+  // drawn on top of a field we're still about to strip.
+  for (const p of doc.placements) {
+    if (p.formFieldName) doc.removedSigFields.delete(p.formFieldName);
+  }
   for (const p of doc.placements) attachPlacementToPage(p);
   const maxId = doc.placements.reduce((m, p) => Math.max(m, p.id), 0);
   if (placementIdSeq <= maxId) placementIdSeq = maxId + 1;
@@ -2362,6 +2380,8 @@ $('btnCloseDoc').onclick = () => closeDoc();
 function closeDoc() {
   doc.file = null; doc.bytes = null; doc.pdfjs = null; doc.numPages = 0;
   doc.placements = []; doc.pageMeta = []; doc.formFields = {}; doc.selectedPlacementId = null;
+  doc.removedSigFields = new Set();
+  doc.stashedStamps = [];
   doc.alreadySigned = false;
   doc.isEncrypted = false;
   doc.pdfPassword = null;
@@ -2490,6 +2510,8 @@ async function openPdf(file) {
   doc.pageMeta = [];
   doc.formFields = {};
   doc.selectedPlacementId = null;
+  doc.removedSigFields = new Set();
+  doc.stashedStamps = [];
   doc.alreadySigned = false;
   $('placementList').innerHTML = '';
   $('emptyState').style.display = 'none';
@@ -2802,6 +2824,9 @@ async function markUnsignedFieldHints() {
       if (!a.rect || a.rect.length < 4) continue;
       const fieldName = a.fieldName || null;
       if (fieldName && claimedFields.has(fieldName)) continue;
+      // User already removed this one in a prior placement — don't re-offer
+      // its hint, and let the sign path strip the widget on download.
+      if (fieldName && doc.removedSigFields.has(fieldName)) continue;
       any = true;
       const [x1, y1, x2, y2] = a.rect;
       const [cx1, cy1] = meta.viewport.convertToViewportPoint(x1, y2);
@@ -4108,14 +4133,33 @@ function attachPlacementToPage(p) {
     input.className = 'text-input';
     input.contentEditable = 'false';         // starts non-editable so single-click drags
     input.spellcheck = false;
-    input.dataset.placeholder = 'Double-click to type';
+    input.dataset.placeholder = 'Click to type';
     input.textContent = p.text || '';
     input.addEventListener('input', () => { p.text = input.innerText; });
-    // In edit mode only, don't let mousedown bubble up and start a drag.
+    // Track a click's start position so we can tell "clicked to edit" from
+    // "clicked to start a drag" — the drag handler kicks in past a 2px
+    // threshold, so stay well under that.
+    let mdX = 0, mdY = 0, mdOnInput = false;
     input.addEventListener('mousedown', ev => {
+      mdOnInput = true;
+      mdX = ev.clientX; mdY = ev.clientY;
+      // In edit mode, don't let mousedown bubble up and start a drag; we
+      // want the browser's native caret-placement behavior inside the box.
       if (textEditingPlacementId === p.id) ev.stopPropagation();
     });
-    // Double-click on the box (or the input inside it) enters edit mode.
+    // Single click on the input area (no significant drag) enters edit mode
+    // when this box is already the selected placement. First click still
+    // just selects, matching the Finder-rename / Preview-textbox pattern.
+    el.addEventListener('mouseup', ev => {
+      if (!mdOnInput) return;
+      mdOnInput = false;
+      if (ev.target.classList && (ev.target.classList.contains('close') || ev.target.classList.contains('handle') || ev.target.classList.contains('drag-strip'))) return;
+      const dx = Math.abs(ev.clientX - mdX), dy = Math.abs(ev.clientY - mdY);
+      if (dx > 2 || dy > 2) return;                 // this was a drag, not a click
+      if (textEditingPlacementId === p.id) return;  // already editing — let the caret land
+      if (doc.selectedPlacementId === p.id) enterTextEditMode(p);
+    });
+    // Double-click anywhere on the box still works as a shortcut.
     el.addEventListener('dblclick', ev => {
       if (ev.target.classList && (ev.target.classList.contains('close') || ev.target.classList.contains('handle') || ev.target.classList.contains('drag-strip'))) return;
       enterTextEditMode(p);
@@ -4494,8 +4538,47 @@ $('stampEnable').addEventListener('change', () => {
   const on = $('stampEnable').checked;
   const stampOpts = $('stampOptions');
   stampOpts.style.display = on ? '' : 'none';
-  if (on) { if ('open' in stampOpts) stampOpts.open = true; autoSeedStampsIfNone(); }
-  else removeAllStamps();
+  if (on) {
+    if ('open' in stampOpts) stampOpts.open = true;
+    // If the user had moved/resized stamps and then unchecked the box, we
+    // stashed those customizations. Re-check restores them verbatim rather
+    // than wiping any surviving work with fresh auto-seeded defaults.
+    if (doc.stashedStamps && doc.stashedStamps.length) {
+      pushUndo();
+      const haveStampAlready = doc.placements.some(p => p.type === 'stamp');
+      if (!haveStampAlready) {
+        for (const s of doc.stashedStamps) {
+          const p = {
+            id: placementIdSeq++,
+            pageIndex: s.pageIndex,
+            xPdf: s.xPdf, yPdf: s.yPdf, wPdf: s.wPdf, hPdf: s.hPdf,
+            type: 'stamp',
+            orientation: s.orientation || 'horizontal',
+          };
+          doc.placements.push(p);
+          attachPlacementToPage(p);
+        }
+        renderPlacementList();
+        toast(`Restored ${doc.stashedStamps.length} stamp position${doc.stashedStamps.length > 1 ? 's' : ''}`, 'ok');
+      }
+      doc.stashedStamps = [];
+    } else {
+      autoSeedStampsIfNone();
+    }
+  } else {
+    // Stash before removing. Only snapshot the geometry/orientation — ids
+    // get re-allocated on restore so undo stacks stay well-formed.
+    const toStash = doc.placements.filter(p => p.type === 'stamp').map(p => ({
+      pageIndex: p.pageIndex,
+      xPdf: p.xPdf, yPdf: p.yPdf, wPdf: p.wPdf, hPdf: p.hPdf,
+      orientation: p.orientation || 'horizontal',
+    }));
+    if (toStash.length) {
+      doc.stashedStamps = toStash;
+      toast(`Hid ${toStash.length} stamp${toStash.length > 1 ? 's' : ''} — re-check to bring back same positions`, 'ok');
+    }
+    removeAllStamps();
+  }
   const note = $('stampHeaderNote');
   if (note) note.textContent = on ? '· enabled' : '· off';
   updateSignButton();
@@ -4651,6 +4734,14 @@ function removePlacement(id) {
   if (textEditingPlacementId === id) textEditingPlacementId = null;
   if (p.el?.parentNode) p.el.parentNode.removeChild(p.el);
   doc.placements.splice(idx, 1);
+  // A placement with formFieldName sits on top of a pre-existing empty
+  // AcroForm signature widget in the source PDF. Removing it from the
+  // placements list only hides the overlay — the underlying widget would
+  // still show in the downloaded PDF. Remember the name so the sign path
+  // strips that widget / field entry too. Undo clears this (see
+  // restorePlacements) and attaching a hint again clears it (see
+  // markUnsignedFieldHints).
+  if (p.formFieldName) doc.removedSigFields.add(p.formFieldName);
   if (doc.selectedPlacementId === id) doc.selectedPlacementId = null;
   renderPlacementList();
   updateSignButton();
@@ -4721,7 +4812,10 @@ function syncTextPropsBar(p) {
   const fSel = $('tpFont');
   fSel.value = fam;
   fSel.style.fontFamily = CSS_FONT_FOR[fam] || CSS_FONT_FOR.sans;   // preview the family in the chip itself
-  $('tpSize').value = p.size || 12;
+  // Don't clobber the size input while the user is editing it — otherwise
+  // backspacing to clear "12" lets our clamp write back "12" between
+  // keystrokes, which then concatenates with the next digit and jumps to 96.
+  if (document.activeElement !== $('tpSize')) $('tpSize').value = p.size || 12;
   $('tpColor').value = p.color || '#000000';
   $('tpColorWrap').style.setProperty('--swatch', p.color || '#000000');
   // Background chip: shows the color if set, or a "no fill" hatched swatch.
@@ -4827,7 +4921,17 @@ document.addEventListener('keydown', (e) => {
 
 // Wire the floating text-props bar.
 $('tpFont').addEventListener('change',      () => mutateSelectedText(p => p.font = $('tpFont').value));
-$('tpSize').addEventListener('input',       () => mutateSelectedText(p => p.size = Math.max(6, Math.min(96, parseInt($('tpSize').value, 10) || 12))));
+$('tpSize').addEventListener('input', () => {
+  const raw = parseInt($('tpSize').value, 10);
+  if (!Number.isFinite(raw)) return;
+  mutateSelectedText(p => p.size = Math.max(6, Math.min(96, raw)));
+});
+$('tpSize').addEventListener('blur', () => {
+  const raw = parseInt($('tpSize').value, 10);
+  const next = Number.isFinite(raw) ? Math.max(6, Math.min(96, raw)) : 12;
+  $('tpSize').value = next;
+  mutateSelectedText(p => p.size = next);
+});
 $('tpColor').addEventListener('input',      () => mutateSelectedText(p => p.color = $('tpColor').value));
 $('tpBgColor').addEventListener('input',    () => mutateSelectedText(p => p.bgColor = $('tpBgColor').value));
 $('tpBgClear').addEventListener('click',    () => mutateSelectedText(p => p.bgColor = null));
@@ -6599,7 +6703,7 @@ async function normalizePdfViaGhostscript(inputBytes) {
   return new Uint8Array(out);
 }
 
-async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated, certVaultUrl, sigFieldMap}) {
+async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formFields, signingTime, pdfjsDoc, tsaUrl, backdated, certVaultUrl, sigFieldMap, removedSigFields}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
@@ -6663,6 +6767,50 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
         await rasterRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects);
       }
       console.info(`redact page ${pageIndex + 1}: ${mode}`);
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────────
+
+  // ── Explicitly-removed empty signature AcroForm fields ────────────────
+  // If the user clicked a "Sign here?" hint (which turned a pre-existing
+  // empty sig field into a placement) and then removed that placement,
+  // the underlying widget is still in the source bytes. Strip it from
+  // /Annots on its page and drop its entry from AcroForm /Fields so the
+  // downloaded PDF matches what the user sees on screen.
+  if (removedSigFields && removedSigFields.size > 0 && sigFieldMap) {
+    const widgetObjNums = new Set();
+    const fieldObjNums  = new Set();
+    for (const name of removedSigFields) {
+      const t = sigFieldMap[name];
+      if (!t) continue;
+      if (t.widgetObjNum) widgetObjNums.add(t.widgetObjNum);
+      if (t.fieldObjNum)  fieldObjNums.add(t.fieldObjNum);
+    }
+    if (widgetObjNums.size > 0) {
+      for (const page of pdfDoc.getPages()) {
+        let annots = page.node.get(PDFName.of('Annots'));
+        if (!annots) continue;
+        annots = context.lookup(annots);
+        if (!annots || typeof annots.asArray !== 'function') continue;
+        const arr = annots.asArray();
+        for (let i = arr.length - 1; i >= 0; i--) {
+          const entry = arr[i];
+          const num = entry && entry.objectNumber;
+          if (num && widgetObjNums.has(num)) annots.remove(i);
+        }
+      }
+    }
+    if (fieldObjNums.size > 0) {
+      const acroForm = pdfDoc.catalog.lookup(PDFName.of('AcroForm'));
+      const fields = acroForm && acroForm.lookup && acroForm.lookup(PDFName.of('Fields'));
+      if (fields && typeof fields.asArray === 'function') {
+        const arr = fields.asArray();
+        for (let i = arr.length - 1; i >= 0; i--) {
+          const entry = arr[i];
+          const num = entry && entry.objectNumber;
+          if (num && fieldObjNums.has(num)) fields.remove(i);
+        }
+      }
     }
   }
   // ──────────────────────────────────────────────────────────────────────
@@ -6788,27 +6936,21 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
     drawTextField(pdfDoc.getPage(p.pageIndex), p, fonts);
   }
   // 3. Optional integrity stamp — one draw per stamp placement.
+  // Deliberately NO "stamp every page" fallback when stamps.length === 0.
+  // autoSeedStampsIfNone pre-populates one stamp per page the moment the
+  // checkbox is on, so an empty list here means the user explicitly removed
+  // them (e.g. a multi-party form workflow where the banner would land in
+  // the middle of someone else's signature row). Respect that and skip.
   if (stamp && stamp.enabled) {
     const stamps = placements.filter(p => p.type === 'stamp');
     const total = pdfDoc.getPageCount();
-    if (stamps.length === 0) {
-      // Fallback: full-width bottom band on every page.
-      for (let i = 0; i < total; i++) {
-        drawIntegrityStamp(pdfDoc.getPage(i), i, total, fonts, {
-          csv: stamp.csv, signer: stamp.signer || meta.name, role: stamp.role || '',
-          dateStr: stamp.dateStr || dateStr, qrPayload: stamp.qrPayload,
-          orientation: 'horizontal',
-        });
-      }
-    } else {
-      for (const sp of stamps) {
-        drawIntegrityStamp(pdfDoc.getPage(sp.pageIndex), sp.pageIndex, total, fonts, {
-          csv: stamp.csv, signer: stamp.signer || meta.name, role: stamp.role || '',
-          dateStr: stamp.dateStr || dateStr, qrPayload: stamp.qrPayload,
-          orientation: sp.orientation || 'horizontal',
-          pos: { x: sp.xPdf, y: sp.yPdf, w: sp.wPdf, h: sp.hPdf },
-        });
-      }
+    for (const sp of stamps) {
+      drawIntegrityStamp(pdfDoc.getPage(sp.pageIndex), sp.pageIndex, total, fonts, {
+        csv: stamp.csv, signer: stamp.signer || meta.name, role: stamp.role || '',
+        dateStr: stamp.dateStr || dateStr, qrPayload: stamp.qrPayload,
+        orientation: sp.orientation || 'horizontal',
+        pos: { x: sp.xPdf, y: sp.yPdf, w: sp.wPdf, h: sp.hPdf },
+      });
     }
   }
 
@@ -9196,6 +9338,7 @@ $('btnSign').onclick = async () => {
         formFields: doc.formFields,
         pdfjsDoc: doc.pdfjs,
         tsaUrl, backdated, certVaultUrl,
+        removedSigFields: doc.removedSigFields,
       });
     }
     const outBase = doc.file.name.replace(/\.pdf$/i, '');
