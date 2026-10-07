@@ -223,8 +223,8 @@
 
   /* Font size — a compact stepper. */
   .floating-tools .tp-size {
-    width: 54px; padding: 0 6px;
-    text-align: right; font-variant-numeric: tabular-nums;
+    width: 42px; padding: 0 4px;
+    text-align: center; font-variant-numeric: tabular-nums;
     -moz-appearance: textfield;
     background: var(--panel-2);
   }
@@ -1068,7 +1068,9 @@
           <option value="serif" style="font-family:'Times New Roman',Times,serif">Times New Roman</option>
           <option value="mono"  style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">Courier</option>
         </select>
+        <button class="tp icon" id="tpSizeDown" title="Decrease font size (−1 pt)">−</button>
         <input type="number" id="tpSize" class="tp tp-size" min="6" max="96" step="1" value="12" title="Font size (pt)">
+        <button class="tp icon" id="tpSizeUp" title="Increase font size (+1 pt)">+</button>
         <span class="sep"></span>
         <button class="tp icon bold"      id="tpBold"      title="Bold (⌘/Ctrl+B)">B</button>
         <button class="tp icon italic"    id="tpItalic"    title="Italic (⌘/Ctrl+I)">I</button>
@@ -4284,7 +4286,8 @@ function renderPlacementPreview(p) {
     const h = Math.max(1, p.hPdf);
     const pad = 5;
     const innerH = Math.max(1, h - 2 * pad);
-    const sideSize = Math.max(20, Math.min(innerH, w * 0.28));
+    // Mirror the PDF side-column clamp (never inflate past the box).
+    const sideSize = Math.max(10, Math.min(innerH, w * 0.28));
     const qrX = w - pad - sideSize;
     const qrY = (h - sideSize) / 2;
     const imgX = pad;
@@ -4305,9 +4308,11 @@ function renderPlacementPreview(p) {
     const nameWeight = (p.nameFont === 'serif-bold' || p.nameFont === 'sans-bold') ? '700' : '400';
     const helvFont   = "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif";
 
-    // Font sizing — matches the PDF branch.
-    let nameSize = Math.max(6, Math.min(12, Math.floor(h * 0.20)));
-    const bodySize = Math.max(5, Math.min(9,  Math.floor(h * 0.13)));
+    // Font sizing — matches the PDF branch (no upper cap so enlarging the
+    // box grows the whole stamp together).
+    let nameSize = Math.max(6, Math.floor(h * 0.20));
+    const bodySize = Math.max(5, Math.floor(h * 0.13));
+    const linePitch = bodySize + Math.max(2, Math.floor(bodySize * 0.3));
     // Cheap advance estimate (~0.5 × size for Helvetica); shrink the whole
     // "Digitally signed by NAME" line to fit centerW.
     const displayName = identity.meta?.name || 'Your name';
@@ -4390,9 +4395,9 @@ function renderPlacementPreview(p) {
     // computed in the same PDF orientation the drawing code uses (origin top-
     // left). We flip the y for SVG since our viewBox has y-down.
     const svgNameY = pad + nameSize;
-    const svgBodyBaseY = svgNameY + 4 + bodySize;
+    const svgBodyBaseY = svgNameY + linePitch;
     const svgBodyXml = bodyLines.map((t, i) => {
-      const y = svgBodyBaseY + i * (bodySize + 2);
+      const y = svgBodyBaseY + i * linePitch;
       if (y > h - pad) return '';
       return `<text x="${centerX.toFixed(2)}" y="${y.toFixed(2)}" font-family="${helvFont}" font-size="${bodySize}" fill="#444">${escXml(t)}</text>`;
     }).join('');
@@ -4921,17 +4926,27 @@ document.addEventListener('keydown', (e) => {
 
 // Wire the floating text-props bar.
 $('tpFont').addEventListener('change',      () => mutateSelectedText(p => p.font = $('tpFont').value));
-$('tpSize').addEventListener('input', () => {
-  const raw = parseInt($('tpSize').value, 10);
-  if (!Number.isFinite(raw)) return;
-  mutateSelectedText(p => p.size = Math.max(6, Math.min(96, raw)));
-});
-$('tpSize').addEventListener('blur', () => {
+// Font size: commit on `change` (fires on Enter / blur / spin-button click),
+// not on `input` (which fires on every intermediate keystroke and triggers
+// an immediate re-render — including the browser's own clamp from a half-
+// typed value, which is where the "jumps to 96" misbehavior came from).
+// Explicit +/- buttons give users a predictable per-point step without
+// having to click into the number field at all.
+function nudgeTextSize(delta) {
+  const cur = parseInt($('tpSize').value, 10);
+  const base = Number.isFinite(cur) ? cur : 12;
+  const next = Math.max(6, Math.min(96, base + delta));
+  $('tpSize').value = next;
+  mutateSelectedText(p => p.size = next);
+}
+$('tpSize').addEventListener('change', () => {
   const raw = parseInt($('tpSize').value, 10);
   const next = Number.isFinite(raw) ? Math.max(6, Math.min(96, raw)) : 12;
   $('tpSize').value = next;
   mutateSelectedText(p => p.size = next);
 });
+$('tpSizeUp').addEventListener('click',   () => nudgeTextSize(+1));
+$('tpSizeDown').addEventListener('click', () => nudgeTextSize(-1));
 $('tpColor').addEventListener('input',      () => mutateSelectedText(p => p.color = $('tpColor').value));
 $('tpBgColor').addEventListener('input',    () => mutateSelectedText(p => p.bgColor = $('tpBgColor').value));
 $('tpBgClear').addEventListener('click',    () => mutateSelectedText(p => p.bgColor = null));
@@ -5527,7 +5542,11 @@ function drawStampSigAppearance(page, p, opts) {
   // authoring, but the printed PDF carries no rectangle around the content.
 
   const innerH = h - 2 * pad;
-  const sideSize = Math.max(24, Math.min(innerH, Math.min(h - 2 * pad, w * 0.28)));
+  // Side columns (sig image + QR) scale with box height, capped so a wide
+  // short box doesn't produce a QR that eats the whole centre column.
+  // Never larger than innerH — the previous Math.max(24, …) could inflate
+  // the slot beyond the box on small heights and spill onto the page.
+  const sideSize = Math.max(10, Math.min(innerH, w * 0.28));
   const qrX     = x1 + w - pad - sideSize;
   const qrY     = y1 + (h - sideSize) / 2;
 
@@ -5571,15 +5590,15 @@ function drawStampSigAppearance(page, p, opts) {
 
   // Text: "Digitally signed by NAME" on one line — shrink the font so the
   // whole line fits inside the centre column, never wrap or overflow.
+  // Sizes scale with box height, no artificial cap: a user who enlarges the
+  // stamp expects the whole thing (image, QR, text) to grow together. The
+  // 6 pt floor stays — below that the text is unreadable.
   const nameFont = pickNameFont(fonts, p.nameFont || 'serif-italic');
   const label = 'Digitally signed by ';
-  let nameSize = Math.max(8, Math.min(12, Math.floor(h * 0.20)));
+  let nameSize = Math.max(6, Math.floor(h * 0.20));
   const measure = (sz) =>
     fonts.helv.widthOfTextAtSize(label, sz) + nameFont.widthOfTextAtSize(meta.name, sz);
   if (measure(nameSize) > centerW) {
-    // Scale down proportionally to fit, with a 5 % safety margin, but never
-    // below 6 pt (below that the text is unreadable and the design breaks —
-    // callers should widen the placement).
     nameSize = Math.max(6, Math.floor(nameSize * (centerW / measure(nameSize)) * 0.95));
   }
   const labelW = fonts.helv.widthOfTextAtSize(label, nameSize);
@@ -5592,8 +5611,13 @@ function drawStampSigAppearance(page, p, opts) {
     x: centerX + labelW, y: nameLineY, size: nameSize,
     font: nameFont, color: rgb(0, 0, 0),
   });
-  const bodySize = Math.max(6, Math.min(9, Math.floor(h * 0.13)));
-  let cursorY = nameLineY - (bodySize + 3);
+  const bodySize = Math.max(6, Math.floor(h * 0.13));
+  // Line pitch keyed off bodySize so Date / Reason never overlap each
+  // other at any box height; the previous mix of (bodySize+3) / (bodySize+2)
+  // under a hard cap would collapse when h grew and the two spacers didn't
+  // keep up with nameSize.
+  const linePitch = bodySize + Math.max(2, Math.floor(bodySize * 0.3));
+  let cursorY = nameLineY - linePitch;
   const fitBody = (text) => {
     let sz = bodySize;
     if (fonts.helv.widthOfTextAtSize(text, sz) > centerW) {
@@ -5609,7 +5633,7 @@ function drawStampSigAppearance(page, p, opts) {
     });
   }
   if (reason) {
-    cursorY -= (bodySize + 2);
+    cursorY -= linePitch;
     if (cursorY >= y1 + pad) {
       const t = `Reason: ${reason}`;
       page.drawText(t, {
@@ -8272,7 +8296,9 @@ function buildStampSigAppearanceStream({
   const _mn = measureName || ((t, s) => String(t).length * s * 0.55);
   const pad = 5;
   const innerH = h - 2 * pad;
-  const sideSize = Math.max(24, Math.min(innerH, Math.min(h - 2 * pad, w * 0.28)));
+  // Never inflate past the box (was Math.max(24, …), which would spill the
+  // sig image / QR onto the page when the user made the stamp short).
+  const sideSize = Math.max(10, Math.min(innerH, w * 0.28));
   const qrX     = w - pad - sideSize;
   const qrY     = (h - sideSize) / 2;
   const imgX    = pad;
@@ -8330,14 +8356,17 @@ function buildStampSigAppearanceStream({
   // "Digitally signed by NAME" on a single line — shrink until it fits,
   // using real font metrics so the line width matches what a viewer draws.
   const label = 'Digitally signed by ';
-  let nameSize = Math.max(6, Math.min(12, Math.floor(h * 0.20)));
+  // No upper cap on nameSize / bodySize — stamp text grows with the box.
+  // Was Math.min(12, …) / Math.min(9, …), which kept the text tiny when
+  // the user enlarged the stamp and caused layout overlaps in both
+  // directions.
+  let nameSize = Math.max(6, Math.floor(h * 0.20));
   const lineWidth = (sz) => _mh(label, sz) + _mn(name, sz);
   if (lineWidth(nameSize) > centerW) {
-    // Scale down proportionally with a small safety margin so we don't
-    // touch the QR column at all.
     nameSize = Math.max(5, Math.floor(nameSize * (centerW / lineWidth(nameSize)) * 0.96));
   }
-  const bodySize = Math.max(5, Math.min(9, Math.floor(h * 0.13)));
+  const bodySize = Math.max(5, Math.floor(h * 0.13));
+  const linePitch = bodySize + Math.max(2, Math.floor(bodySize * 0.3));
   const nameLineY = h - pad - nameSize;
   // Muted label.
   lines.push('BT');
@@ -8358,7 +8387,7 @@ function buildStampSigAppearanceStream({
   lines.push('ET');
 
   // Date + optional reason on their own lines, each shrunk to fit centerW.
-  let cursorY = nameLineY - (bodySize + 3);
+  let cursorY = nameLineY - linePitch;
   const bodyItems = [`Date: ${dateStr}`];
   if (reason) bodyItems.push(`Reason: ${reason}`);
   lines.push('BT');
@@ -8372,7 +8401,7 @@ function buildStampSigAppearanceStream({
     lines.push(`/F1 ${sz} Tf`);
     lines.push(`1 0 0 1 ${pdfNum(centerX)} ${pdfNum(cursorY)} Tm`);
     lines.push(`(${escapePdfString(bl)}) Tj`);
-    cursorY -= (sz + 2);
+    cursorY -= linePitch;
   }
   lines.push('ET');
 
