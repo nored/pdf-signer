@@ -936,9 +936,9 @@
           <details class="collapse" style="margin-top:10px">
             <summary>PDF normalization <span class="info-hint" title="Uses Ghostscript-WASM (loaded on demand from jsDelivr, ~5 MB gzipped, AGPL) to rewrite the source through a clean pdfwrite pass before signing.">ⓘ</span></summary>
             <div style="margin-top:8px">
-              <label class="lock-row"><input type="checkbox" id="gsNormalize"> Normalize source PDFs before signing</label>
+              <label class="lock-row"><input type="checkbox" id="gsNormalize" checked> Auto-normalize source PDFs when needed <span style="color:var(--muted); font-size:11px;">(recommended)</span></label>
               <div class="hint">
-                Runs the source through Ghostscript before signing, producing a clean, contiguous, Adobe-friendly structure. Fixes the "document has been modified" rejection Adobe throws on Office/Word-generated PDFs (Ayush.pdf-style sources) while other validators say the signature is fine.
+                On open, detects two Adobe-tripping markers in the source: a legacy <code>/Version /X.Y</code> pin in the catalog, or a fragmented xref with multiple subsections. If either is present, runs the source through Ghostscript's pdfwrite+PDF/A-2b pass BEFORE signing to produce a clean, contiguous, Adobe-friendly structure. Fixes the "document has been modified" rejection Adobe throws on Office/Word-generated PDFs (Ayush.pdf-style sources) while other validators say the signature is fine. When the source already looks clean (most machine-generated PDFs), Ghostscript is never loaded — the detection is cheap and the CDN pull only happens on documents that actually need it.
                 <br><br>
                 Ghostscript-WASM (~5 MB gzipped) is loaded on demand from jsDelivr the first time you sign a PDF that needs it — no local install. It's <a href="https://github.com/okathira/ghostpdl-wasm" target="_blank" rel="noopener">AGPL-3.0</a>, upstream Artifex build, unmodified; pdf-signer itself stays MIT. Turn off if you don't want the runtime CDN dependency.
               </div>
@@ -6036,10 +6036,23 @@ function collectSettings() {
     const checked = document.querySelector(`input[name="${name}"]:checked`);
     if (checked) out['radio:' + name] = checked.value;
   }
+  // Marker so the gsNormalize migration (see applySettings) runs exactly
+  // once per identity — any save from now on carries it.
+  out.gsNormalizeMigrated = true;
   return out;
 }
 function applySettings(obj) {
   if (!obj) return;
+  // One-time migration for gsNormalize: the checkbox shipped default-off
+  // in HTML from 2026-09-22, so every identity's saved settings carry
+  // a persisted false even for users who never touched the toggle.
+  // Flip it to on once per identity, then write a marker so future
+  // changes are honoured verbatim.
+  if (obj.gsNormalizeMigrated !== true) {
+    obj = { ...obj, gsNormalize: true, gsNormalizeMigrated: true };
+    // Fire-and-forget persist so this migration doesn't repeat.
+    setTimeout(saveSettingsSoon, 300);
+  }
   for (const s of SETTINGS_KEYS) {
     if (!(s.id in obj)) continue;
     const el = $(s.id);
