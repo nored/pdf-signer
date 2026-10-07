@@ -4294,25 +4294,17 @@ function renderPlacementPreview(p) {
     // This branch owns the DOM under .preview — replace it with a single SVG.
     preview.style.cssText = 'position:absolute; inset:0; pointer-events:none;';
 
-    const w = Math.max(1, p.wPdf);
-    const h = Math.max(1, p.hPdf);
-    const pad = 5;
-    const innerH = Math.max(1, h - 2 * pad);
-    // Mirror the PDF side-column clamp — matches drawStampSigAppearance so
-    // the preview and the final PDF show the same layout at every size.
-    const CENTRE_MIN = 50;
-    const SIDE_PAIR_OVERHEAD = 2 * pad + 16;
-    const sideSize = Math.max(10, Math.min(
-      innerH,
-      w * 0.28,
-      (w - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
-    ));
-    const qrX = w - pad - sideSize;
-    const qrY = (h - sideSize) / 2;
-    const imgX = pad;
-    const imgY = (h - sideSize) / 2;
-    const centerX = imgX + sideSize + 8;
-    const centerW = Math.max(10, qrX - centerX - 8);
+    // Natural layout — same model drawStampSigAppearance uses. Everything
+    // is positioned in a fixed "natural" coord space; the <svg viewBox>
+    // scales it uniformly inside the DOM box via preserveAspectRatio
+    // "xMidYMid meet". No per-element clamping, no name truncation.
+    // What you see here is exactly what the sign path draws.
+    const PAD = 5;
+    const NAME_SZ = 10;
+    const BODY_SZ = 7;
+    const LINE_PITCH = BODY_SZ + 3;
+    const GAP = 8;
+    const SIDE = 60;
 
     const escXml = s => String(s || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
     const nameFont = ({
@@ -4327,30 +4319,43 @@ function renderPlacementPreview(p) {
     const nameWeight = (p.nameFont === 'serif-bold' || p.nameFont === 'sans-bold') ? '700' : '400';
     const helvFont   = "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif";
 
-    // Font sizing — matches the PDF branch (no upper cap so enlarging the
-    // box grows the whole stamp together).
-    let nameSize = Math.max(6, Math.floor(h * 0.20));
-    const bodySize = Math.max(5, Math.floor(h * 0.13));
-    const linePitch = bodySize + Math.max(2, Math.floor(bodySize * 0.3));
-    // Same HARD "name never crosses QR" rule as the PDF branches — shrink
-    // nameSize to 4 pt, then truncate with ellipsis if still over. Width
-    // estimates use the cheap 0.5 × size × chars heuristic since the live
-    // SVG is a preview, not the authoritative measurement.
-    const fullName = identity.meta?.name || 'Your name';
     const label = 'Digitally signed by ';
-    const estLine = (sz, nm) => (label.length + String(nm).length) * sz * 0.5;
-    while (nameSize > 4 && estLine(nameSize, fullName) > centerW) nameSize -= 1;
-    let displayName = fullName;
-    if (estLine(nameSize, displayName) > centerW) {
-      const ell = '…';
-      while (displayName.length > 1 &&
-             estLine(nameSize, displayName.slice(0, -1) + ell) > centerW) {
-        displayName = displayName.slice(0, -1);
-      }
-      displayName = displayName.slice(0, -1) + ell;
+    const fullName = identity.meta?.name || 'Your name';
+    const reason = ($('reason')?.value || '').trim();
+    const dateStr = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+    const bodyLines = [`Date: ${dateStr}`];
+    if (reason) bodyLines.push(`Reason: ${reason}`);
+
+    // Measure text widths with a canvas 2d context so the layout matches
+    // the actual rendered width — cheap heuristics would under-size the
+    // reserved center width and the SVG would clip at narrow aspect
+    // ratios. One-time context, cached between renders.
+    if (!renderPlacementPreview._mctx) {
+      const c = document.createElement('canvas');
+      renderPlacementPreview._mctx = c.getContext('2d');
     }
-    const labelAdvance = nameSize * 0.5 * label.length;
-    const nameLineY = h - pad - nameSize * 0.15; // SVG baseline near top
+    const mctx = renderPlacementPreview._mctx;
+    const measure = (text, size, family, style = 'normal', weight = '400') => {
+      mctx.font = `${style} ${weight} ${size}px ${family}`;
+      return mctx.measureText(text).width;
+    };
+    const labelW    = measure(label,    NAME_SZ, helvFont);
+    const nameW     = measure(fullName, NAME_SZ, nameFont, nameStyle, nameWeight);
+    const nameLineW = labelW + nameW;
+    const bodyMaxW  = bodyLines.reduce(
+      (m, t) => Math.max(m, measure(t, BODY_SZ, helvFont)), 0);
+    const centerW   = Math.max(nameLineW, bodyMaxW);
+
+    const naturalW = PAD + SIDE + GAP + centerW + GAP + SIDE + PAD;
+    const textBlockH = NAME_SZ + LINE_PITCH * bodyLines.length;
+    const naturalH = PAD + Math.max(SIDE, textBlockH) + PAD;
+
+    const cyN = naturalH / 2;
+    const imgX = PAD;
+    const imgY = cyN - SIDE / 2;             // SVG y-down: top of sig image
+    const centerX = PAD + SIDE + GAP;
+    const qrX = centerX + centerW + GAP;
+    const qrY = cyN - SIDE / 2;
 
     // QR — same builder as the signer.
     let qrModules = null;
@@ -4372,76 +4377,58 @@ function renderPlacementPreview(p) {
 
     let qrRects = '';
     if (qrModules) {
-      const cell = sideSize / qrModules.count;
+      const cell = SIDE / qrModules.count;
+      // SVG y-down. drawQrCode in the PDF path uses y-up (row 0 at
+      // bottom), so to keep both pictures identical we flip rows here.
       for (let r = 0; r < qrModules.count; r++) {
         for (let c = 0; c < qrModules.count; c++) {
           if (!qrModules.isDark(r, c)) continue;
           const x = (qrX + c * cell).toFixed(3);
-          const y = (qrY + (qrModules.count - 1 - r) * cell).toFixed(3);
+          const y = (qrY + r * cell).toFixed(3);
           const s = (cell + 0.15).toFixed(3);
           qrRects += `<rect x="${x}" y="${y}" width="${s}" height="${s}" fill="#000"/>`;
         }
       }
     }
 
-    const reason = ($('reason')?.value || '').trim();
-    const dateStr = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
-    const bodyLines = [`Date: ${dateStr}`];
-    if (reason) bodyLines.push(`Reason: ${reason}`);
-    let bodyY = nameLineY + nameSize * 0.85 + bodySize + 3;
-    const bodyTspans = bodyLines.map((t, i) => {
-      const y = bodyY + i * (bodySize + 2);
-      return `<text x="${centerX.toFixed(2)}" y="${(h - y).toFixed(2)}" font-family="${helvFont}" font-size="${bodySize}" fill="#444">${escXml(t)}</text>`;
-    }).join('');
-
-    // Signature image slot: either the user's PNG (as <image>) or a dashed
-    // placeholder rectangle with a "signature" label.
     const sigImageHref = sigImage.dataUrl || null;
     const sigImageXml = sigImageHref
-      ? `<image href="${sigImageHref}" x="${imgX}" y="${imgY}" width="${sideSize}" height="${sideSize}" preserveAspectRatio="xMidYMid meet"/>`
+      ? `<image href="${sigImageHref}" x="${imgX}" y="${imgY}" width="${SIDE}" height="${SIDE}" preserveAspectRatio="xMidYMid meet"/>`
       : (() => {
-          const labelSize = Math.max(5, Math.min(8, sideSize * 0.14));
-          return `<rect x="${imgX + 1}" y="${imgY + 1}" width="${sideSize - 2}" height="${sideSize - 2}" fill="none" stroke="rgba(114,128,150,0.55)" stroke-width="0.6" stroke-dasharray="2 2"/>
-            <text x="${imgX + sideSize / 2}" y="${imgY + sideSize / 2 + labelSize / 3}" font-family="${helvFont}" font-size="${labelSize}" fill="rgba(89,111,235,0.6)" text-anchor="middle">signature</text>`;
+          const labelSize = SIDE * 0.14;
+          return `<rect x="${imgX + 1}" y="${imgY + 1}" width="${SIDE - 2}" height="${SIDE - 2}" fill="none" stroke="rgba(114,128,150,0.55)" stroke-width="0.6" stroke-dasharray="2 2"/>
+            <text x="${imgX + SIDE / 2}" y="${imgY + SIDE / 2 + labelSize / 3}" font-family="${helvFont}" font-size="${labelSize}" fill="rgba(89,111,235,0.6)" text-anchor="middle">signature</text>`;
         })();
 
-    // Watermark check inside the centre column.
-    const wmSize = Math.min(innerH * 0.9, centerW * 0.6);
+    // Watermark check behind the centre column.
+    const wmSize = Math.min(SIDE * 0.95, centerW * 0.6);
     const wmCx = centerX + centerW / 2;
-    const wmCy = h / 2;
+    const wmCy = cyN;
     const wcw = wmSize * 0.5;
-    // SVG y-down needs the OPPOSITE signs from the PDF path (which
-    // empirically renders with "vertex y = cy − offset" as vertex-at-
-    // bottom). Here that means `vertex y = wmCy + offset` — larger y in
-    // y-down puts the vertex lower on screen.
     const wmXml = `<path d="M ${(wmCx - wcw*0.5).toFixed(2)} ${(wmCy - wcw*0.10).toFixed(2)}
                              L ${(wmCx - wcw*0.13).toFixed(2)} ${(wmCy + wcw*0.28).toFixed(2)}
                              L ${(wmCx + wcw*0.55).toFixed(2)} ${(wmCy - wcw*0.42).toFixed(2)}"
                        fill="none" stroke="rgba(114,214,163,0.75)" stroke-width="${Math.max(0.8, wmSize*0.08).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
 
-    // Text baseline y in SVG needs to be a full baseline y; the nameLineY was
-    // computed in the same PDF orientation the drawing code uses (origin top-
-    // left). We flip the y for SVG since our viewBox has y-down.
-    const svgNameY = pad + nameSize;
-    const svgBodyBaseY = svgNameY + linePitch;
+    // SVG y-down baselines.
+    const svgNameY = PAD + NAME_SZ;
     const svgBodyXml = bodyLines.map((t, i) => {
-      const y = svgBodyBaseY + i * linePitch;
-      if (y > h - pad) return '';
-      return `<text x="${centerX.toFixed(2)}" y="${y.toFixed(2)}" font-family="${helvFont}" font-size="${bodySize}" fill="#444">${escXml(t)}</text>`;
+      const y = svgNameY + LINE_PITCH * (i + 1);
+      return `<text x="${centerX.toFixed(2)}" y="${y.toFixed(2)}" font-family="${helvFont}" font-size="${BODY_SZ}" fill="#444">${escXml(t)}</text>`;
     }).join('');
 
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${naturalW.toFixed(2)} ${naturalH.toFixed(2)}" preserveAspectRatio="xMidYMid meet"
       style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none; display:block;" class="stamp-svg">
       <!-- Watermark check -->
       ${wmXml}
       <!-- Signature image (or placeholder) -->
       ${sigImageXml}
       <!-- QR white backdrop + modules -->
-      <rect x="${qrX}" y="${qrY}" width="${sideSize}" height="${sideSize}" fill="#fff"/>
+      <rect x="${qrX}" y="${qrY}" width="${SIDE}" height="${SIDE}" fill="#fff"/>
       ${qrRects}
       <!-- "Digitally signed by" label + Name -->
-      <text x="${centerX.toFixed(2)}" y="${svgNameY.toFixed(2)}" font-family="${helvFont}" font-size="${nameSize}" fill="rgba(96,96,96,0.9)">${escXml(label)}</text>
-      <text x="${(centerX + labelAdvance).toFixed(2)}" y="${svgNameY.toFixed(2)}" font-family="${nameFont}" font-style="${nameStyle}" font-weight="${nameWeight}" font-size="${nameSize}" fill="#000">${escXml(displayName)}</text>
+      <text x="${centerX.toFixed(2)}" y="${svgNameY.toFixed(2)}" font-family="${helvFont}" font-size="${NAME_SZ}" fill="rgba(96,96,96,0.9)">${escXml(label)}</text>
+      <text x="${(centerX + labelW).toFixed(2)}" y="${svgNameY.toFixed(2)}" font-family="${nameFont}" font-style="${nameStyle}" font-weight="${nameWeight}" font-size="${NAME_SZ}" fill="#000">${escXml(fullName)}</text>
       <!-- Date / Reason -->
       ${svgBodyXml}
     </svg>`;
@@ -5595,149 +5582,121 @@ function pickNameFont(fonts, key) {
 function drawStampSigAppearance(page, p, opts) {
   const { rgb } = window.PDFLib;
   const { fonts, meta, reason, dateStr, qrPayload, sigImgObj } = opts;
-  const x1 = p.xPdf, y1 = p.yPdf, w = p.wPdf, h = p.hPdf;
-  const pad = 5;
-  // Borderless — the stamp sits flat on the page. The dashed .placement
-  // wrapper in the browser preview still shows the drop target while
-  // authoring, but the printed PDF carries no rectangle around the content.
+  const x1 = p.xPdf, y1 = p.yPdf, boxW = p.wPdf, boxH = p.hPdf;
 
-  const innerH = h - 2 * pad;
-  // Side columns (sig image + QR). Three bounds, lowest wins:
-  //   - innerH:          never taller than the stamp box.
-  //   - w * 0.28:        no more than ~28 % of the width per side.
-  //   - (w − 86) / 2:    leaves ≥ 50 pt in the centre column for the name
-  //                      line, so a narrow stamp doesn't push the QR into
-  //                      the "Digitally signed by …" text.
-  // Floor at 10 pt so a very narrow stamp still has visible side marks
-  // rather than vanishing into a thin strip.
-  const CENTRE_MIN = 50;
-  const SIDE_PAIR_OVERHEAD = 2 * pad + 16; // imgX gap (8) + qrX gap (8)
-  const sideSize = Math.max(10, Math.min(
-    innerH,
-    w * 0.28,
-    (w - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
-  ));
-  const qrX     = x1 + w - pad - sideSize;
-  const qrY     = y1 + (h - sideSize) / 2;
+  // ── Layout model: SVG-style uniform scaling ──────────────────────────
+  // Everything inside the stamp (sig image, name line, body lines, QR)
+  // is laid out at REFERENCE sizes in a local "natural" coordinate
+  // system, measured from real font metrics. Then the whole block is
+  // uniformly scaled to fit the user's box ("meet" semantics), and
+  // centered inside it. There is no per-element clamping, no name
+  // truncation, no font-size floor — the full name always renders, the
+  // QR never crosses it, and the three columns scale together.
+  const PAD   = 5;
+  const NAME_SZ = 10;
+  const BODY_SZ = 7;
+  const LINE_PITCH = BODY_SZ + 3;
+  const GAP   = 8;
+  const SIDE  = 60;        // natural sig-image / QR edge
 
-  // Left column: signature image. Always reserved so the layout doesn't
-  // shift depending on whether the user has uploaded a PNG yet — when they
-  // haven't, we draw a light "signature" placeholder to make it obvious
-  // that this slot expects an uploaded signature image.
-  const imgX = x1 + pad;
-  const imgY = y1 + (h - sideSize) / 2;
+  const label    = 'Digitally signed by ';
+  const name     = String(meta.name || '');
+  const nameFont = pickNameFont(fonts, p.nameFont || 'serif-italic');
+
+  const labelW    = fonts.helv.widthOfTextAtSize(label, NAME_SZ);
+  const nameW     = nameFont.widthOfTextAtSize(name,  NAME_SZ);
+  const nameLineW = labelW + nameW;
+
+  const bodyLines = [`Date: ${dateStr}`];
+  if (reason) bodyLines.push(`Reason: ${reason}`);
+  const bodyMaxW  = bodyLines.reduce(
+    (m, t) => Math.max(m, fonts.helv.widthOfTextAtSize(t, BODY_SZ)), 0);
+
+  const centerW   = Math.max(nameLineW, bodyMaxW);
+  const naturalW  = PAD + SIDE + GAP + centerW + GAP + SIDE + PAD;
+  const textBlockH = NAME_SZ + LINE_PITCH * bodyLines.length;
+  const naturalH  = PAD + Math.max(SIDE, textBlockH) + PAD;
+
+  // Uniform scale factor. The axis in deficit wins — meet behavior.
+  const s    = Math.min(boxW / naturalW, boxH / naturalH);
+  const offX = x1 + (boxW - naturalW * s) / 2;
+  const offY = y1 + (boxH - naturalH * s) / 2;
+  const X = nx => offX + nx * s;
+  const Y = ny => offY + ny * s;
+  const S = v  => v * s;
+
+  const cyN = naturalH / 2;
+
+  // Left column: signature image (or dashed placeholder).
+  const imgNx = PAD;
+  const imgNy = cyN - SIDE / 2;
   if (sigImgObj) {
-    drawImageFit(page, sigImgObj, imgX, imgY, sideSize, sideSize);
+    drawImageFit(page, sigImgObj, X(imgNx), Y(imgNy), S(SIDE), S(SIDE));
   } else {
-    // Dashed accent border + faint "signature" label so the empty slot is
-    // clearly a placeholder rather than a rendering bug.
     page.drawRectangle({
-      x: imgX + 1, y: imgY + 1,
-      width: sideSize - 2, height: sideSize - 2,
-      borderColor: rgb(0.7, 0.78, 0.95), borderWidth: 0.75,
-      borderDashArray: [3, 3],
+      x: X(imgNx + 1), y: Y(imgNy + 1),
+      width: S(SIDE - 2), height: S(SIDE - 2),
+      borderColor: rgb(0.7, 0.78, 0.95),
+      borderWidth: Math.max(0.3, 0.75 * s),
+      borderDashArray: [S(3), S(3)],
     });
-    const labelSize = Math.max(6, Math.min(9, Math.floor(sideSize * 0.14)));
-    const labelText = 'signature';
-    const labelW = fonts.helv.widthOfTextAtSize(labelText, labelSize);
-    page.drawText(labelText, {
-      x: imgX + (sideSize - labelW) / 2,
-      y: imgY + (sideSize - labelSize) / 2,
-      size: labelSize, font: fonts.helv,
+    const lblSz = SIDE * 0.14;
+    const lblW  = fonts.helv.widthOfTextAtSize('signature', lblSz);
+    page.drawText('signature', {
+      x: X(imgNx + (SIDE - lblW) / 2),
+      y: Y(imgNy + (SIDE - lblSz) / 2),
+      size: S(lblSz), font: fonts.helv,
       color: rgb(0.55, 0.62, 0.85),
     });
   }
 
-  // Centre column: watermark seal (faint) behind text, then labelled name +
-  // body lines.
-  const centerX = imgX + sideSize + 8;
-  const centerW = qrX - centerX - 8;
+  // Centre column.
+  const centerNx = PAD + SIDE + GAP;
 
-  const wmSize = Math.min(innerH * 1.05, centerW * 0.65);
-  const wmX = centerX + (centerW - wmSize) / 2;
-  const wmY = y1 + (h - wmSize) / 2;
-  drawFaviconWatermark(page, wmX, wmY, wmSize, 0.10);
+  // Watermark check behind the text block.
+  const wmSize = Math.min(SIDE * 0.95, centerW * 0.6);
+  const wmNx = centerNx + (centerW - wmSize) / 2;
+  const wmNy = cyN - wmSize / 2;
+  drawFaviconWatermark(page, X(wmNx), Y(wmNy), S(wmSize), 0.10);
 
-  // Name line: HARD invariant — the QR column must never be crossed by
-  // name text, regardless of name length or box dimensions. Two defences:
-  //   1. Shrink nameSize until the line fits (down to 4 pt — below that
-  //      it's unreadable, so we stop and fall through to step 2).
-  //   2. If 4 pt still overflows (very long name in a very narrow stamp),
-  //      truncate the name with an ellipsis so the line fits exactly.
-  // Only AFTER both passes do we emit any drawText calls — the previous
-  // code's single-step scale-and-floor would draw at 6 pt even when 6 pt
-  // overflowed, which is where the "QR under my name" complaint came from.
-  const nameFont = pickNameFont(fonts, p.nameFont || 'serif-italic');
-  const label = 'Digitally signed by ';
-  const fullName = String(meta.name || '');
-  const lineW = (sz, nm) => fonts.helv.widthOfTextAtSize(label, sz)
-                          + nameFont.widthOfTextAtSize(nm, sz);
-  let nameSize = Math.max(6, Math.floor(h * 0.20));
-  while (nameSize > 4 && lineW(nameSize, fullName) > centerW) nameSize -= 1;
-  let drawName = fullName;
-  if (lineW(nameSize, drawName) > centerW) {
-    // Still over at 4 pt — truncate with "…". Shrink char-by-char from
-    // the end until the labelled line (with ellipsis) fits exactly.
-    const ell = '…';
-    while (drawName.length > 1 &&
-           lineW(nameSize, drawName.slice(0, -1) + ell) > centerW) {
-      drawName = drawName.slice(0, -1);
-    }
-    drawName = drawName.slice(0, -1) + ell;
-  }
-  const labelW = fonts.helv.widthOfTextAtSize(label, nameSize);
-  const nameLineY = y1 + h - pad - nameSize;
+  // Name line (top-anchored).
+  const nameNy = naturalH - PAD - NAME_SZ;
   page.drawText(label, {
-    x: centerX, y: nameLineY, size: nameSize,
+    x: X(centerNx), y: Y(nameNy), size: S(NAME_SZ),
     font: fonts.helv, color: rgb(0.4, 0.4, 0.4),
   });
-  page.drawText(drawName, {
-    x: centerX + labelW, y: nameLineY, size: nameSize,
+  page.drawText(name, {
+    x: X(centerNx + labelW), y: Y(nameNy), size: S(NAME_SZ),
     font: nameFont, color: rgb(0, 0, 0),
   });
-  const bodySize = Math.max(6, Math.floor(h * 0.13));
-  // Line pitch keyed off bodySize so Date / Reason never overlap each
-  // other at any box height; the previous mix of (bodySize+3) / (bodySize+2)
-  // under a hard cap would collapse when h grew and the two spacers didn't
-  // keep up with nameSize.
-  const linePitch = bodySize + Math.max(2, Math.floor(bodySize * 0.3));
-  let cursorY = nameLineY - linePitch;
-  const fitBody = (text) => {
-    let sz = bodySize;
-    if (fonts.helv.widthOfTextAtSize(text, sz) > centerW) {
-      sz = Math.max(6, Math.floor(sz * (centerW / fonts.helv.widthOfTextAtSize(text, sz)) * 0.95));
-    }
-    return sz;
-  };
-  if (cursorY >= y1 + pad) {
-    const t = `Date: ${dateStr}`;
-    page.drawText(t, {
-      x: centerX, y: cursorY, size: fitBody(t),
+
+  // Body lines (Date, optional Reason).
+  let cursorNy = nameNy - LINE_PITCH;
+  for (const line of bodyLines) {
+    page.drawText(line, {
+      x: X(centerNx), y: Y(cursorNy), size: S(BODY_SZ),
       font: fonts.helv, color: rgb(0.32, 0.32, 0.32),
     });
-  }
-  if (reason) {
-    cursorY -= linePitch;
-    if (cursorY >= y1 + pad) {
-      const t = `Reason: ${reason}`;
-      page.drawText(t, {
-        x: centerX, y: cursorY, size: fitBody(t),
-        font: fonts.helv, color: rgb(0.32, 0.32, 0.32),
-      });
-    }
+    cursorNy -= LINE_PITCH;
   }
 
-  // Right column: QR code (falls back to a seal if we have no payload).
-  // When a real http(s) URL is used, also add a Link annotation over the QR
-  // rectangle so clicking it in a desktop viewer follows the URL.
+  // Right column: QR (or seal fallback), clickable link when payload
+  // is a URL. Natural coords stay a single square; the Link rect uses
+  // the SCALED coords because annotations live in page space.
+  const qrNx = centerNx + centerW + GAP;
+  const qrNy = cyN - SIDE / 2;
+  const qrScX = X(qrNx), qrScY = Y(qrNy), qrScS = S(SIDE);
   if (qrPayload) {
     try {
-      drawQrCode(page, String(qrPayload), qrX, qrY, sideSize);
-      addUriLinkAnnotation(page, [qrX, qrY, qrX + sideSize, qrY + sideSize], String(qrPayload));
-    } catch (_) { drawCheckSeal(page, qrX, qrY, sideSize); }
+      drawQrCode(page, String(qrPayload), qrScX, qrScY, qrScS);
+      addUriLinkAnnotation(page,
+        [qrScX, qrScY, qrScX + qrScS, qrScY + qrScS],
+        String(qrPayload));
+    } catch (_) { drawCheckSeal(page, qrScX, qrScY, qrScS); }
   } else {
-    drawCheckSeal(page, qrX, qrY, sideSize);
+    drawCheckSeal(page, qrScX, qrScY, qrScS);
   }
+  return;
 }
 
 // Circular accent-blue seal with a white check inside. Fallback used when a
@@ -7140,31 +7099,18 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
     sigFieldRef = context.register(sigField);
     for (const p of newSigs) {
       const page = pdfDoc.getPage(p.pageIndex);
-      // Widget rect covers the visible sig mark. For the stamp appearance
-      // with a QR column, exclude the QR area so the Link annotation
-      // sitting over the QR receives the click instead of the widget
-      // stealing it. The signature is still valid — the widget only needs
-      // to reference /V for that; its rect is just the interactive region.
-      let wRectRight = p.xPdf + p.wPdf;
-      if ((p.appearance || appearance) === 'stamp' && (stamp && stamp.qrPayload || certVaultUrl ||
-           (typeof autoDetectVerifierUrl === 'function' && autoDetectVerifierUrl()))) {
-        // Same three-bound sideSize clamp as drawStampSigAppearance so the
-        // widget's clickable rect lines up with the drawn QR column.
-        const pad = 5;
-        const innerH = p.hPdf - 2 * pad;
-        const CENTRE_MIN = 50;
-        const SIDE_PAIR_OVERHEAD = 2 * pad + 16;
-        const sideSize = Math.max(10, Math.min(
-          innerH,
-          p.wPdf * 0.28,
-          (p.wPdf - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
-        ));
-        wRectRight = p.xPdf + p.wPdf - pad - sideSize - 2;
-      }
+      // Widget rect covers the whole placement box. The stamp sig is now
+      // drawn via uniform scaling of a natural layout (see
+      // drawStampSigAppearance), so the QR's exact coords depend on name
+      // length and no longer line up with a static "right-28%" slice.
+      // The Link annotation emitted inside drawStampSigAppearance sits
+      // at the real scaled QR rect and renders after the widget in the
+      // page /Annots array, so desktop viewers that honour annotation
+      // z-order still pick it up on click.
       const widget = context.obj({
         Type: PDFName.of('Annot'),
         Subtype: PDFName.of('Widget'),
-        Rect: [p.xPdf, p.yPdf, wRectRight, p.yPdf + p.hPdf],
+        Rect: [p.xPdf, p.yPdf, p.xPdf + p.wPdf, p.yPdf + p.hPdf],
         F: PDFNumber.of(132),
         P: page.ref,
         Parent: sigFieldRef,
@@ -8379,152 +8325,126 @@ function buildStampSigAppearanceStream({
   sigImgResource, sigImgAspect,
   measureHelv, measureName,
 }) {
-  // `measureHelv(text, size)` and `measureName(text, size)` return real
-  // Standard-14 font widths. When absent (older callers) we fall back to a
-  // conservative 0.55 × size heuristic — that's over-estimated for narrow
-  // characters and under-estimated for wide caps, but at least the sizing
-  // pass sees "too wide" rather than "just barely" and shrinks accordingly.
+  // Same SVG-style uniform scaling as drawStampSigAppearance: lay the
+  // stamp out at natural reference sizes, then emit a `q` + `cm` to
+  // scale + centre inside the user's box. The whole stamp (sig image,
+  // QR, name, body, watermark) scales together — no truncation, no
+  // overlap, no per-element clamping.
   const _mh = measureHelv || ((t, s) => String(t).length * s * 0.55);
   const _mn = measureName || ((t, s) => String(t).length * s * 0.55);
-  const pad = 5;
-  const innerH = h - 2 * pad;
-  // Same three-bound clamp as drawStampSigAppearance: never larger than
-  // innerH, never more than 28 % of width, and always leaves ≥ 50 pt in
-  // the centre column for the name line. Was Math.max(24, …) which would
-  // spill the sig image / QR onto the page on short / narrow stamps.
-  const CENTRE_MIN = 50;
-  const SIDE_PAIR_OVERHEAD = 2 * pad + 16;
-  const sideSize = Math.max(10, Math.min(
-    innerH,
-    w * 0.28,
-    (w - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
-  ));
-  const qrX     = w - pad - sideSize;
-  const qrY     = (h - sideSize) / 2;
-  const imgX    = pad;
-  const imgY    = (h - sideSize) / 2;
-  const centerX = imgX + sideSize + 8;
-  const centerW = qrX - centerX - 8;
+
+  const PAD = 5;
+  const NAME_SZ = 10;
+  const BODY_SZ = 7;
+  const LINE_PITCH = BODY_SZ + 3;
+  const GAP = 8;
+  const SIDE = 60;
+
+  const label = 'Digitally signed by ';
+  const nm    = String(name || '');
+  const labelW    = _mh(label, NAME_SZ);
+  const nameW     = _mn(nm,    NAME_SZ);
+  const nameLineW = labelW + nameW;
+  const bodyItems = [`Date: ${dateStr}`];
+  if (reason) bodyItems.push(`Reason: ${reason}`);
+  const bodyMaxW = bodyItems.reduce(
+    (m, t) => Math.max(m, _mh(t, BODY_SZ)), 0);
+  const centerW = Math.max(nameLineW, bodyMaxW);
+
+  const naturalW = PAD + SIDE + GAP + centerW + GAP + SIDE + PAD;
+  const textBlockH = NAME_SZ + LINE_PITCH * bodyItems.length;
+  const naturalH = PAD + Math.max(SIDE, textBlockH) + PAD;
+
+  const s = Math.min(w / naturalW, h / naturalH);
+  const offX = (w - naturalW * s) / 2;
+  const offY = (h - naturalH * s) / 2;
 
   const lines = [];
   lines.push('q');
-  // Borderless: no rectangle around the stamp — the sig image + name + QR
-  // read as a block on their own, and the page content underneath stays
-  // completely unobscured.
+  // Translate + uniform scale. All following coords are in NATURAL units.
+  // PDF `cm` is: a b c d e f ⇒ [a b 0 / c d 0 / e f 1]. Pure scale+trans:
+  // `s 0 0 s tx ty cm`.
+  lines.push(`${pdfNum(s)} 0 0 ${pdfNum(s)} ${pdfNum(offX)} ${pdfNum(offY)} cm`);
 
-  // Left column: signature image via /XObject Do, if one is embedded. When
-  // none is embedded, draw a dashed placeholder so the slot reads as
-  // "signature goes here" rather than a rendering bug.
+  const cyN = naturalH / 2;
+  const imgX = PAD;
+  const imgY = cyN - SIDE / 2;
+  const centerX = PAD + SIDE + GAP;
+  const qrX = centerX + centerW + GAP;
+  const qrY = cyN - SIDE / 2;
+
+  // Left column: signature image or dashed placeholder.
   if (sigImgResource) {
-    // Fit within sideSize × sideSize while preserving aspect.
     const ar = sigImgAspect || 1;
-    let iw = sideSize, ih = sideSize;
-    if (ar >= 1) ih = sideSize / ar;
-    else         iw = sideSize * ar;
-    const ix = imgX + (sideSize - iw) / 2;
-    const iy = imgY + (sideSize - ih) / 2;
+    let iw = SIDE, ih = SIDE;
+    if (ar >= 1) ih = SIDE / ar;
+    else         iw = SIDE * ar;
+    const ix = imgX + (SIDE - iw) / 2;
+    const iy = imgY + (SIDE - ih) / 2;
     lines.push('q');
     lines.push(`${pdfNum(iw)} 0 0 ${pdfNum(ih)} ${pdfNum(ix)} ${pdfNum(iy)} cm`);
     lines.push(`/${sigImgResource} Do`);
     lines.push('Q');
   } else {
-    // Dashed light-accent rectangle + faint "signature" label.
     lines.push('q');
     lines.push('0.7 0.78 0.95 RG');
     lines.push('0.75 w');
     lines.push('[3 3] 0 d');
-    lines.push(`${pdfNum(imgX + 1)} ${pdfNum(imgY + 1)} ${pdfNum(sideSize - 2)} ${pdfNum(sideSize - 2)} re S`);
+    lines.push(`${pdfNum(imgX + 1)} ${pdfNum(imgY + 1)} ${pdfNum(SIDE - 2)} ${pdfNum(SIDE - 2)} re S`);
     lines.push('Q');
-    const labelSize = Math.max(6, Math.min(9, Math.floor(sideSize * 0.14)));
-    const labelText = 'signature';
-    // Approximate label width using the 0.5 heuristic.
-    const labelW = labelText.length * labelSize * 0.5;
+    const lblSz = SIDE * 0.14;
+    const lblW  = 'signature'.length * lblSz * 0.5;
     lines.push('BT');
     lines.push('0.55 0.62 0.85 rg');
-    lines.push(`/F1 ${labelSize} Tf`);
-    lines.push(`${pdfNum(imgX + (sideSize - labelW) / 2)} ${pdfNum(imgY + (sideSize - labelSize) / 2)} Td`);
-    lines.push(`(${escapePdfString(labelText)}) Tj`);
+    lines.push(`/F1 ${pdfNum(lblSz)} Tf`);
+    lines.push(`${pdfNum(imgX + (SIDE - lblW) / 2)} ${pdfNum(imgY + (SIDE - lblSz) / 2)} Td`);
+    lines.push(`(${escapePdfString('signature')}) Tj`);
     lines.push('ET');
   }
 
   // Centre watermark (faint), then text overlay.
-  const wmSize = Math.min(innerH * 1.05, centerW * 0.75);
+  const wmSize = Math.min(SIDE * 0.95, centerW * 0.6);
   const wmX = centerX + (centerW - wmSize) / 2;
-  const wmY = (h - wmSize) / 2;
+  const wmY = cyN - wmSize / 2;
   lines.push(watermarkContentOps(wmX, wmY, wmSize, 0.12));
 
-  // "Digitally signed by NAME" on a single line — shrink until it fits,
-  // using real font metrics so the line width matches what a viewer draws.
-  const label = 'Digitally signed by ';
-  // No upper cap on nameSize / bodySize — stamp text grows with the box.
-  // Was Math.min(12, …) / Math.min(9, …), which kept the text tiny when
-  // the user enlarged the stamp and caused layout overlaps in both
-  // directions.
-  // HARD invariant: name must never cross into the QR column.
-  // Shrink nameSize down to 4 pt to fit; if still over, truncate the name
-  // with an ellipsis so the line fits exactly inside centerW.
-  const lineWidth = (sz, nm) => _mh(label, sz) + _mn(nm, sz);
-  let nameSize = Math.max(6, Math.floor(h * 0.20));
-  while (nameSize > 4 && lineWidth(nameSize, name) > centerW) nameSize -= 1;
-  let drawName = String(name || '');
-  if (lineWidth(nameSize, drawName) > centerW) {
-    const ell = '…';
-    while (drawName.length > 1 &&
-           lineWidth(nameSize, drawName.slice(0, -1) + ell) > centerW) {
-      drawName = drawName.slice(0, -1);
-    }
-    drawName = drawName.slice(0, -1) + ell;
-  }
-  const bodySize = Math.max(5, Math.floor(h * 0.13));
-  const linePitch = bodySize + Math.max(2, Math.floor(bodySize * 0.3));
-  const nameLineY = h - pad - nameSize;
-  // Muted label.
+  // Name line (top-anchored).
+  const nameLineY = naturalH - PAD - NAME_SZ;
   lines.push('BT');
   lines.push('0.4 0.4 0.4 rg');
-  lines.push(`/F1 ${nameSize} Tf`);
+  lines.push(`/F1 ${NAME_SZ} Tf`);
   lines.push(`${pdfNum(centerX)} ${pdfNum(nameLineY)} Td`);
   lines.push(`(${escapePdfString(label)}) Tj`);
   lines.push('ET');
-  // Name in the chosen font, positioned right after the label — the exact
-  // rendered width of the label string, so the name starts precisely where
-  // the label ends (no gap, no overlap).
-  const labelAdvance = _mh(label, nameSize);
   lines.push('BT');
   lines.push('0 0 0 rg');
-  lines.push(`/${nameFontResource} ${nameSize} Tf`);
-  lines.push(`${pdfNum(centerX + labelAdvance)} ${pdfNum(nameLineY)} Td`);
-  lines.push(`(${escapePdfString(drawName)}) Tj`);
+  lines.push(`/${nameFontResource} ${NAME_SZ} Tf`);
+  lines.push(`${pdfNum(centerX + labelW)} ${pdfNum(nameLineY)} Td`);
+  lines.push(`(${escapePdfString(nm)}) Tj`);
   lines.push('ET');
 
-  // Date + optional reason on their own lines, each shrunk to fit centerW.
-  let cursorY = nameLineY - linePitch;
-  const bodyItems = [`Date: ${dateStr}`];
-  if (reason) bodyItems.push(`Reason: ${reason}`);
+  // Body lines.
+  let cursorY = nameLineY - LINE_PITCH;
   lines.push('BT');
   lines.push('0.32 0.32 0.32 rg');
   for (const bl of bodyItems) {
-    if (cursorY < pad) break;
-    let sz = bodySize;
-    if (_mh(bl, sz) > centerW) {
-      sz = Math.max(5, Math.floor(sz * (centerW / _mh(bl, sz)) * 0.96));
-    }
-    lines.push(`/F1 ${sz} Tf`);
+    lines.push(`/F1 ${BODY_SZ} Tf`);
     lines.push(`1 0 0 1 ${pdfNum(centerX)} ${pdfNum(cursorY)} Tm`);
     lines.push(`(${escapePdfString(bl)}) Tj`);
-    cursorY -= linePitch;
+    cursorY -= LINE_PITCH;
   }
   lines.push('ET');
 
-  // Right column: QR (falls back to seal if no payload).
+  // Right column: QR (seal fallback).
   let drewQr = false;
   if (qrPayload && typeof qrcode === 'function') {
     try {
-      lines.push(qrContentOps(qrPayload, qrX, qrY, sideSize));
+      lines.push(qrContentOps(qrPayload, qrX, qrY, SIDE));
       drewQr = true;
     } catch (_) { /* fall through */ }
   }
   if (!drewQr) {
-    lines.push(sealContentOps(qrX, qrY, sideSize));
+    lines.push(sealContentOps(qrX, qrY, SIDE));
   }
 
   lines.push('Q');
@@ -8784,23 +8704,38 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     // itself sits in the widget's Form XObject and isn't clickable.
     const qrUrl = useStamp ? String(qrPayload || certVaultUrl || '') : '';
     if (qrUrl && /^https?:\/\//i.test(qrUrl)) {
-      // Mirrors buildStampSigAppearanceStream's sideSize clamp so the
-      // Link annotation lands exactly over the drawn QR.
-      const pad = 5;
-      const innerH = p.hPdf - 2 * pad;
-      const CENTRE_MIN = 50;
-      const SIDE_PAIR_OVERHEAD = 2 * pad + 16;
-      const wSize = Math.max(10, Math.min(
-        innerH,
-        p.wPdf * 0.28,
-        (p.wPdf - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
-      ));
-      const qrX0 = p.xPdf + p.wPdf - pad - wSize;
-      const qrY0 = p.yPdf + (p.hPdf - wSize) / 2;
+      // Compute the ACTUAL scaled QR rect using the same natural-layout
+      // math as buildStampSigAppearanceStream, so the Link annotation
+      // lands exactly on top of the drawn QR regardless of name length
+      // or box aspect ratio.
+      const PAD = 5, NAME_SZ = 10, BODY_SZ = 7, GAP = 8, SIDE = 60;
+      const LINE_PITCH = BODY_SZ + 3;
+      const label = 'Digitally signed by ';
+      const nameFontPsL  = stdFontNameFor(p.nameFont || 'serif-italic');
+      const _mhL = (t, s) => measure('Helvetica', t, s);
+      const _mnL = (t, s) => measure(nameFontPsL, t, s);
+      const labelWL = _mhL(label, NAME_SZ);
+      const nameWL  = _mnL(meta.name || '', NAME_SZ);
+      const bodyItemsL = [`Date: ${dateStr}`];
+      if (reason) bodyItemsL.push(`Reason: ${reason}`);
+      const bodyMaxWL = bodyItemsL.reduce((m, t) => Math.max(m, _mhL(t, BODY_SZ)), 0);
+      const centerWL = Math.max(labelWL + nameWL, bodyMaxWL);
+      const naturalWL = PAD + SIDE + GAP + centerWL + GAP + SIDE + PAD;
+      const textBlockHL = NAME_SZ + LINE_PITCH * bodyItemsL.length;
+      const naturalHL = PAD + Math.max(SIDE, textBlockHL) + PAD;
+      const sL = Math.min(p.wPdf / naturalWL, p.hPdf / naturalHL);
+      const offXL = p.xPdf + (p.wPdf - naturalWL * sL) / 2;
+      const offYL = p.yPdf + (p.hPdf - naturalHL * sL) / 2;
+      const cyNL = naturalHL / 2;
+      const qrNxL = PAD + SIDE + GAP + centerWL + GAP;
+      const qrNyL = cyNL - SIDE / 2;
+      const qrX0 = offXL + qrNxL * sL;
+      const qrY0 = offYL + qrNyL * sL;
+      const qrSz = SIDE * sL;
       const linkNum = alloc();
       objBodies.push({ num: linkNum, body:
         `${linkNum} 0 obj\n<< /Type /Annot /Subtype /Link /F 4\n` +
-        `   /Rect [${pdfNum(qrX0)} ${pdfNum(qrY0)} ${pdfNum(qrX0 + wSize)} ${pdfNum(qrY0 + wSize)}]\n` +
+        `   /Rect [${pdfNum(qrX0)} ${pdfNum(qrY0)} ${pdfNum(qrX0 + qrSz)} ${pdfNum(qrY0 + qrSz)}]\n` +
         `   /Border [0 0 0]\n` +
         `   /A << /Type /Action /S /URI /URI (${escapePdfString(qrUrl)}) >>\n>>\nendobj\n`
       });
