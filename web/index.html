@@ -4057,18 +4057,25 @@ function onPageClick(e) {
   const isText   = currentTool === 'text';
   const isStamp  = currentTool === 'stamp';
   const isRedact = currentTool === 'redact';
-  // Default placement sizes. ~20 % smaller than the original values
-  // (220×72 → 176×58, 320×64 → 256×52, 180×22 → 144×18, 180×20 → 144×16,
-  // 500×44 → 400×36) — the previous defaults consistently landed too
-  // large on real documents and had to be hand-shrunk every time.
+  // Default placement sizes. Tuned for scanned forms with small printed
+  // signature fields — ~45 % smaller than the original defaults for sigs
+  // (which still read "huge" at the previous 20 % reduction):
+  //   220×72 → 140×44        (plain-text sig)
+  //   320×64 → 180×36        (stamp-appearance sig)
+  //   180×22 → 140×18        (text box)
+  //   180×20 → 140×16        (redact)
+  //   500×44 → 360×32        (manual stamp)
+  // The HARD "name must not cross the QR" guarantee in drawStampSigAppearance
+  // etc. means the stamp sig can shrink without producing overlap — the
+  // name auto-shrinks to 4 pt and truncates with "…" below that.
   const sigStampAppearance = !isText && !isStamp && !isRedact &&
     document.querySelector('input[name="appearance"]:checked')?.value === 'stamp';
-  const wPdf = isStamp ? Math.min(400, meta.viewport.viewBox[2] - 20)
-             : isRedact ? 144
-             : isText   ? 144
-             : sigStampAppearance ? 256
-             :            176;
-  const hPdf = isStamp ? 36 : (isRedact ? 16 : (isText ? 18 : (sigStampAppearance ? 52 : 58)));
+  const wPdf = isStamp ? Math.min(360, meta.viewport.viewBox[2] - 20)
+             : isRedact ? 140
+             : isText   ? 140
+             : sigStampAppearance ? 180
+             :            140;
+  const hPdf = isStamp ? 32 : (isRedact ? 16 : (isText ? 18 : (sigStampAppearance ? 36 : 44)));
   pushUndo();
   const p = {
     id: placementIdSeq++,
@@ -4325,13 +4332,22 @@ function renderPlacementPreview(p) {
     let nameSize = Math.max(6, Math.floor(h * 0.20));
     const bodySize = Math.max(5, Math.floor(h * 0.13));
     const linePitch = bodySize + Math.max(2, Math.floor(bodySize * 0.3));
-    // Cheap advance estimate (~0.5 × size for Helvetica); shrink the whole
-    // "Digitally signed by NAME" line to fit centerW.
-    const displayName = identity.meta?.name || 'Your name';
+    // Same HARD "name never crosses QR" rule as the PDF branches — shrink
+    // nameSize to 4 pt, then truncate with ellipsis if still over. Width
+    // estimates use the cheap 0.5 × size × chars heuristic since the live
+    // SVG is a preview, not the authoritative measurement.
+    const fullName = identity.meta?.name || 'Your name';
     const label = 'Digitally signed by ';
-    const estLine = (sz) => (label.length + displayName.length) * sz * 0.5;
-    if (estLine(nameSize) > centerW) {
-      nameSize = Math.max(5, Math.floor(nameSize * (centerW / estLine(nameSize)) * 0.95));
+    const estLine = (sz, nm) => (label.length + String(nm).length) * sz * 0.5;
+    while (nameSize > 4 && estLine(nameSize, fullName) > centerW) nameSize -= 1;
+    let displayName = fullName;
+    if (estLine(nameSize, displayName) > centerW) {
+      const ell = '…';
+      while (displayName.length > 1 &&
+             estLine(nameSize, displayName.slice(0, -1) + ell) > centerW) {
+        displayName = displayName.slice(0, -1);
+      }
+      displayName = displayName.slice(0, -1) + ell;
     }
     const labelAdvance = nameSize * 0.5 * label.length;
     const nameLineY = h - pad - nameSize * 0.15; // SVG baseline near top
@@ -4723,7 +4739,10 @@ function wireDragResize(p, handle) {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   });
-  // Resize (from bottom-right corner)
+  // Resize (from bottom-right corner).
+  // Hold Shift to lock aspect ratio — the user's "scaling 3 things at
+  // the same time is impossible" complaint is partly about having to
+  // match width/height drag by hand; Shift just scales both together.
   handle.addEventListener('mousedown', ev => {
     ev.preventDefault(); ev.stopPropagation();
     selectPlacement(p.id);
@@ -4732,16 +4751,36 @@ function wireDragResize(p, handle) {
     const startW = parseFloat(el.style.width);
     const startH = parseFloat(el.style.height);
     const startX = ev.clientX, startY = ev.clientY;
+    const startAspect = startW / Math.max(1, startH);
     const L = parseFloat(el.style.left), T = parseFloat(el.style.top);
     let undoPushed = false;
+    // Throttle the live SVG re-render to one frame so dragging stays
+    // smooth even on long documents. renderPlacementPreview early-returns
+    // for text/stamp/redact types so this is a no-op for them.
+    let rafPending = false;
+    const scheduleLiveRelayout = () => {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        commitPlacementFromDom(p);
+      });
+    };
     function onMove(mv) {
       if (!undoPushed) { pushUndo(); undoPushed = true; }
       const dx = mv.clientX - startX;
       const dy = mv.clientY - startY;
-      const W = Math.max(30, Math.min(wrapRect.width - L, startW + dx));
-      const H = Math.max(20, Math.min(wrapRect.height - T, startH + dy));
+      let W = Math.max(30, Math.min(wrapRect.width - L, startW + dx));
+      let H = Math.max(20, Math.min(wrapRect.height - T, startH + dy));
+      // Aspect lock on Shift. Use whichever axis moved more as the
+      // dominant one so the drag follows the mouse.
+      if (mv.shiftKey) {
+        if (Math.abs(dx) >= Math.abs(dy)) H = Math.max(20, W / startAspect);
+        else                              W = Math.max(30, H * startAspect);
+      }
       el.style.width = W + 'px';
       el.style.height = H + 'px';
+      scheduleLiveRelayout();
     }
     function onUp() {
       document.removeEventListener('mousemove', onMove);
@@ -5619,18 +5658,32 @@ function drawStampSigAppearance(page, p, opts) {
   const wmY = y1 + (h - wmSize) / 2;
   drawFaviconWatermark(page, wmX, wmY, wmSize, 0.10);
 
-  // Text: "Digitally signed by NAME" on one line — shrink the font so the
-  // whole line fits inside the centre column, never wrap or overflow.
-  // Sizes scale with box height, no artificial cap: a user who enlarges the
-  // stamp expects the whole thing (image, QR, text) to grow together. The
-  // 6 pt floor stays — below that the text is unreadable.
+  // Name line: HARD invariant — the QR column must never be crossed by
+  // name text, regardless of name length or box dimensions. Two defences:
+  //   1. Shrink nameSize until the line fits (down to 4 pt — below that
+  //      it's unreadable, so we stop and fall through to step 2).
+  //   2. If 4 pt still overflows (very long name in a very narrow stamp),
+  //      truncate the name with an ellipsis so the line fits exactly.
+  // Only AFTER both passes do we emit any drawText calls — the previous
+  // code's single-step scale-and-floor would draw at 6 pt even when 6 pt
+  // overflowed, which is where the "QR under my name" complaint came from.
   const nameFont = pickNameFont(fonts, p.nameFont || 'serif-italic');
   const label = 'Digitally signed by ';
+  const fullName = String(meta.name || '');
+  const lineW = (sz, nm) => fonts.helv.widthOfTextAtSize(label, sz)
+                          + nameFont.widthOfTextAtSize(nm, sz);
   let nameSize = Math.max(6, Math.floor(h * 0.20));
-  const measure = (sz) =>
-    fonts.helv.widthOfTextAtSize(label, sz) + nameFont.widthOfTextAtSize(meta.name, sz);
-  if (measure(nameSize) > centerW) {
-    nameSize = Math.max(6, Math.floor(nameSize * (centerW / measure(nameSize)) * 0.95));
+  while (nameSize > 4 && lineW(nameSize, fullName) > centerW) nameSize -= 1;
+  let drawName = fullName;
+  if (lineW(nameSize, drawName) > centerW) {
+    // Still over at 4 pt — truncate with "…". Shrink char-by-char from
+    // the end until the labelled line (with ellipsis) fits exactly.
+    const ell = '…';
+    while (drawName.length > 1 &&
+           lineW(nameSize, drawName.slice(0, -1) + ell) > centerW) {
+      drawName = drawName.slice(0, -1);
+    }
+    drawName = drawName.slice(0, -1) + ell;
   }
   const labelW = fonts.helv.widthOfTextAtSize(label, nameSize);
   const nameLineY = y1 + h - pad - nameSize;
@@ -5638,7 +5691,7 @@ function drawStampSigAppearance(page, p, opts) {
     x: centerX, y: nameLineY, size: nameSize,
     font: fonts.helv, color: rgb(0.4, 0.4, 0.4),
   });
-  page.drawText(meta.name, {
+  page.drawText(drawName, {
     x: centerX + labelW, y: nameLineY, size: nameSize,
     font: nameFont, color: rgb(0, 0, 0),
   });
@@ -8407,10 +8460,20 @@ function buildStampSigAppearanceStream({
   // Was Math.min(12, …) / Math.min(9, …), which kept the text tiny when
   // the user enlarged the stamp and caused layout overlaps in both
   // directions.
+  // HARD invariant: name must never cross into the QR column.
+  // Shrink nameSize down to 4 pt to fit; if still over, truncate the name
+  // with an ellipsis so the line fits exactly inside centerW.
+  const lineWidth = (sz, nm) => _mh(label, sz) + _mn(nm, sz);
   let nameSize = Math.max(6, Math.floor(h * 0.20));
-  const lineWidth = (sz) => _mh(label, sz) + _mn(name, sz);
-  if (lineWidth(nameSize) > centerW) {
-    nameSize = Math.max(5, Math.floor(nameSize * (centerW / lineWidth(nameSize)) * 0.96));
+  while (nameSize > 4 && lineWidth(nameSize, name) > centerW) nameSize -= 1;
+  let drawName = String(name || '');
+  if (lineWidth(nameSize, drawName) > centerW) {
+    const ell = '…';
+    while (drawName.length > 1 &&
+           lineWidth(nameSize, drawName.slice(0, -1) + ell) > centerW) {
+      drawName = drawName.slice(0, -1);
+    }
+    drawName = drawName.slice(0, -1) + ell;
   }
   const bodySize = Math.max(5, Math.floor(h * 0.13));
   const linePitch = bodySize + Math.max(2, Math.floor(bodySize * 0.3));
@@ -8430,7 +8493,7 @@ function buildStampSigAppearanceStream({
   lines.push('0 0 0 rg');
   lines.push(`/${nameFontResource} ${nameSize} Tf`);
   lines.push(`${pdfNum(centerX + labelAdvance)} ${pdfNum(nameLineY)} Td`);
-  lines.push(`(${escapePdfString(name)}) Tj`);
+  lines.push(`(${escapePdfString(drawName)}) Tj`);
   lines.push('ET');
 
   // Date + optional reason on their own lines, each shrunk to fit centerW.
