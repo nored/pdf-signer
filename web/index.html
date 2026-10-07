@@ -4172,6 +4172,11 @@ function attachPlacementToPage(p) {
     strip.title = 'Drag to move';
     el.appendChild(strip);
     el.appendChild(input);
+    // Assign p.el BEFORE styling. applyTextPlacementStyle early-returns on
+    // !p.el, so if we skip this the initial text inherits body font-size
+    // and the first size nudge "jumps" from inherited CSS to the real
+    // (p.size × viewport.scale) px value — looks like a huge jump.
+    p.el = el;
     applyTextPlacementStyle(p);
   } else if (p.type === 'redact') {
     const label = document.createElement('div');
@@ -4286,8 +4291,15 @@ function renderPlacementPreview(p) {
     const h = Math.max(1, p.hPdf);
     const pad = 5;
     const innerH = Math.max(1, h - 2 * pad);
-    // Mirror the PDF side-column clamp (never inflate past the box).
-    const sideSize = Math.max(10, Math.min(innerH, w * 0.28));
+    // Mirror the PDF side-column clamp — matches drawStampSigAppearance so
+    // the preview and the final PDF show the same layout at every size.
+    const CENTRE_MIN = 50;
+    const SIDE_PAIR_OVERHEAD = 2 * pad + 16;
+    const sideSize = Math.max(10, Math.min(
+      innerH,
+      w * 0.28,
+      (w - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
+    ));
     const qrX = w - pad - sideSize;
     const qrY = (h - sideSize) / 2;
     const imgX = pad;
@@ -4659,6 +4671,12 @@ function commitPlacementFromDom(p) {
   p.yPdf = Math.min(y1, y2);
   p.wPdf = Math.abs(x2 - x1);
   p.hPdf = Math.abs(y2 - y1);
+  // Re-render the live preview whenever the box's PDF dimensions change.
+  // The stamp-signature SVG lays out QR / sig image / text column widths
+  // from w/h; without this, resize just stretches the old SVG via
+  // preserveAspectRatio="none", which hides overlap bugs until the user
+  // signs and sees the real layout.
+  renderPlacementPreview(p);
   scheduleAutosavePlacements();
 }
 
@@ -5542,11 +5560,21 @@ function drawStampSigAppearance(page, p, opts) {
   // authoring, but the printed PDF carries no rectangle around the content.
 
   const innerH = h - 2 * pad;
-  // Side columns (sig image + QR) scale with box height, capped so a wide
-  // short box doesn't produce a QR that eats the whole centre column.
-  // Never larger than innerH — the previous Math.max(24, …) could inflate
-  // the slot beyond the box on small heights and spill onto the page.
-  const sideSize = Math.max(10, Math.min(innerH, w * 0.28));
+  // Side columns (sig image + QR). Three bounds, lowest wins:
+  //   - innerH:          never taller than the stamp box.
+  //   - w * 0.28:        no more than ~28 % of the width per side.
+  //   - (w − 86) / 2:    leaves ≥ 50 pt in the centre column for the name
+  //                      line, so a narrow stamp doesn't push the QR into
+  //                      the "Digitally signed by …" text.
+  // Floor at 10 pt so a very narrow stamp still has visible side marks
+  // rather than vanishing into a thin strip.
+  const CENTRE_MIN = 50;
+  const SIDE_PAIR_OVERHEAD = 2 * pad + 16; // imgX gap (8) + qrX gap (8)
+  const sideSize = Math.max(10, Math.min(
+    innerH,
+    w * 0.28,
+    (w - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
+  ));
   const qrX     = x1 + w - pad - sideSize;
   const qrY     = y1 + (h - sideSize) / 2;
 
@@ -7064,9 +7092,17 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
       let wRectRight = p.xPdf + p.wPdf;
       if ((p.appearance || appearance) === 'stamp' && (stamp && stamp.qrPayload || certVaultUrl ||
            (typeof autoDetectVerifierUrl === 'function' && autoDetectVerifierUrl()))) {
+        // Same three-bound sideSize clamp as drawStampSigAppearance so the
+        // widget's clickable rect lines up with the drawn QR column.
         const pad = 5;
         const innerH = p.hPdf - 2 * pad;
-        const sideSize = Math.max(24, Math.min(innerH, Math.min(p.hPdf - 2 * pad, p.wPdf * 0.28)));
+        const CENTRE_MIN = 50;
+        const SIDE_PAIR_OVERHEAD = 2 * pad + 16;
+        const sideSize = Math.max(10, Math.min(
+          innerH,
+          p.wPdf * 0.28,
+          (p.wPdf - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
+        ));
         wRectRight = p.xPdf + p.wPdf - pad - sideSize - 2;
       }
       const widget = context.obj({
@@ -8296,9 +8332,17 @@ function buildStampSigAppearanceStream({
   const _mn = measureName || ((t, s) => String(t).length * s * 0.55);
   const pad = 5;
   const innerH = h - 2 * pad;
-  // Never inflate past the box (was Math.max(24, …), which would spill the
-  // sig image / QR onto the page when the user made the stamp short).
-  const sideSize = Math.max(10, Math.min(innerH, w * 0.28));
+  // Same three-bound clamp as drawStampSigAppearance: never larger than
+  // innerH, never more than 28 % of width, and always leaves ≥ 50 pt in
+  // the centre column for the name line. Was Math.max(24, …) which would
+  // spill the sig image / QR onto the page on short / narrow stamps.
+  const CENTRE_MIN = 50;
+  const SIDE_PAIR_OVERHEAD = 2 * pad + 16;
+  const sideSize = Math.max(10, Math.min(
+    innerH,
+    w * 0.28,
+    (w - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
+  ));
   const qrX     = w - pad - sideSize;
   const qrY     = (h - sideSize) / 2;
   const imgX    = pad;
@@ -8674,8 +8718,17 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     // itself sits in the widget's Form XObject and isn't clickable.
     const qrUrl = useStamp ? String(qrPayload || certVaultUrl || '') : '';
     if (qrUrl && /^https?:\/\//i.test(qrUrl)) {
+      // Mirrors buildStampSigAppearanceStream's sideSize clamp so the
+      // Link annotation lands exactly over the drawn QR.
       const pad = 5;
-      const wSize = Math.max(24, Math.min(p.hPdf - 2 * pad, Math.min(p.hPdf - 2 * pad, p.wPdf * 0.28)));
+      const innerH = p.hPdf - 2 * pad;
+      const CENTRE_MIN = 50;
+      const SIDE_PAIR_OVERHEAD = 2 * pad + 16;
+      const wSize = Math.max(10, Math.min(
+        innerH,
+        p.wPdf * 0.28,
+        (p.wPdf - CENTRE_MIN - SIDE_PAIR_OVERHEAD) / 2,
+      ));
       const qrX0 = p.xPdf + p.wPdf - pad - wSize;
       const qrY0 = p.yPdf + (p.hPdf - wSize) / 2;
       const linkNum = alloc();
