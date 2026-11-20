@@ -61,7 +61,12 @@ Every setting is per-identity. Export the identity bundle and every setting trav
 
 ## Multi-party workflows
 
-The two-supervisor thesis review case is the load-bearing use case. What actually works and what doesn't:
+Create any text fields and digital signature fields before the first signature. Each reviewer can fill their section and sign using **Leave open for form filling and signing**. The first signer can also choose **Certify, allow filling and signing** to declare those permissions in the PDF. Save the current PDF and pass that file to the next reviewer.
+
+In Acrobat, click the existing fillable fields to enter text and use a digital signature field or **Use a certificate** to sign. **Edit PDF** changes page content. Make those changes in the unsigned original before circulating it. Converting a signed PDF to images drops the digital signatures and retains only their visible appearance.
+
+Choose **Lock document** once every reviewer has finished. The first signer can apply a certification lock. A later signer can lock the form fields, including signature fields.
+
 
 - **Head signer + downstream cooperative tools** (Adobe Acrobat proper, this app, DocuSign that does true incremental sign): head signature stays valid after every downstream sig. Head can use P=3 (Certify, allow further signatures) safely.
 - **Head signer + non-cooperative tools** (Apple Preview, iLovePDF sign flow, most web "sign PDF" services): downstream rewrites the file, head signature's byte range no longer covers what's on disk, crypto fails. No PDF technology fixes this. Workaround: sign last, or use P=1 lock and accept no downstream changes.
