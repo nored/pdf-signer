@@ -4,13 +4,16 @@
   "version": "0.1.0",
   "identifier": "com.schwarz.pdfsigner",
   "build": {
-    "frontendDist": "../../web"
+    "frontendDist": "../../web",
+    "beforeBuildCommand": "node ../scripts/update-web-csp.mjs --check"
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
+        "create": false,
+        "dragDropEnabled": false,
         "title": "PDF Signer",
         "width": 1280,
         "height": 860,

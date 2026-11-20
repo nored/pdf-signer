@@ -1,11 +1,11 @@
-// Tiny static file server. Rooted at the repo root so /web/index.html works.
+// Serve the web build over loopback for Playwright.
 import { createServer } from 'http';
-import { readFile } from 'fs/promises';
-import { extname, join, resolve } from 'path';
+import { readFile, realpath } from 'fs/promises';
+import { extname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
-const ROOT = resolve(HERE, '..');
+const ROOT = await realpath(resolve(HERE, '../web'));
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -21,10 +21,13 @@ const MIME = {
 export async function startServer(port = 0) {
   const server = createServer(async (req, res) => {
     try {
-      let path = decodeURIComponent(req.url.split('?')[0]);
-      if (path === '/' || path === '') path = '/web/index.html';
-      const abs = join(ROOT, path);
-      if (!abs.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
+      let path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+      if (path === '/' || path === '/web/') path = '/web/index.html';
+      if (!path.startsWith('/web/')) { res.writeHead(404); return res.end(); }
+      const candidate = resolve(ROOT, path.slice('/web/'.length));
+      if (!candidate.startsWith(ROOT + sep)) { res.writeHead(403); return res.end(); }
+      const abs = await realpath(candidate);
+      if (!abs.startsWith(ROOT + sep)) { res.writeHead(403); return res.end(); }
       const bytes = await readFile(abs);
       res.writeHead(200, {
         'Content-Type': MIME[extname(abs).toLowerCase()] || 'application/octet-stream',

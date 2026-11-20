@@ -83,7 +83,7 @@ test('sequentially sign an Adobe-signed PDF with stamp appearance + field-lock',
     const bin = atob(b64);
     const u8 = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    const results = window.verifyPdfSignatures(u8);
+    const results = await window.verifyDocumentSignatures(u8);
     const text = new TextDecoder('latin1').decode(u8);
     return {
       count: results.length,

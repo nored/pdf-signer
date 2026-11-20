@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-save-file"
+description = "Save a document to the destination chosen in the native Save dialog."
+commands.allow = ["save_file"]

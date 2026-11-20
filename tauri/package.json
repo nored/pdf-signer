@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "tauri dev --no-dev-server",
     "build": "tauri build",
     "build:deb": "tauri build --bundles deb",
     "build:appimage": "tauri build --bundles appimage",

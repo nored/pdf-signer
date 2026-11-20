@@ -3,6 +3,23 @@ import { test, expect, createIdentity } from './fixtures.mjs';
 test('encrypted bundle round-trip: export → wipe → import', async ({ page }) => {
   await createIdentity(page, { label: 'Round-trip', name: 'Ada RT', email: 'ada@rt.edu' });
 
+  // Trust a separate certificate so the test doesn't rely on trusting the
+  // imported signing identity.
+  await page.evaluate(async () => {
+    const keys = forge.pki.rsa.generateKeyPair(1024);
+    const root = forge.pki.createCertificate();
+    root.publicKey = keys.publicKey;
+    root.serialNumber = '01';
+    root.validity.notBefore = new Date();
+    root.validity.notAfter = new Date(Date.now() + 86400000);
+    root.setSubject([{ name: 'commonName', value: 'Portable Test Root' }]);
+    root.setIssuer(root.subject.attributes);
+    root.setExtensions([{ name: 'basicConstraints', cA: true }]);
+    root.sign(keys.privateKey, forge.md.sha256.create());
+    await addTrustRoot(forge.pki.certificateToPem(root));
+    renderTrustRoots();
+  });
+
   // Export. createIdentity already cancels the auto-open Export modal; click
   // btnExportId to open a fresh one.
   await page.click('#btnExportId');
@@ -56,4 +73,7 @@ test('encrypted bundle round-trip: export → wipe → import', async ({ page })
 
   await expect(page.locator('#idText')).toHaveText(/Ready/);
   await expect(page.locator('#idName')).toContainText('Ada RT');
+  await expect(page.locator('#trustRootsCount')).toHaveText('· 1');
+  await page.reload();
+  await expect(page.locator('#trustRootsList')).toContainText('Portable Test Root');
 });

@@ -4,6 +4,6 @@
   "description": "Default capabilities for the PDF Signer window",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "allow-save-file"
   ]
 }

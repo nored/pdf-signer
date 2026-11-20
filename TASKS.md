@@ -11,7 +11,7 @@ Priorities set 2026-09-17. The load-bearing use case is writing thesis review re
 ## PDF coverage
 
 - [x] **Xref-stream parsing.** `parsePdfForIncremental` now reads the trailer info at either a classical `xref\n...trailer <<...>>` block or an xref-stream object (`N G obj\n<< /Type /XRef ... >>`). Object bodies are read/mutated via pdf-lib, which handles classical, stream, and hybrid xrefs and also decodes object streams. Verified round-trip on both a classical-xref two-supervisor flow and a pdf-lib `useObjectStreams:true` xref-stream PDF. Surgical redaction was already using pdf-lib for its reads and inherits the fix.
-- [x] **Rotated-page handling.** Surgical redaction now works on /Rotate 90 pages — root cause turned out to be unrelated to rotation: `shouldRedactAt` required a string match between the raw Tj bytes and pdf.js's Unicode-decoded item, which failed for any text containing WinAnsi-only characters (em-dash, curly quotes, accented letters). Match by pen position only; that's unambiguous for a rect the user drew over that spot. Raster fallback also rewritten to convert PDF-space rects through `vp.convertToViewportPoint` (rotation-aware) instead of the old unrotated y-flip.
+- [x] **Rotation-aware redaction.** The export transforms selected areas into MuPDF page coordinates, applies content redaction, and saves a new revision with unused source objects removed. Unaffected text remains searchable.
 - [x] **Encrypted PDF support (view + verify only, this pass).** Open flow catches pdf.js's `PasswordException`, prompts for the password in a modal, and retries; wrong password re-prompts. Doc gains `isEncrypted` state; a red banner explains the current limit and every write tool (Sign, Text, Redact, Stamp) refuses. Full signing on encrypted PDFs (decrypt content bytes, re-encrypt after modifications) is a bigger project — punt to a follow-up if there's demand.
 
 ## Ergonomics
@@ -27,8 +27,8 @@ Priorities set 2026-09-17. The load-bearing use case is writing thesis review re
 
 ## Follow-up candidates
 
-- [x] **PAdES-B-LT (LTV / DSS) — rewrite path.** OCSP request builder (RFC 6960 CertID with SHA-1 issuer name / key hashes + serial), fetcher (POST to the responder from each cert's AIA extension), and DSS emission (Type /DSS, Certs [], OCSPs []) into the catalog. Best-effort — if the cert has no responder or fetching fails (self-signed, CORS, offline), sign continues without DSS. Adobe unlocks the LTV badge when the DSS carries an OCSP for the signer cert.
-- **PAdES-B-LT — incremental path.** Same DSS emission for the append-based signer. Bigger because DSS objects need to be emitted as new incremental objects and the catalog needs a new revision that carries /DSS. Follow-up.
+- [ ] **Authenticated revocation and DSS embedding.** Signing authenticates supported RSA OCSP responses before adding them to DSS and preserves existing evidence. Verification of stored OCSP evidence and support for additional responder algorithms remain open.
+- [ ] **Full validation of certification and timestamp policies.** The browser checks signature bytes, field binding, and locked field values. Full DocMDP change classification and TSA authentication remain open.
 - **CSC / cloud signing client (sign-me and others).** OAuth2 flow to a CSC-compliant QTSP, SAD (Signature Authorization Data) via 2FA push, POST hash to `credentials/authorize` + `signatures/signHash`, embed the returned RSA sig in the CMS exactly like a local sign. Adds a "Sign via cloud QES" identity type alongside the local p12 identities. ~half a day once real credentials are available to test against.
 
 ## Candidates surfaced during the current round

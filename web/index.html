@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha384-uIPO9DWKBRdSYLJMm3zQR0c/0vaSOC/D2vxK3ZJJwp2MsVr7znj7mZis9fq1WFjr' 'sha384-weMABwrltA6jWR8DDe9Jp5blk+tZQh7ugpCsF3JwSA53WZM9/14PjS5LAJNHNjAI' 'sha384-wGUu0HiDEHYlLgWmmzkisjpjCoctsJGabHWb3Uw6/mfaB4B1q7TO2FHzdadh7v/+' 'sha384-mZT2gIty7ZDdOGkxfP6joZcYdMW1Jvj9dRlfpTmaJAKKXTqzygtB22k7FLe+KZC1' 'wasm-unsafe-eval' https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js https://cdn.jsdelivr.net/npm/node-forge@1.4.3/dist/forge.min.js https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/ https://cdn.jsdelivr.net/npm/@okathira/ghostpdl-wasm@1.1.0/dist/ https://cdn.jsdelivr.net/npm/mupdf@1.28.6/dist/; worker-src blob: https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/; style-src 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' https:; frame-src blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PDF Signer</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text x='32' y='52' font-size='54' text-anchor='middle' font-family='Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif'>&#128271;</text></svg>">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/forge/1.3.1/forge.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js" integrity="sha384-weMABwrltA6jWR8DDe9Jp5blk+tZQh7ugpCsF3JwSA53WZM9/14PjS5LAJNHNjAI" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/node-forge@1.4.3/dist/forge.min.js" integrity="sha384-wGUu0HiDEHYlLgWmmzkisjpjCoctsJGabHWb3Uw6/mfaB4B1q7TO2FHzdadh7v/+" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js" integrity="sha384-mZT2gIty7ZDdOGkxfP6joZcYdMW1Jvj9dRlfpTmaJAKKXTqzygtB22k7FLe+KZC1" crossorigin="anonymous"></script>
 <style>
   :root {
     color-scheme: light dark;                       /* native form controls follow the OS theme */
@@ -329,17 +329,24 @@
     opacity: 1;
     line-height: 1;
     --scale-factor: 1;
+    --total-scale-factor: var(--scale-factor);
+    --min-font-size: 1;
     user-select: none;
     pointer-events: none;
     color: transparent;
   }
-  .text-layer > span, .text-layer > br {
+  .text-layer :is(span, br) {
     color: transparent;
     position: absolute;
     white-space: pre;
     cursor: text;
     transform-origin: 0% 0%;
   }
+  .text-layer span:not(.markedContent) {
+    font-size: calc(var(--total-scale-factor) * var(--min-font-size) * var(--font-height, 0px));
+    transform: rotate(var(--rotate, 0deg)) scaleX(var(--scale-x, 1)) scale(calc(1 / var(--min-font-size)));
+  }
+  .text-layer .markedContent { display: contents; }
   .text-layer ::selection {
     background: rgba(255, 92, 92, 0.4);
     color: transparent;
@@ -349,7 +356,7 @@
     user-select: text;
     pointer-events: none;              /* container is transparent to hits */
   }
-  .page-wrap.redact-mode .text-layer > span {
+  .page-wrap.redact-mode .text-layer span:not(.markedContent) {
     pointer-events: auto;              /* only real glyph spans catch events */
   }
   .page-label {
@@ -537,7 +544,7 @@
     line-height: 1;
   }
   .sig-status.valid    { background: var(--good); }
-  .sig-status.modified { background: #d99a2b; }
+  .sig-status.earlier, .sig-status.modified { background: #d99a2b; }
   .sig-status.broken   { background: var(--danger); }
   .sig-status:hover    { transform: scale(1.1); }
   .sig-tint {
@@ -548,7 +555,7 @@
     mix-blend-mode: multiply;
   }
   .sig-tint.valid    { background: rgba(31,122,58, .18); border: 1.5px solid rgba(31,122,58,.55); }
-  .sig-tint.modified { background: rgba(217,154,43,.28); border: 1.5px solid rgba(217,154,43,.7); }
+  .sig-tint.earlier, .sig-tint.modified { background: rgba(217,154,43,.28); border: 1.5px solid rgba(217,154,43,.7); }
   .sig-tint.broken   { background: rgba(200,40,25,.38);  border: 2px solid rgba(200,40,25,.85); }
   .sig-tint.unsigned { background: rgba(47,111,235,.10); border: 1.5px dashed rgba(47,111,235,.7); }
   .field-hint {
@@ -915,7 +922,7 @@
               <div id="ghConfigSummary" style="font-size:12px; color:var(--muted); margin-bottom:6px;">Not configured yet.</div>
               <button id="btnGhConfigure">Configure GitHub vault…</button>
               <div id="ghCertPublishStatus" style="font-size:12px; margin-top:6px; padding:6px 8px; border-radius:4px; background: var(--panel-2); display:none"></div>
-              <div class="hint">On sign, your identity's certificate is auto-published to <code>&lt;vault&gt;/certs/&lt;fingerprint&gt;.pem</code> once, and each signed PDF carries the raw URL. Verifiers auto-fetch it and trust the signer transitively via the vault's HTTPS chain — no manual trust setup on the recipient's side. Signed PDFs are also AES-encrypted and pushed as <code>.vault</code> files if the integrity stamp is enabled.</div>
+              <div class="hint">On sign, your identity's certificate is auto-published to <code>&lt;vault&gt;/certs/&lt;fingerprint&gt;.pem</code> once, and each signed PDF carries the raw URL. Verifiers can fetch and compare the certificate. Each recipient decides whether to trust it. Signed PDFs are also AES-encrypted and pushed as <code>.vault</code> files if the integrity stamp is enabled.</div>
             </div>
           </details>
 
@@ -923,9 +930,9 @@
             <summary>Trusted roots <span id="trustRootsCount" style="opacity:.6"></span></summary>
             <div style="margin-top:8px">
               <p class="hint" style="margin-bottom:6px">
-                Roots the verifier trusts when checking cert chains. <b>Automatically populated</b>: creating an identity self-trusts its own cert, importing a p12 with a chain trusts the chain's root, and clicking "Trust current identity's root" below trusts whatever's active. Manual PEM paste is only needed for third-party CAs (a colleague's cert, an experimental root).
+                Roots trusted by this browser. Select your signing identity and click “Trust current identity’s root” to trust it here. Add other PEM certificates only after checking their fingerprints. Publishing a certificate in a vault lets others compare copies.
               </p>
-              <div id="trustRootsList" style="font-size:12px; color:var(--muted); margin-bottom:6px;">No trusted roots configured yet — create or import an identity to auto-populate.</div>
+              <div id="trustRootsList" style="font-size:12px; color:var(--muted); margin-bottom:6px;">No trusted roots configured.</div>
               <div style="display:flex; gap:6px; flex-wrap:wrap;">
                 <button id="btnAddTrustRoot" style="width:auto; flex:1 1 auto;">Add root (PEM)…</button>
                 <button id="btnTrustCurrentChain" style="width:auto; flex:1 1 auto;" title="Trust the root at the top of the currently-loaded identity's chain">Trust current identity's root</button>
@@ -946,7 +953,7 @@
           </details>
 
           <details class="collapse" id="tsaSection" style="margin-top:10px">
-            <summary>Trusted timestamp (RFC 3161) <span style="opacity:.6">· on by default</span></summary>
+            <summary>Timestamp token (RFC 3161) <span style="opacity:.6">· on by default</span></summary>
             <div style="margin-top:8px">
               <label class="lock-row">
                 <input type="checkbox" id="tsaEnable" checked> Countersign with a TSA
@@ -1070,7 +1077,7 @@
       <div class="tool-group">
         <button id="btnPlaceSig" title="Place a signature">✍ Signature</button>
         <button id="btnPlaceText" title="Place a text box (double-click to type, single-click to move)">T Text</button>
-        <button id="btnPlaceRedact" title="Redact — permanently destroys the text and images under the box; the affected page is rasterized so nothing is recoverable">▮ Redact</button>
+        <button id="btnPlaceRedact" title="Remove content inside the selected area">▮ Redact</button>
         <button id="btnPlaceStamp" title="Place a verification stamp">▤ Stamp</button>
         <span class="sep"></span>
         <div class="rotate-group">
@@ -1154,8 +1161,26 @@
 /* ═══════════════════════════════════════════════════════════════════════
    pdf.js worker
    ═══════════════════════════════════════════════════════════════════════ */
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const pdfjsBase = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/';
+const pdfjsReady = import(pdfjsBase + 'legacy/build/pdf.mjs').then(pdfjs => {
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfjsBase + 'legacy/build/pdf.worker.mjs';
+  window.pdfjsLib = pdfjs;
+  return pdfjs;
+});
+pdfjsReady.catch(error => console.error('PDF renderer failed to load:', error));
+
+async function loadPdf(options) {
+  const pdfjs = await pdfjsReady;
+  return pdfjs.getDocument({
+    ...options,
+    isEvalSupported: false,
+    cMapUrl: pdfjsBase + 'cmaps/',
+    cMapPacked: true,
+    standardFontDataUrl: pdfjsBase + 'standard_fonts/',
+    wasmUrl: pdfjsBase + 'wasm/',
+    iccUrl: pdfjsBase + 'iccs/',
+  }).promise;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
    Helpers
@@ -1189,21 +1214,16 @@ function binStrToU8(s) {
 }
 const IS_TAURI = !!(typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.core);
 function tauriInvoke(cmd, args) { return window.__TAURI__.core.invoke(cmd, args); }
-function acceptToFilters(accept) {
-  if (!accept) return null;
-  const exts = accept.split(',').map(s => s.trim()).filter(s => s.startsWith('.')).map(s => s.slice(1));
-  if (!exts.length) return null;
-  return [{ name: 'Supported', extensions: exts }, { name: 'All files', extensions: ['*'] }];
-}
-
 async function download(name, u8, mime='application/octet-stream') {
   if (IS_TAURI) {
     const ext = (name.match(/\.([^.]+)$/) || [])[1];
     const filters = ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : null;
     try {
-      await tauriInvoke('save_file', { defaultName: name, filters, data: Array.from(u8) });
-    } catch (e) { toast('Save failed: ' + e, 'err'); }
-    return;
+      return await tauriInvoke('save_file', { defaultName: name, filters, data: Array.from(u8) });
+    } catch (e) {
+      toast('Save failed: ' + e, 'err');
+      return false;
+    }
   }
   const blob = new Blob([u8], { type: mime });
   const a = document.createElement('a');
@@ -1212,24 +1232,16 @@ async function download(name, u8, mime='application/octet-stream') {
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  return true;
 }
 function safeFilename(s) { return (s || 'identity').replace(/[^\w.\- ]+/g, '_').replace(/\s+/g, '_'); }
 async function pickFile(accept) {
-  if (IS_TAURI) {
-    try {
-      const path = await tauriInvoke('pick_file', { filters: acceptToFilters(accept) });
-      if (!path) return null;
-      const bytes = await tauriInvoke('read_file', { path });
-      const u8 = new Uint8Array(bytes);
-      const name = path.split(/[\\/]/).pop();
-      return { name, size: u8.length, type: '', arrayBuffer: async () => u8.buffer };
-    } catch (e) { toast('File open failed: ' + e, 'err'); return null; }
-  }
   return new Promise(res => {
     const i = document.createElement('input');
     i.type = 'file';
     if (accept) i.accept = accept;
     i.onchange = () => res(i.files[0] || null);
+    i.oncancel = () => res(null);
     i.click();
   });
 }
@@ -1240,6 +1252,7 @@ async function pickFiles(accept) {
     i.multiple = true;
     if (accept) i.accept = accept;
     i.onchange = () => res(Array.from(i.files || []));
+    i.oncancel = () => res([]);
     i.click();
   });
 }
@@ -1254,8 +1267,14 @@ function modal({title, body, confirmText='OK', cancelText='Cancel', danger=false
     root.style.display = 'flex';
     const box = document.createElement('div');
     box.className = 'modal';
-    box.innerHTML = `<h2>${title}</h2>` + (typeof body === 'string' ? `<p>${body}</p>` : '');
-    if (typeof body !== 'string') box.appendChild(body);
+    const heading = document.createElement('h2');
+    heading.textContent = title;
+    box.appendChild(heading);
+    if (typeof body === 'string') {
+      const paragraph = document.createElement('p');
+      paragraph.textContent = body;
+      box.appendChild(paragraph);
+    } else if (body) box.appendChild(body);
     const btns = document.createElement('div');
     btns.className = 'buttons';
     const cancel = document.createElement('button');
@@ -1385,24 +1404,32 @@ function rebuildCaStore() {
     trustStore.caStore = forge.pki.createCaStore([]);
   }
 }
-async function addTrustRoot(pem) {
+function parseTrustRoot(pem) {
   const trimmed = String(pem || '').trim();
   if (!/^-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----\s*$/.test(trimmed)) {
     throw new Error('That does not look like a PEM certificate (must be -----BEGIN CERTIFICATE----- … -----END CERTIFICATE-----)');
   }
-  // Parse to confirm it's a real cert before saving.
-  const parsed = forge.pki.certificateFromPem(trimmed);
-  // Silently deduplicate by subject-hash + fingerprint.
-  const newFp = certFingerprint(parsed);
-  for (const existing of trustStore.pems) {
-    try {
-      if (certFingerprint(forge.pki.certificateFromPem(existing)) === newFp) return { added: false };
-    } catch (_) {}
+  return { pem: trimmed, fingerprint: certFingerprint(forge.pki.certificateFromPem(trimmed)) };
+}
+async function mergeTrustRoots(roots) {
+  const pems = trustStore.pems.slice();
+  const fingerprints = new Set();
+  for (const pem of pems) {
+    try { fingerprints.add(parseTrustRoot(pem).fingerprint); } catch (_) {}
   }
-  trustStore.pems.push(trimmed);
-  await idbPut(TRUST_KEY, trustStore.pems);
+  for (const { pem, fingerprint } of roots) {
+    if (fingerprints.has(fingerprint)) continue;
+    pems.push(pem);
+    fingerprints.add(fingerprint);
+  }
+  if (pems.length === trustStore.pems.length) return false;
+  await idbPut(TRUST_KEY, pems);
+  trustStore.pems = pems;
   rebuildCaStore();
-  return { added: true };
+  return true;
+}
+async function addTrustRoot(pem) {
+  return { added: await mergeTrustRoots([parseTrustRoot(pem)]) };
 }
 
 // Auto-add the trust anchor for an identity's cert chain. Two shapes:
@@ -1577,7 +1604,7 @@ function unlockP12(p12U8, password) {
    Global state
    ═══════════════════════════════════════════════════════════════════════ */
 const identity = {
-  p12U8: null, meta: null, unlocked: null, password: null,
+  p12U8: null, meta: null, unlocked: null,
 };
 const sigImage = {
   pngU8: null,   // processed PNG (transparent bg)
@@ -1684,33 +1711,96 @@ function certFingerprint(cert) {
     return hash.match(/.{1,2}/g).join(':').toUpperCase();
   } catch (_) { return ''; }
 }
-async function saveIdentitiesToDb() {
-  const obj = {};
-  for (const [id, r] of identities.entries()) {
-    obj[id] = {
-      id, label: r.label, p12: r.p12U8, meta: r.meta,
-      sigImagePng: r.sigImagePngU8 || null,
-      ghVault: r.ghVault || null,
-      settings: r.settings || null,
+async function identityStorageKey(create = false) {
+  const stored = await idbGet('identityStorageKey');
+  if (stored || !create) return stored;
+  const candidate = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const db = await idb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    const store = tx.objectStore(DB_STORE);
+    const request = store.get('identityStorageKey');
+    let key;
+    request.onsuccess = () => {
+      key = request.result || candidate;
+      if (!request.result) store.put(key, 'identityStorageKey');
     };
-  }
-  await idbPut('identities', obj);
-  await idbPut('active', identity.id || null);
+    tx.oncomplete = () => resolve(key);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+async function protectIdentityData(id, record) {
+  const signatureImage = record.sigImagePngU8 ? btoa(u8ToBinStr(record.sigImagePngU8)) : null;
+  if (!record.ghVault && !signatureImage) return null;
+  const key = await identityStorageKey(true);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoder = new TextEncoder();
+  const data = encoder.encode(JSON.stringify({ ghVault: record.ghVault, signatureImage }));
+  const ciphertext = await crypto.subtle.encrypt({
+    name: 'AES-GCM', iv, additionalData: encoder.encode(id),
+  }, key, data);
+  return { iv, ciphertext };
+}
+
+async function readProtectedIdentityData(id, protectedData) {
+  const key = await identityStorageKey();
+  if (!key) throw new Error('Identity storage encryption key is missing');
+  const plaintext = await crypto.subtle.decrypt({
+    name: 'AES-GCM', iv: protectedData.iv, additionalData: new TextEncoder().encode(id),
+  }, key, protectedData.ciphertext);
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+let identitySaveQueue = Promise.resolve();
+function saveIdentitiesToDb() {
+  const records = [...identities].map(([id, record]) => [id, { ...record }]);
+  const save = identitySaveQueue.catch(() => {}).then(async () => {
+    const obj = Object.create(null);
+    for (const [id, record] of records) {
+      obj[id] = {
+        id, label: record.label, p12: record.p12U8, meta: record.meta,
+        protectedData: record.unreadableProtectedData || await protectIdentityData(id, record),
+        settings: record.settings || null,
+        certVaultUrl: record.certVaultUrl || null,
+      };
+    }
+    await idbPut('identities', obj);
+  });
+  identitySaveQueue = save;
+  return save;
 }
 async function loadIdentitiesFromDb() {
   identities.clear();
   const bag = await idbGet('identities');
   if (bag) {
+    let migrate = false;
     for (const [id, r] of Object.entries(bag)) {
+      let protectedData;
+      let unreadableProtectedData;
+      if (r.protectedData) {
+        try { protectedData = await readProtectedIdentityData(id, r.protectedData); }
+        catch (error) {
+          unreadableProtectedData = r.protectedData;
+          console.warn('Could not decrypt saved identity preferences', error);
+          toast('The saved vault settings and signature image could not be unlocked.', 'err');
+        }
+      } else if (r.ghVault || r.sigImagePng) {
+        migrate = true;
+      }
       identities.set(id, {
         id, label: r.label || (r.meta && r.meta.name) || 'Identity',
         p12U8: new Uint8Array(r.p12),
         meta: r.meta,
-        sigImagePngU8: r.sigImagePng ? new Uint8Array(r.sigImagePng) : null,
-        ghVault: r.ghVault || null,
+        sigImagePngU8: protectedData?.signatureImage ? binStrToU8(atob(protectedData.signatureImage)) :
+          r.sigImagePng ? new Uint8Array(r.sigImagePng) : null,
+        ghVault: protectedData?.ghVault || r.ghVault || null,
         settings: r.settings || null,
+        certVaultUrl: r.certVaultUrl || null,
+        unreadableProtectedData,
       });
     }
+    if (migrate) await saveIdentitiesToDb();
   } else {
     // Migrate legacy schema: single 'identity' + single 'sigImage'.
     const legacyId = await idbGet('identity');
@@ -1742,7 +1832,7 @@ async function loadIdentitiesFromDb() {
 function setActiveIdentity(id, save=true) {
   const rec = id ? identities.get(id) : null;
   if (!rec) {
-    identity.id = identity.label = identity.p12U8 = identity.meta = identity.unlocked = identity.password = null;
+    identity.id = identity.label = identity.p12U8 = identity.meta = identity.unlocked = null;
     sigImage.pngU8 = null; sigImage.dataUrl = null;
   } else {
     identity.id = rec.id;
@@ -1750,7 +1840,6 @@ function setActiveIdentity(id, save=true) {
     identity.p12U8 = rec.p12U8;
     identity.meta = rec.meta;
     identity.unlocked = null;
-    identity.password = null;
     sigImage.pngU8 = rec.sigImagePngU8 || null;
     sigImage.dataUrl = sigImage.pngU8 ? u8ToDataUrl(sigImage.pngU8, 'image/png') : null;
   }
@@ -1784,6 +1873,7 @@ async function updateActiveIdentity(patch) {
   const rec = identities.get(identity.id);
   if (!rec) return;
   Object.assign(rec, patch);
+  if ('ghVault' in patch || 'sigImagePngU8' in patch) delete rec.unreadableProtectedData;
   await saveIdentitiesToDb();
   if (patch.label !== undefined) identity.label = rec.label;
   if (patch.sigImagePngU8 !== undefined) {
@@ -1827,7 +1917,7 @@ function renderIdentity() {
     if (rec && rec.certVaultUrl) {
       const br = document.createElement('br');
       const a = document.createElement('a');
-      a.href = rec.certVaultUrl;
+      a.href = safeHttpsUrl(rec.certVaultUrl);
       a.target = '_blank';
       a.rel = 'noopener';
       a.style.color = 'var(--accent)';
@@ -1872,7 +1962,8 @@ function renderSigImage() {
   if (note) note.textContent = has ? '· ready' : '· not set';
 }
 
-async function ensureUnlocked() {
+async function ensureUnlocked(expectedIdentityId = identity.id) {
+  if (identity.id !== expectedIdentityId) throw new Error('The active identity changed. Start signing again.');
   if (identity.unlocked) return identity.unlocked;
   if (!identity.p12U8) throw new Error('No identity');
   const body = document.createElement('div');
@@ -1884,16 +1975,9 @@ async function ensureUnlocked() {
   while (true) {
     const r = await modal({ title: 'Unlock identity', body, confirmText: 'Unlock' });
     if (!r) throw new Error('cancelled');
+    if (identity.id !== expectedIdentityId) throw new Error('The active identity changed. Start signing again.');
     try {
       identity.unlocked = unlockP12(identity.p12U8, r.pw || '');
-      identity.password = r.pw || '';
-      // First unlock of a pre-existing identity: retroactively auto-trust its
-      // root so signatures produced from now on show "chains to a trusted
-      // root" without the user manually clicking anything.
-      try {
-        const added = await autoTrustRootFromChain(identity.unlocked.chain || [identity.unlocked.cert]);
-        if (added) renderTrustRoots();
-      } catch (e) { console.warn('unlock auto-trust failed', e); }
       renderIdentity();
       return identity.unlocked;
     } catch (e) {
@@ -1947,15 +2031,7 @@ $('btnCreateId').onclick = async () => {
       makeActive: true,
     });
     identity.unlocked = unlockP12(p12Der, r.pw);
-    identity.password = r.pw;
     renderIdentity();
-    // Auto-trust the identity's own cert so verifiers see the user's future
-    // signatures as "chains to a trusted root" instead of "self-signed
-    // — trust depends on how you got this signer's cert".
-    try {
-      const added = await autoTrustRootFromChain(identity.unlocked.chain || [identity.unlocked.cert]);
-      if (added) renderTrustRoots();
-    } catch (e) { console.warn('auto-trust self failed', e); }
     // If the user picked a signature file in the same dialog, run it through
     // the background-removal modal now and save on the newly-active identity.
     if (r.sigFile) {
@@ -1976,9 +2052,16 @@ $('btnCreateId').onclick = async () => {
   } catch (e) { toast('Failed: ' + e.message, 'err'); }
 };
 
-async function askPasswordAndUnlockP12(p12U8) {
+async function askPasswordAndUnlockP12(p12U8, trustedRoots = []) {
   const body = document.createElement('div');
   body.innerHTML = `<label>Password for the identity</label><input type="password" id="pw" autocomplete="current-password">`;
+  if (trustedRoots.length) {
+    const note = document.createElement('p');
+    note.className = 'hint';
+    note.textContent = 'Import also adds these certificates to Trusted roots: ' +
+      trustedRoots.map(root => trustRootSummary(root.pem)).join(', ');
+    body.append(note);
+  }
   while (true) {
     const r = await modal({ title: 'Import identity', body, confirmText: 'Import' });
     if (!r) return null;
@@ -2002,6 +2085,7 @@ $('btnImportId').onclick = async () => {
   let bundledLabel = null;
   let bundledGh = null;
   let bundledSettings = null;
+  let bundledRoots = [];
   let wasEncrypted = false;
 
   if (looksJson) {
@@ -2047,9 +2131,18 @@ $('btnImportId').onclick = async () => {
     }
     if (b.ghVault && typeof b.ghVault === 'object') bundledGh = b.ghVault;
     if (b.settings && typeof b.settings === 'object') bundledSettings = b.settings;
+    if (wasEncrypted && Object.hasOwn(b, 'trustedRoots')) {
+      try {
+        if (!Array.isArray(b.trustedRoots)) throw new Error('Expected a list of certificates');
+        bundledRoots = b.trustedRoots.map(parseTrustRoot);
+      } catch (e) {
+        toast('Invalid trusted roots in bundle: ' + e.message, 'err');
+        return;
+      }
+    }
   }
 
-  const r = await askPasswordAndUnlockP12(p12U8);
+  const r = await askPasswordAndUnlockP12(p12U8, bundledRoots);
   if (!r) return;
   const label = bundledLabel || r.unlocked.meta.name || 'Imported identity';
   const rec = await upsertIdentity({
@@ -2062,25 +2155,25 @@ $('btnImportId').onclick = async () => {
     makeActive: true,
   });
   identity.unlocked = r.unlocked;
-  identity.password = r.password;
   renderIdentity();
   ghSyncFromActiveIdentity();
   loadSettingsForActiveIdentity();
-  // Auto-trust the root of this p12's chain so signatures from any leaf
-  // issued under it verify cleanly, without the user pasting a PEM.
-  try {
-    const addedRoot = await autoTrustRootFromChain(r.unlocked.chain || [r.unlocked.cert]);
-    if (addedRoot) {
-      const cn = addedRoot.subject.getField('CN');
-      renderTrustRoots();
-      toast('Trusted the p12 root automatically: ' + (cn ? cn.value : '(no CN)'), 'ok');
-    }
-  } catch (e) { console.warn('auto-trust root failed', e); }
   let msg = 'Identity imported' + (wasEncrypted ? '' : ' (bundle was NOT encrypted — consider re-exporting)');
   const bits = [];
   if (bundledSigImage) bits.push('signature image');
   if (bundledGh)       bits.push('GitHub vault ' + (bundledGh.token ? 'with token' : 'without token — add it via Configure GitHub vault'));
   if (bundledSettings) bits.push('settings');
+  if (bundledRoots.length) {
+    try {
+      await mergeTrustRoots(bundledRoots);
+      renderTrustRoots();
+      bits.push('trusted roots');
+    } catch (e) {
+      renderTrustRoots();
+      toast('Identity imported, but trusted roots could not be saved: ' + e.message, 'err');
+      return;
+    }
+  }
   if (bits.length) msg += ' with ' + bits.join(', ');
   toast(msg, wasEncrypted ? 'ok' : 'err');
 };
@@ -2093,23 +2186,22 @@ $('btnExportId').onclick = async () => {
   // confirm, or cancels. Autocomplete="off" on both fields and unique
   // (non-paired-looking) ids to avoid Chrome/Firefox suggesting a strong
   // password into one field and leaving the two mismatched.
-  const initialPrefill = identity.password || '';
-  let pw = null, prefill = initialPrefill, errorMsg = '';
+  let pw = null, prefill = '', errorMsg = '';
   while (true) {
     const body = document.createElement('div');
     body.innerHTML = `
       <p class="hint" style="margin-bottom:8px">
         The bundle is encrypted with a password (PBKDF2-SHA256 · 200k iterations → AES-256-GCM).
-        Everything is included: the identity's key + certificate, signature image, saved UI settings, and (when configured) the GitHub vault config <b>with the token</b>. Without the password the file reveals nothing.
+        The encrypted bundle includes the identity, signature image, settings, and trusted roots. GitHub vault credentials are optional. The bundle label remains visible.
       </p>
       ${errorMsg ? `<div style="background:rgba(200,40,25,.12); color:var(--danger); padding:6px 10px; border-radius:6px; margin-bottom:8px; font-size:13px;">${errorMsg}</div>` : ''}
       <label>Bundle password <span style="color:var(--muted); font-weight:400">(click 👁 to reveal)</span></label>
       <div style="display:flex; gap:6px; align-items:center;">
-        <input type="password" id="bpw" autocomplete="off" value="${prefill.replace(/"/g,'&quot;')}" style="flex:1;">
+        <input type="password" id="bpw" autocomplete="off" value="${esc(prefill)}" style="flex:1;">
         <button type="button" id="bpwToggle" title="Show password" style="width:auto; padding:6px 10px;">👁</button>
       </div>
       <label style="margin-top:8px">Confirm bundle password</label>
-      <input type="password" id="bpw2" autocomplete="off" value="${prefill.replace(/"/g,'&quot;')}">
+      <input type="password" id="bpw2" autocomplete="off" value="${esc(prefill)}">
       <div id="bpwMatch" style="font-size:12px; margin-top:4px; min-height:16px;"></div>
       <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border)">
         <label class="lock-row"><input type="checkbox" id="incGh" ${hasGh ? 'checked' : 'disabled'}> Include GitHub vault config${hasGh ? '' : ' (none configured)'}</label>
@@ -2119,9 +2211,7 @@ $('btnExportId').onclick = async () => {
         </p>
       </div>
       <p class="hint" style="margin-top:6px">
-        ${initialPrefill
-          ? 'Password pre-filled with the identity password. Change it if you want a separate bundle password.'
-          : 'Pick any password. Anyone importing this bundle needs it.'}
+        Use a separate password for the exported bundle.
       </p>
     `;
     setTimeout(() => {
@@ -2171,6 +2261,7 @@ $('btnExportId').onclick = async () => {
     p12_base64: btoa(u8ToBinStr(identity.p12U8)),
     signatureImage_base64: sigImage.pngU8 ? btoa(u8ToBinStr(sigImage.pngU8)) : null,
     settings: (rec && rec.settings) || collectSettings(),
+    trustedRoots: trustStore.pems.slice(),
     ghVault: (hasGh && opts.incGh) ? { ...rec.ghVault } : null,
   };
   if (inner.ghVault && !opts.incTok) delete inner.ghVault.token;
@@ -2198,7 +2289,7 @@ $('btnRenameId').onclick = async () => {
   if (!identity.id) return;
   const body = document.createElement('div');
   const cur = (identity.label || '').replace(/"/g, '&quot;');
-  body.innerHTML = `<label>Label</label><input type="text" id="lab" value="${cur}">`;
+  body.innerHTML = `<label>Label</label><input type="text" id="lab" value="${esc(cur)}">`;
   const r = await modal({ title: 'Rename identity', body, confirmText: 'Save' });
   if (!r) return;
   const newLabel = r.lab.trim();
@@ -2427,10 +2518,22 @@ $('scrollArea').addEventListener('dragover', e => { e.preventDefault(); });
 $('scrollArea').addEventListener('drop', async e => {
   e.preventDefault();
   const f = e.dataTransfer.files?.[0];
-  if (f && f.type === 'application/pdf') openPdf(f);
+  if (f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name))) openPdf(f);
 });
 
+let openingPdf = false;
 async function openPdf(file) {
+  if (openingPdf) return;
+  openingPdf = true;
+  updateSignButton();
+  try { await openPdfInternal(file); }
+  finally {
+    openingPdf = false;
+    updateSignButton();
+  }
+}
+
+async function openPdfInternal(file) {
   doc.file = file;
   doc.bytes = new Uint8Array(await file.arrayBuffer());
 
@@ -2510,7 +2613,7 @@ async function openPdf(file) {
     try {
       const opts = { data: doc.bytes.slice() };
       if (password != null) opts.password = password;
-      doc.pdfjs = await pdfjsLib.getDocument(opts).promise;
+      doc.pdfjs = await loadPdf(opts);
       break;
     } catch (e) {
       const isPwErr = e && (e.name === 'PasswordException' || /password/i.test(e.message || ''));
@@ -2557,7 +2660,7 @@ async function openPdf(file) {
   $('signSection').style.pointerEvents = 'auto';
   setTool(null);
   let verifyResults = [];
-  try { verifyResults = verifyPdfSignatures(doc.bytes); }
+  try { verifyResults = await verifyDocumentSignatures(doc.bytes); }
   catch (e) { console.warn('verify error', e); verifyResults = [{ error: e.message, byteRange: [0,0,0,0] }]; }
   // Async pass: fetch any vault-published certs and mark trust.
   try { await verifyVaultTrustAsync(verifyResults); } catch (e) { console.warn('vault trust fetch failed', e); }
@@ -2667,7 +2770,9 @@ function reflectAlreadySignedInUi() {
   // appearance option, which lives inside the sig widget's Form XObject.
   const textBtn = $('btnPlaceText'); if (textBtn) { textBtn.disabled = on; textBtn.title = on ? 'Disabled while the doc is already signed — a text box would modify the page and void the prior signature. Use the Stamp appearance to add a signed mark instead.' : 'Place a text field'; }
   const stampBtn = $('btnPlaceStamp'); if (stampBtn) { stampBtn.disabled = on; stampBtn.title = on ? 'Disabled while the doc is already signed — this stamp writes to the page and would void the prior signature. Pick the Stamp appearance under Signature appearance to add a QR-sealed mark that stays valid.' : 'Place a verification stamp'; }
-  const redactBtn = $('btnPlaceRedact'); if (redactBtn) { redactBtn.disabled = on; redactBtn.title = on ? 'Disabled — redaction rewrites the page and would void the existing signature' : 'Redact — permanently destroys the text and images under the box'; }
+  $('btnPlaceRedact').disabled = on;
+  $('btnPlaceRedact').title = on ? 'Redaction requires an unsigned PDF' : 'Remove content inside the selected area';
+
   // Per-page QR strip: disabled on already-signed (it writes to page content).
   const stampEnable = $('stampEnable');
   if (stampEnable) {
@@ -3005,9 +3110,9 @@ async function addSignatureStatusOverlays(results, hasSigPayload=false, hasUnsig
   // For empty signature fields the pre-placed placement box is already
   // showing the user where to sign. Skip the extra tint + badge overlay.
   if (overallState === 'unsigned') return;
-  const first = results0[0] || {};
-  const iconFor = s => s === 'valid' ? '✓' : s === 'modified' ? '!' : s === 'unsigned' ? '?' : '✕';
-  const titleFor = s => s === 'valid' ? 'Signature valid — click for details'
+  const iconFor = s => s === 'valid' ? '✓' : s === 'earlier' ? '↶' : s === 'modified' ? '!' : '✕';
+  const titleFor = s => s === 'valid' ? 'Signature matches current bytes'
+                     : s === 'earlier' ? 'Signature matches an earlier revision'
                      : s === 'modified' ? 'Signed, but modified after signing — click for details'
                      : s === 'unsigned' ? 'Empty signature field — click on the placement in the sidebar to fill it'
                      : 'Signature is BROKEN — click for details';
@@ -3019,7 +3124,9 @@ async function addSignatureStatusOverlays(results, hasSigPayload=false, hasUnsig
     for (const a of anns) {
       if (a.annotationType !== 20) continue;      // WIDGET
       if ((a.fieldType || '').toLowerCase() !== 'sig') continue;
-      if (!a.rect || a.rect.length < 4) continue;
+      const result = results0.find(signature => signature.fieldName === a.fieldName);
+      if (!result || !a.rect || a.rect.length < 4) continue;
+      const state = perSigState(result, results0);
       anyWidgetShown = true;
       const [x1, y1, x2, y2] = a.rect;
       const [cx1, cy1] = meta.viewport.convertToViewportPoint(x1, y2); // top-left in canvas
@@ -3029,7 +3136,7 @@ async function addSignatureStatusOverlays(results, hasSigPayload=false, hasUnsig
 
       // Colored tint over the signature widget (only if not valid — valid gets a subtle outline).
       const tint = document.createElement('div');
-      tint.className = 'sig-tint ' + overallState;
+      tint.className = 'sig-tint ' + state;
       tint.style.left = boxLeft + 'px';
       tint.style.top  = boxTop + 'px';
       tint.style.width  = boxW + 'px';
@@ -3038,10 +3145,10 @@ async function addSignatureStatusOverlays(results, hasSigPayload=false, hasUnsig
 
       // Little colored circle badge at the top-right corner of the widget.
       const badge = document.createElement('div');
-      badge.className = 'sig-status ' + overallState;
-      badge.textContent = iconFor(overallState);
-      const who = first.cn ? `${first.cn}${first.signingTime ? ' · signed ' + fmtSigningTime(first.signingTime) : ''}` : '';
-      badge.title = titleFor(overallState) + (who ? '\n' + who : '');
+      badge.className = 'sig-status ' + state;
+      badge.textContent = iconFor(state);
+      const who = result.cn ? `${result.cn}${result.signingTime ? ' · signed ' + fmtSigningTime(result.signingTime) : ''}` : '';
+      badge.title = titleFor(state) + (who ? '\n' + who : '');
       badge.addEventListener('click', () => showVerifyModal(results0.length ? results0 : [{error:'Signature could not be verified.', byteRange:[0,0,0,0]}]));
       badge.style.left = (Math.max(cx1, cx2) - 11) + 'px';
       badge.style.top  = (Math.min(cy1, cy2) - 11) + 'px';
@@ -3066,7 +3173,7 @@ async function addSignatureStatusOverlays(results, hasSigPayload=false, hasUnsig
 
 async function showVerifyModal(results, isUnsignedField=false) {
   const body = document.createElement('div');
-  body.innerHTML = `<p style="margin-bottom:8px"><b>${doc.file?.name || 'Signed PDF'}</b> · ${doc.bytes.length} bytes</p>` + verifyResultsHtml(results, isUnsignedField);
+  body.innerHTML = `<p style="margin-bottom:8px"><b>${esc(doc.file?.name || 'Signed PDF')}</b> · ${doc.bytes.length} bytes</p>` + verifyResultsHtml(results, isUnsignedField);
   // For each valid signature, offer a "Show what this signature added"
   // button that diffs rev N-1 vs rev N page-by-page. Only signatures with
   // a real byte range earn a button (broken sigs don't).
@@ -3141,7 +3248,7 @@ function docBytesBeforeIncrementalAppend(bytes, byteRange) {
 
 // Render page N of a PDF loaded from bytes to a canvas at the given scale.
 async function renderPdfPageToCanvas(bytes, pageNumber, scale) {
-  const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+  const doc = await loadPdf({ data: bytes.slice() });
   const page = await doc.getPage(pageNumber);
   const vp = page.getViewport({ scale });
   const canvas = document.createElement('canvas');
@@ -3616,7 +3723,7 @@ async function showSignerAdditions({ allBytes, thisByteRange, prevByteRange, tit
   const pagesContainer = document.createElement('div');
   pagesContainer.style.cssText = 'display:flex; flex-direction:column; gap:16px;';
   try {
-    const currDoc = await pdfjsLib.getDocument({ data: allBytes.slice() }).promise;
+    const currDoc = await loadPdf({ data: allBytes.slice() });
     const pageByRef = new Map();
     for (let i = 1; i <= currDoc.numPages; i++) {
       const p = await currDoc.getPage(i);
@@ -4064,7 +4171,7 @@ function setTool(t) {
       t === 'sig'    ? 'Click a page to place the signature. Drag to move, corner to resize, × or Delete to remove.'
     : t === 'text'   ? 'Click a page to drop a text field. Click inside to type, drag the border to move, corner to resize.'
     : t === 'stamp'  ? 'Click a page to drop the integrity stamp box. Only ONE stamp position is used — its coords are reused on every page at sign time.'
-    : t === 'redact' ? 'Drag over any text to mark it for redaction (works across lines and inside words). Or click an empty area to drop a redaction box for images.'
+    : t === 'redact' ? 'Select text or place a box to redact. Text outside the redaction stays searchable.'
     :                  'Pick a tool, then click a page. Drag boxes to move, corner to resize, × or Delete to remove, Ctrl/⌘+Z to undo.';
 }
 
@@ -4074,18 +4181,14 @@ async function renderTextLayerForPage(meta) {
   const container = meta.textLayerEl;
   if (!container || container.childElementCount > 0) return;
   const textContent = await meta.page.getTextContent();
-  container.style.setProperty('--scale-factor', meta.viewport.scale);
+  container.style.setProperty('--scale-factor', meta.viewport.scale * meta.page.userUnit);
   try {
-    // pdf.js 3.x renderTextLayer returns an object with a `.promise` for the
-    // async render. Older signatures return the promise directly. Handle both.
-    const task = pdfjsLib.renderTextLayer({
+    const layer = new pdfjsLib.TextLayer({
       textContentSource: textContent,
       container,
       viewport: meta.viewport,
-      textDivs: [],
     });
-    if (task && task.promise) await task.promise;
-    else if (task && typeof task.then === 'function') await task;
+    await layer.render();
   } catch (e) {
     console.warn('renderTextLayer failed on page', meta.index, e);
   }
@@ -5189,7 +5292,8 @@ function updateSignButton() {
   const has = doc.pdfjs && hasSig && identity.meta;
   const needsImage = doc.placements.some(p => p.type !== 'text' && (p.appearance === 'image' || p.appearance === 'both')) && !sigImage.pngU8;
   const btn = $('btnSign');
-  btn.disabled = !has || needsImage || doc.isEncrypted || doc.signingLocked;
+  btn.disabled = openingPdf || signingInProgress || !has || needsImage || doc.isEncrypted || doc.signingLocked;
+  if (signingInProgress) return;
   if (doc.isEncrypted) {
     btn.textContent = 'Signing encrypted PDFs isn\'t supported';
     btn.title = 'Save an unencrypted copy of this PDF first.';
@@ -5292,7 +5396,7 @@ async function fetchTimestampToken(tsaUrl, signatureBytes) {
   for (let i = 0; i < req.length; i++) reqU8[i] = req.charCodeAt(i) & 0xff;
   let res;
   try {
-    res = await fetch(tsaUrl, {
+    res = await fetchVerificationResource(tsaUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/timestamp-query', 'Accept': 'application/timestamp-reply' },
       body: reqU8,
@@ -5305,12 +5409,12 @@ async function fetchTimestampToken(tsaUrl, signatureBytes) {
   if (!ct.includes('timestamp-reply') && !ct.includes('octet-stream')) {
     throw new Error('TSA returned unexpected Content-Type: ' + ct);
   }
-  const buf = new Uint8Array(await res.arrayBuffer());
+  const buf = await readBoundedResponse(res, 1024 * 1024);
   // Parse TimeStampResp = SEQUENCE { PKIStatusInfo, TimeStampToken OPTIONAL }.
   let binStr = '';
   for (let i = 0; i < buf.length; i++) binStr += String.fromCharCode(buf[i]);
   const asn1 = forge.asn1;
-  const parsed = asn1.fromDer(binStr);
+  const parsed = asn1.fromDer(binStr, { maxDepth: 64 });
   if (!parsed.value || parsed.value.length < 1) throw new Error('TSA response: empty');
   const statusInfo = parsed.value[0];
   const statusCode = asn1.derToInteger(statusInfo.value[0].value);
@@ -5325,7 +5429,10 @@ async function fetchTimestampToken(tsaUrl, signatureBytes) {
     throw new Error(msg);
   }
   if (parsed.value.length < 2) throw new Error('TSA response has no timeStampToken');
-  const token = parsed.value[1]; // ContentInfo — SignedData carrying TSTInfo
+  const token = parsed.value[1];
+  const tokenData = parseTimestampToken(token, signatureBytes);
+  const nonce = tokenData?.nonce;
+  if (!tokenData?.ok || nonce !== nonceHex.replace(/^(00)+/, '')) throw new Error('TSA response does not match the request');
   return token;
 }
 
@@ -5417,7 +5524,10 @@ function parseTimestampToken(tokenAsn1, sigBinaryString) {
       }
     }
   } catch (_) {}
-  return { time, ok, subject, chainCerts };
+  const nonceNode = tstInfo.value.slice(5).find(node =>
+    node.tagClass === asn1.Class.UNIVERSAL && node.type === asn1.Type.INTEGER);
+  const nonce = nonceNode ? forge.util.bytesToHex(nonceNode.value).replace(/^(00)+/, '') : null;
+  return { time, ok, subject, chainCerts, nonce };
 }
 function parseGeneralizedTime(s) {
   // "YYYYMMDDHHMMSS[.fff]Z" or with +hhmm offset.
@@ -6070,7 +6180,10 @@ async function decryptBundle(envelope, password) {
   const salt = binStrToU8(atob(envelope.salt_b64));
   const iv   = binStrToU8(atob(envelope.iv_b64));
   const ct   = binStrToU8(atob(envelope.ciphertext_b64));
-  const iterations = envelope.iterations || 200000;
+  const iterations = envelope.iterations ?? 200000;
+  if (!Number.isInteger(iterations) || iterations < 1 || iterations > 2000000) {
+    throw new Error('Bundle has an unsupported key derivation cost');
+  }
   const keyBytes = await deriveBundleKey(password, salt, iterations);
   const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
@@ -6111,7 +6224,7 @@ function decodeVaultPayload(b64u) {
 // because there's nothing to decrypt — the verifier just shows metadata and
 // (optionally) fetches the cert to display trust info.
 function buildStampVerifierUrl({ verifierUrl, certVaultUrl, signer, dateStr }) {
-  const base = String(verifierUrl || CANONICAL_VERIFIER_URL).replace(/#.*$/, '');
+  const base = (safeHttpsUrl(verifierUrl) || CANONICAL_VERIFIER_URL).replace(/#.*$/, '');
   const obj = { u: certVaultUrl || '', s: signer || '', t: dateStr || '' };
   const payload = b64urlEnc(new TextEncoder().encode(JSON.stringify(obj)));
   return base + '#v=' + payload;
@@ -6119,9 +6232,9 @@ function buildStampVerifierUrl({ verifierUrl, certVaultUrl, signer, dateStr }) {
 
 function buildVaultQr({ key, signer, dateStr, csv, url, verifierUrl }) {
   const payload = encodeVaultPayload({ key, signer, dateStr, csv, url });
-  if (verifierUrl) {
-    const base = verifierUrl.replace(/#.*$/, '');
-    return base + (base.endsWith('/') ? '' : '') + '#v=' + payload;
+  const base = safeHttpsUrl(verifierUrl);
+  if (base) {
+    return base.replace(/#.*$/, '') + '#v=' + payload;
   }
   // Fallback: no verifier configured — still a scannable text receipt.
   return [
@@ -6215,7 +6328,7 @@ function applySettings(obj) {
     const key = 'radio:' + name;
     if (!(key in obj)) continue;
     const val = obj[key];
-    const el = document.querySelector(`input[name="${name}"][value="${val}"]`);
+    const el = Array.from(document.querySelectorAll(`input[name="${name}"]`)).find(radio => radio.value === val);
     if (el) el.checked = true;
   }
   if (!['2', '3'].includes($('certifyPermission').value) || !('certifyPermission' in obj)) {
@@ -6272,7 +6385,7 @@ function updateGhSummary() {
     const rec = hasId ? identities.get(identity.id) : null;
     if (rec && rec.certVaultUrl) {
       cps.style.display = '';
-      cps.innerHTML = `✓ Cert published: <a href="${rec.certVaultUrl}" target="_blank" style="color:var(--accent); word-break:break-all;">${rec.certVaultUrl}</a>`;
+      cps.innerHTML = `✓ Cert published: <a href="${esc(safeHttpsUrl(rec.certVaultUrl))}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); word-break:break-all;">${esc(rec.certVaultUrl)}</a>`;
     } else if (c && hasId) {
       cps.style.display = '';
       cps.textContent = 'Cert will auto-publish on your first signature with this identity.';
@@ -6319,18 +6432,16 @@ async function ghMigrateGlobalIfAny() {
   await idbDel('ghVaultConfig');
 }
 
-function ghRawUrl(c, filename) {
-  return `https://raw.githubusercontent.com/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.branch)}/${c.pathPrefix.replace(/^\/+|\/+$/g, '')}/${encodeURIComponent(filename)}`;
+function encodeRepoPath(path) {
+  const parts = String(path).split('/').filter(Boolean);
+  if (!parts.length || parts.some(part => part === '.' || part === '..')) throw new Error('Invalid vault path');
+  return parts.map(encodeURIComponent).join('/');
 }
 
-/* ─── OCSP client + PAdES-B-LT / DSS embedding ────────────────────────
-   Fetch OCSP responses for the signer + intermediates from each cert's
-   Authority Information Access (AIA) extension, bundle them into a
-   Document Security Store (DSS) dict that lives at the catalog level.
-   Result: Adobe shows the "LTV enabled" badge and verifiers can check
-   revocation status without live network calls even years later.
-   Best-effort: if OCSP fails (self-signed cert, CORS, offline), sign
-   without DSS and continue. */
+function ghRawUrl(c, filename) {
+  const path = encodeRepoPath(c.pathPrefix + '/' + filename);
+  return `https://raw.githubusercontent.com/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.branch)}/${path}`;
+}
 
 const OID_OCSP_ACCESS_METHOD = '1.3.6.1.5.5.7.48.1'; // id-ad-ocsp
 
@@ -6372,75 +6483,136 @@ function ocspUrlFromCert(cert) {
 }
 
 function buildOcspRequest(cert, issuer) {
-  const asn1 = forge.asn1;
-  // CertID ::= SEQUENCE { hashAlgorithm SHA-1, issuerNameHash, issuerKeyHash, serialNumber INTEGER }
-  // SHA-1 is required by many OCSP responders (RFC 5019 §2.1.1).
-  const issuerNameDer = asn1.toDer(forge.pki.distinguishedNameToAsn1(issuer.subject)).getBytes();
-  const issuerNameHash = forge.md.sha1.create().update(issuerNameDer).digest().bytes();
-  // Issuer public key hash = SHA-1 of the subjectPublicKey BIT STRING contents
-  // (without the ASN.1 tag/length, without the leading unused-bits byte).
-  const spkiAsn1 = forge.pki.publicKeyToAsn1(issuer.publicKey);
-  // spkiAsn1 = SubjectPublicKeyInfo SEQUENCE { AlgId, BIT STRING publicKey }
-  const bitStr = spkiAsn1.value[1];
-  let keyBytes = bitStr.value;
-  if (keyBytes.charCodeAt(0) === 0) keyBytes = keyBytes.substring(1); // strip unused-bits byte
-  const issuerKeyHash = forge.md.sha1.create().update(keyBytes).digest().bytes();
-  const serialHex = cert.serialNumber; // hex string per forge
-  let serialBytes = '';
-  for (let i = 0; i < serialHex.length; i += 2) serialBytes += String.fromCharCode(parseInt(serialHex.substr(i, 2), 16));
-  // Ensure positive INTEGER.
-  if (serialBytes.length && (serialBytes.charCodeAt(0) & 0x80)) serialBytes = '\x00' + serialBytes;
-
-  const certID = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
-    // hashAlgorithm SHA-1
-    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
-      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer('1.3.14.3.2.26').getBytes()),
-      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, false, ''),
-    ]),
-    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, issuerNameHash),
-    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, issuerKeyHash),
-    asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, serialBytes),
+  const { asn1, md, pki, util } = forge;
+  const seq = values => asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, values);
+  const primitive = (type, value) => asn1.create(asn1.Class.UNIVERSAL, type, false, value);
+  const sha1 = bytes => md.sha1.create().update(bytes).digest().bytes();
+  const issuerTbs = pki.certificateToAsn1(issuer).value[0].value;
+  const first = issuerTbs[0].tagClass === asn1.Class.CONTEXT_SPECIFIC ? 1 : 0;
+  const issuerName = asn1.toDer(issuerTbs[first + 4]).getBytes();
+  const publicKeyBits = issuerTbs[first + 5].value[1];
+  const keyDer = asn1.toDer(publicKeyBits).getBytes();
+  // Decode the primitive without interpreting its payload as a nested ASN.1 object.
+  const keyBytes = asn1.fromDer(keyDer, { decodeBitStrings: false }).value.slice(1);
+  const certTbs = pki.certificateToAsn1(cert).value[0].value;
+  const serial = certTbs[certTbs[0].tagClass === asn1.Class.CONTEXT_SPECIFIC ? 1 : 0];
+  const certId = seq([
+    seq([primitive(asn1.Type.OID, asn1.oidToDer('1.3.14.3.2.26').getBytes()), primitive(asn1.Type.NULL, '')]),
+    primitive(asn1.Type.OCTETSTRING, sha1(issuerName)),
+    primitive(asn1.Type.OCTETSTRING, sha1(keyBytes)),
+    serial,
   ]);
-  const request = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [certID]);
-  const requestList = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [request]);
-  const tbsRequest = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [requestList]);
-  const ocspRequest = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [tbsRequest]);
-  return asn1.toDer(ocspRequest).getBytes();
+  const request = seq([seq([seq([seq([certId])])])]);
+  return { bytes: binStrToU8(asn1.toDer(request).getBytes()), certId };
 }
 
-async function fetchOcspResponse(cert, issuer) {
-  const url = ocspUrlFromCert(cert);
+function matchingOcspEvidence(bytes, requested, issuer) {
+  const { asn1, md, pki } = forge;
+  const response = asn1.fromDer(u8ToBinStr(bytes), { maxDepth: 64 });
+  if (response.value[0].value !== '\x00') return false;
+  const body = response.value[1].value[0].value;
+  if (asn1.derToOid(body[0].value) !== '1.3.6.1.5.5.7.48.1.1') return false;
+  const basic = asn1.fromDer(body[1].value, { maxDepth: 64, decodeBitStrings: false });
+  const [signedData, signatureAlgorithm, signature, responderCerts] = basic.value;
+  const algorithms = {
+    '1.2.840.113549.1.1.5': md.sha1,
+    '1.2.840.113549.1.1.11': md.sha256,
+    '1.2.840.113549.1.1.12': md.sha384,
+    '1.2.840.113549.1.1.13': md.sha512,
+  };
+  const algorithm = algorithms[asn1.derToOid(signatureAlgorithm.value[0].value)];
+  if (!algorithm || typeof signature.value !== 'string' || signature.value.charCodeAt(0) !== 0) return false;
+  const digest = algorithm.create().update(asn1.toDer(signedData).getBytes()).digest().bytes();
+  const data = signedData.value;
+  const start = data[0].tagClass === asn1.Class.CONTEXT_SPECIFIC && data[0].type === 0 ? 1 : 0;
+  const responder = data[start];
+  const produced = parseGeneralizedTime(data[start + 1].value);
+  if (!produced || produced.getTime() > Date.now() + 5 * 60 * 1000) return false;
+  const candidates = [issuer];
+  for (const item of responderCerts?.value?.[0]?.value || []) {
+    try { candidates.push(pki.certificateFromAsn1(item)); } catch (_) {}
+  }
+  const authenticated = candidates.some(cert => {
+    try {
+      if (produced < cert.validity.notBefore || produced > cert.validity.notAfter) return false;
+      if (cert !== issuer && (!cert.getExtension('extKeyUsage')?.ocspSigning ||
+          !issuer.verify(cert))) return false;
+      const tbs = pki.certificateToAsn1(cert).value[0].value;
+      const first = tbs[0].tagClass === asn1.Class.CONTEXT_SPECIFIC ? 1 : 0;
+      if (responder.tagClass !== asn1.Class.CONTEXT_SPECIFIC) return false;
+      if (responder.type === 1) {
+        if (asn1.toDer(responder.value[0]).getBytes() !== asn1.toDer(tbs[first + 4]).getBytes()) return false;
+      } else if (responder.type === 2) {
+        const key = asn1.fromDer(asn1.toDer(tbs[first + 5].value[1]).getBytes(), { decodeBitStrings: false }).value.slice(1);
+        const expected = responder.constructed ? responder.value[0].value : responder.value;
+        if (md.sha1.create().update(key).digest().bytes() !== expected) return false;
+      } else return false;
+      return cert.publicKey.verify(digest, signature.value.slice(1));
+    } catch (_) { return false; }
+  });
+  if (!authenticated) return false;
+  const serial = value => value.replace(/^\x00+/, '');
+  return data[start + 2].value.some(entry => {
+    const [id, status, thisUpdate, nextUpdate] = entry.value;
+    const [algorithm, nameHash, keyHash, number] = id.value;
+    const [expectedAlgorithm, expectedName, expectedKey, expectedNumber] = requested.value;
+    if (asn1.derToOid(algorithm.value[0].value) !== asn1.derToOid(expectedAlgorithm.value[0].value) ||
+        nameHash.value !== expectedName.value || keyHash.value !== expectedKey.value ||
+        serial(number.value) !== serial(expectedNumber.value)) return false;
+    const now = Date.now();
+    const updated = parseGeneralizedTime(thisUpdate.value)?.getTime();
+    const expiry = nextUpdate?.type === 0 ? parseGeneralizedTime(nextUpdate.value[0].value)?.getTime() : null;
+    return status.tagClass === asn1.Class.CONTEXT_SPECIFIC && status.type <= 2 &&
+      Number.isFinite(updated) && updated <= now + 5 * 60 * 1000 &&
+      (expiry == null ? now - updated <= 7 * 24 * 60 * 60 * 1000 : expiry >= now);
+  });
+}
+
+async function collectOcspEvidence(cert, issuer) {
+  const address = ocspUrlFromCert(cert);
+  // HTTPS pages cannot fetch most HTTP responders directly. Try HTTPS on
+  // the same responder rather than sending certificate IDs via a proxy.
+  const url = safeHttpsUrl(address?.replace(/^http:/i, 'https:'));
   if (!url) return null;
-  const req = buildOcspRequest(cert, issuer);
-  const reqU8 = new Uint8Array(req.length);
-  for (let i = 0; i < req.length; i++) reqU8[i] = req.charCodeAt(i) & 0xff;
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/ocsp-request', 'Accept': 'application/ocsp-response' },
-      body: reqU8,
+    const { bytes, certId } = buildOcspRequest(cert, issuer);
+    const response = await fetch(url, {
+      method: 'POST', body: bytes,
+      headers: { 'Content-Type': 'application/ocsp-request', Accept: 'application/ocsp-response' },
+      credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return null;
-    const buf = new Uint8Array(await res.arrayBuffer());
-    return buf;
-  } catch (e) {
-    console.warn('OCSP fetch failed for', url, e.message);
+    if (!response.ok) return null;
+    const evidence = await readBoundedResponse(response, 1024 * 1024);
+    return matchingOcspEvidence(evidence, certId, issuer) ? evidence : null;
+  } catch (error) {
+    console.warn('Could not collect OCSP evidence:', error.message);
     return null;
   }
 }
 
-// Given the full cert chain (leaf → root order), fetch every OCSP response we
-// can. Returns an array of Uint8Arrays; skips certs that have no responder or
-// whose fetch fails.
-async function fetchChainOcsp(chain) {
-  const responses = [];
-  for (let i = 0; i < chain.length - 1; i++) {
-    const cert = chain[i];
-    const issuer = chain[i + 1];
-    const r = await fetchOcspResponse(cert, issuer);
-    if (r) responses.push({ cert, ocsp: r });
-  }
-  return responses;
+// Preserve the authenticated evidence for independent validators. Trust in
+// the issuer still depends on the validator's certificate trust policy.
+async function prepareDss(pdfDoc, cert, chain, register) {
+  const { PDFArray, PDFDict, PDFName } = PDFLib;
+  const ctx = pdfDoc.context;
+  const certs = chain?.length ? chain : [cert];
+  if (certs.length < 2) return null;
+  const responses = (await Promise.all(certs.slice(0, -1).map((item, i) =>
+    collectOcspEvidence(item, certs[i + 1])))).filter(Boolean);
+  if (!responses.length) return null;
+  const dssKey = PDFName.of('DSS');
+  const existing = pdfDoc.catalog.lookup(dssKey);
+  const dss = existing instanceof PDFDict ? existing.clone(ctx) : ctx.obj({ Type: 'DSS' });
+  const merge = (name, data) => {
+    const key = PDFName.of(name);
+    const original = dss.lookup(key);
+    const refs = original instanceof PDFArray ? original.clone(ctx) : ctx.obj([]);
+    for (const bytes of data) refs.push(register(ctx.flateStream(bytes)));
+    dss.set(key, refs);
+  };
+  merge('Certs', certs.map(item => binStrToU8(forge.asn1.toDer(forge.pki.certificateToAsn1(item)).getBytes())));
+  merge('OCSPs', responses);
+  return dss;
 }
 
 // Introspect a parsed X.509 cert and report what it can be used for. Reads
@@ -6467,24 +6639,21 @@ function certCapabilities(cert) {
 // verifiers can fetch it and transitively trust it via the vault's HTTPS
 // chain. Idempotent — reuses a cached URL if already published for this
 // identity. Returns the raw URL, or null if the vault isn't configured.
-async function ensureCertPublishedToVault(unlocked) {
-  if (!ghVault.config) return null;
-  const rec = identities.get(identity.id);
-  if (!rec) return null;
-  if (rec.certVaultUrl) return rec.certVaultUrl;
+async function ensureCertPublishedToVault(unlocked, config, identityId) {
+  const rec = identities.get(identityId);
+  if (!config || !rec) return null;
   const pem = forge.pki.certificateToPem(unlocked.cert);
-  // File name: cert fingerprint (SHA-1 hex, no colons) — stable per key pair.
   const fp = certFingerprint(unlocked.cert).replace(/[^0-9a-f]/gi, '').toLowerCase();
   const filename = 'certs/' + fp + '.pem';
-  const bytes = new TextEncoder().encode(pem);
-  await ghPutFile(ghVault.config, filename, bytes, 'pdf-signer publish cert ' + fp);
-  // ghRawUrl encodeURIComponent's the filename, which would break nested paths
-  // (encodes the "/" as %2F). Build the URL directly since we control the path.
-  const c = ghVault.config;
-  const url = `https://raw.githubusercontent.com/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.branch)}/${c.pathPrefix.replace(/^\/+|\/+$/g, '')}/${filename}`;
-  await updateActiveIdentity({ certVaultUrl: url });
-  toast('Cert published to vault → recipients get transitive trust', 'ok');
-  renderIdentity();
+  const url = ghRawUrl(config, filename);
+  if (rec.certVaultUrl === url) return url;
+  await ghPutFile(config, filename, new TextEncoder().encode(pem), 'pdf-signer publish cert ' + fp);
+  if (identities.get(identityId) === rec) {
+    rec.certVaultUrl = url;
+    await saveIdentitiesToDb();
+  }
+  toast('Certificate published to vault', 'ok');
+  if (identity.id === identityId) renderIdentity();
   return url;
 }
 async function ghApi(c, path, init={}) {
@@ -6510,9 +6679,7 @@ async function ghTestConfig(c) {
 async function ghPutFile(c, filename, dataU8, commitMsg, opts={}) {
   // Default path is under the vault path prefix. Override with opts.pathOverride
   // (used for publishing the verifier to docs/index.html).
-  const p = opts.pathOverride
-    ? opts.pathOverride.replace(/^\/+|\/+$/g, '')
-    : (c.pathPrefix.replace(/^\/+|\/+$/g, '') + '/' + filename);
+  const p = encodeRepoPath(opts.pathOverride || c.pathPrefix + '/' + filename);
   let sha;
   try {
     const cur = await ghApi(c, `/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/contents/${p}?ref=${encodeURIComponent(c.branch)}`);
@@ -6618,20 +6785,20 @@ $('btnGhConfigure').onclick = async () => {
     </div>
 
     <label>GitHub username or organisation (owner of the repo)</label>
-    <input type="text" id="ghOwner" value="${(c.owner || '').replace(/"/g,'&quot;')}" placeholder="your-username">
+    <input type="text" id="ghOwner" value="${esc(c.owner || '')}" placeholder="your-username">
 
     <label>Repo name <span style="color:var(--muted)">(will be created if it doesn't exist)</span></label>
-    <input type="text" id="ghRepo" value="${(c.repo || 'pdf-signer-vault').replace(/"/g,'&quot;')}" placeholder="pdf-signer-vault">
+    <input type="text" id="ghRepo" value="${esc(c.repo || 'pdf-signer-vault')}" placeholder="pdf-signer-vault">
 
     <label>Personal access token</label>
-    <input type="password" id="ghToken" value="${(c.token || '').replace(/"/g,'&quot;')}" placeholder="github_pat_...">
+    <input type="password" id="ghToken" value="${esc(c.token || '')}" placeholder="github_pat_...">
 
     <details style="margin-top:10px">
       <summary>Advanced (branch, path, privacy, verifier URL)</summary>
       <label>Branch</label>
-      <input type="text" id="ghBranch" value="${(c.branch || 'main').replace(/"/g,'&quot;')}" placeholder="main">
+      <input type="text" id="ghBranch" value="${esc(c.branch || 'main')}" placeholder="main">
       <label>Path prefix inside repo</label>
-      <input type="text" id="ghPath" value="${(c.pathPrefix || 'vault').replace(/"/g,'&quot;')}" placeholder="vault">
+      <input type="text" id="ghPath" value="${esc(c.pathPrefix || 'vault')}" placeholder="vault">
       <label>Verifier URL <span style="color:var(--muted)">(what the QR points to — defaults to the well-known upstream verifier)</span></label>
       <input type="text" id="ghVerifier" value="${(c.verifierUrl || '').replace(/"/g,'&quot;')}" placeholder="${CANONICAL_VERIFIER_URL}">
       <label class="lock-row" style="margin-top:8px"><input type="checkbox" id="ghPrivate" checked> If the repo is created, make it private (recommended — vaults are encrypted, but privacy adds a second layer)</label>
@@ -6660,7 +6827,7 @@ $('btnGhConfigure').onclick = async () => {
     if (!exists) {
       const askCreate = await modal({
         title: 'Repo doesn\'t exist — create it now?',
-        body: `The token works (signed in as <b>${who.login}</b>), but <code>${next.owner}/${next.repo}</code> was not found. Create it now with an initial commit on <code>${next.branch}</code>? ${r.ghPrivate ? 'It will be <b>private</b>.' : 'It will be <b>public</b>.'}`,
+        body: `The token works (signed in as ${who.login}), but ${next.owner}/${next.repo} was not found. Create it with an initial commit on ${next.branch}? It will be ${r.ghPrivate ? 'private' : 'public'}.`,
         confirmText: 'Create repo',
       });
       if (!askCreate) return;
@@ -6944,7 +7111,19 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, certifyPermi
     PDFName, PDFString, PDFHexString, PDFNumber,
   } = window.PDFLib;
 
-  const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: false });
+  let pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: false });
+  const redactions = placements.filter(placement => placement.type === 'redact');
+  if (redactions.length) {
+    if (!pdfjsDoc || pdfDoc.catalog.getAcroForm()?.dict.has(PDFName.of('XFA'))) {
+      throw new Error('This PDF cannot be redacted safely.');
+    }
+    const sanitized = await redactPdfContent(bytes, pdfjsDoc, redactions);
+    pdfDoc = await PDFDocument.load(sanitized, { ignoreEncryption: false });
+    const retainedAttachment = pdfDoc.context.enumerateIndirectObjects().some(([, object]) =>
+      object instanceof PDFLib.PDFRawStream && object.dict.get(PDFName.of('Type')) === PDFName.of('EmbeddedFile'));
+    if (retainedAttachment) throw new Error('The redacted PDF still contains an embedded file.');
+    if (sigFieldMap) sigFieldMap = buildSigFieldMap(pdfDoc);
+  }
   applyFormEdits(pdfDoc, formEdits);
   const fonts = {
     helv:              await pdfDoc.embedFont(StandardFonts.Helvetica),
@@ -6971,47 +7150,6 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, certifyPermi
   const sigPlacements    = placements.filter(p => p.type === 'digital');
   const textPlacements   = placements.filter(p => p.type === 'text');
   const stampPlacement   = placements.find(p => p.type === 'stamp') || null;
-  const redactPlacements = placements.filter(p => p.type === 'redact');
-
-  // ── Real redaction ────────────────────────────────────────────────────
-  // Two paths, chosen per-page:
-  //   1. Surgical (preferred): parse the page's content stream, remove any
-  //      text-showing operator whose glyphs land inside a redaction rect,
-  //      keep everything else (paths, other images, other text) as VECTORS.
-  //      The rest of the page stays selectable, searchable, high-DPI.
-  //   2. Raster (fallback): if surgical fails on this page (unsupported
-  //      filter, missing font metrics, CID font, etc.), rasterize the page
-  //      at 220 DPI, burn in the black rectangles, replace the page with a
-  //      single image. Nothing on that page is selectable but the redaction
-  //      is guaranteed.
-  // Either way, solid black rectangles are painted at the redaction
-  // locations so viewers show them clearly.
-  if (redactPlacements.length > 0) {
-    if (!pdfjsDoc) throw new Error('redaction needs the open pdf.js document (pdfjsDoc)');
-    const byPage = new Map();
-    for (const r of redactPlacements) {
-      if (!byPage.has(r.pageIndex)) byPage.set(r.pageIndex, []);
-      byPage.get(r.pageIndex).push(r);
-    }
-    for (const [pageIndex, rects] of byPage) {
-      const annotations = await (await pdfjsDoc.getPage(pageIndex + 1)).getAnnotations();
-      const overlapsWidget = annotations.some(({ annotationType, rect }) =>
-        annotationType === 20 && rect && rects.some(r =>
-          r.xPdf < rect[2] && r.xPdf + r.wPdf > rect[0] &&
-          r.yPdf < rect[3] && r.yPdf + r.hPdf > rect[1]));
-      if (overlapsWidget) throw new Error('Move the redaction away from the PDF form field before signing.');
-      let mode = 'surgical';
-      try {
-        await surgicalRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects);
-      } catch (e) {
-        console.warn(`surgical redact fell back to raster on page ${pageIndex + 1}:`, e && e.message);
-        mode = 'raster';
-        await rasterRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects);
-      }
-      console.info(`redact page ${pageIndex + 1}: ${mode}`);
-    }
-  }
-  // ──────────────────────────────────────────────────────────────────────
 
   // ── Explicitly-removed empty signature AcroForm fields ────────────────
   // If the user clicked a "Sign here?" hint (which turned a pre-existing
@@ -7270,38 +7408,8 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, certifyPermi
   // have this entry in the first place.
   pdfDoc.catalog.delete(PDFName.of('Version'));
 
-  // ── PAdES-B-LT: fetch OCSP responses for the cert chain and embed a DSS
-  // (Document Security Store) at the catalog level. Adobe reads this and
-  // shows the "LTV enabled" badge; verifiers can check revocation status
-  // offline for the life of the signed doc. Best-effort — if fetching OCSP
-  // fails (self-signed cert, no responder, CORS), skip DSS and continue.
-  try {
-    const chainForOcsp = Array.isArray(chain) && chain.length ? chain : [cert];
-    const ocspResults = await fetchChainOcsp(chainForOcsp);
-    if (ocspResults.length > 0) {
-      const { PDFRawStream, PDFDict } = window.PDFLib;
-      const certRefs = chainForOcsp.map(c => {
-        const der = forge.asn1.toDer(forge.pki.certificateToAsn1(c)).getBytes();
-        const bytes = new Uint8Array(der.length);
-        for (let i = 0; i < der.length; i++) bytes[i] = der.charCodeAt(i) & 0xff;
-        const sd = PDFDict.withContext(context);
-        sd.set(PDFName.of('Length'), PDFNumber.of(bytes.length));
-        return context.register(PDFRawStream.of(sd, bytes));
-      });
-      const ocspRefs = ocspResults.map(r => {
-        const sd = PDFDict.withContext(context);
-        sd.set(PDFName.of('Length'), PDFNumber.of(r.ocsp.length));
-        return context.register(PDFRawStream.of(sd, r.ocsp));
-      });
-      const dss = context.obj({
-        Type: 'DSS',
-        Certs: certRefs,
-        OCSPs: ocspRefs,
-      });
-      pdfDoc.catalog.set(PDFName.of('DSS'), context.register(dss));
-    }
-  } catch (e) { console.warn('DSS embedding skipped:', e && e.message); }
-
+  const dss = await prepareDss(pdfDoc, cert, chain, object => context.register(object));
+  if (dss) pdfDoc.catalog.set(PDFName.of('DSS'), context.register(dss));
   let saved = await pdfDoc.save({ useObjectStreams: false, addDefaultPage: false, updateFieldAppearances: false });
   saved = new Uint8Array(saved);
   const text = dec.decode(saved);
@@ -7329,495 +7437,101 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, certifyPermi
   const contentsHexStart = contentsStart + 1;
   for (let i = 0; i < sig.hexPadded.length; i++) saved[contentsHexStart + i] = sig.hexPadded.charCodeAt(i);
   if (tsaUrl && !backdated) {
-    if (sig.tsaEmbedded) toast('Trusted timestamp embedded from ' + tsaUrl, 'ok');
-    else if (sig.tsaError) toast('TSA failed — signed WITHOUT trusted timestamp: ' + sig.tsaError, 'err');
+    if (sig.tsaEmbedded) toast('Timestamp token embedded from ' + tsaUrl, 'ok');
+    else if (sig.tsaError) toast('TSA failed. Signed without a timestamp token: ' + sig.tsaError, 'err');
   }
 
   return saved;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   Redaction — surgical (vector-preserving) and raster (fallback).
-   ═══════════════════════════════════════════════════════════════════════ */
-
-// Rasterize the page and burn in the black rectangles. Everything else on the
-// page is lost to raster. Used as a fallback when surgical fails.
-async function rasterRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects) {
-  const { PDFName, PDFRawStream, PDFDict } = window.PDFLib;
-  const pdfjsPage = await pdfjsDoc.getPage(pageIndex + 1);
-  const scale = 220 / 72;
-  const vp = pdfjsPage.getViewport({ scale });
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(vp.width);
-  canvas.height = Math.round(vp.height);
-  const ctx = canvas.getContext('2d');
-  await pdfjsPage.render({ canvasContext: ctx, viewport: vp, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
-  ctx.fillStyle = '#000';
-  // Convert redaction rectangles from unrotated PDF space to canvas space via
-  // pdf.js's viewport, which handles /Rotate transparently. Walk the 4 corners
-  // and take the axis-aligned bounding box.
-  for (const r of rects) {
-    const corners = [
-      vp.convertToViewportPoint(r.xPdf,          r.yPdf),
-      vp.convertToViewportPoint(r.xPdf + r.wPdf, r.yPdf),
-      vp.convertToViewportPoint(r.xPdf,          r.yPdf + r.hPdf),
-      vp.convertToViewportPoint(r.xPdf + r.wPdf, r.yPdf + r.hPdf),
-    ];
-    const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
-    const x = Math.min(...xs), y = Math.min(...ys);
-    const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
-    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
-  }
-  const pngB64 = canvas.toDataURL('image/png').split(',')[1];
-  const pngBytes = binStrToU8(atob(pngB64));
-  const imgObj = await pdfDoc.embedPng(pngBytes);
-  const page = pdfDoc.getPage(pageIndex);
-  const { width: pageW, height: pageH } = page.getSize();
-  const content = `q ${pageW} 0 0 ${pageH} 0 0 cm /RedactImg Do Q\n`;
-  const streamBytes = new TextEncoder().encode(content);
-  const streamDict = PDFDict.withContext(pdfDoc.context);
-  streamDict.set(PDFName.of('Length'), pdfDoc.context.obj(streamBytes.length));
-  const stream = PDFRawStream.of(streamDict, streamBytes);
-  const streamRef = pdfDoc.context.register(stream);
-  page.node.set(PDFName.of('Contents'), streamRef);
-  page.node.set(PDFName.of('Resources'), pdfDoc.context.obj({
-    XObject: { RedactImg: imgObj.ref },
-    ProcSet: ['PDF', 'ImageC'],
-  }));
-}
-
-// Surgical: remove ONLY the glyphs (and images) inside the redaction rects.
-// Vector paths, other text, other images stay untouched. Falls back if the
-// page uses constructs we haven't implemented (CID fonts, complex encodings,
-// unusual filters).
-async function surgicalRedactPage(pdfDoc, pdfjsDoc, pageIndex, rects) {
-  const { PDFName, PDFRawStream, PDFDict } = window.PDFLib;
-  const page = pdfDoc.getPage(pageIndex);
-
-  // 1. Fetch pdf.js's authoritative text-item geometry for this page and use
-  //    it as the redaction oracle. Each item carries device-space coordinates.
-  const pdfjsPage = await pdfjsDoc.getPage(pageIndex + 1);
-  const textContent = await pdfjsPage.getTextContent({ includeMarkedContent: false, disableCombineTextItems: true });
-  const vp1 = pdfjsPage.getViewport({ scale: 1 });
-  const redactedItems = [];        // items to redact, keyed by (x, y, str)
-  for (const item of textContent.items) {
-    if (!item.str) continue;
-    // item.transform = [a, b, c, d, e, f]; (e, f) is baseline start in PDF pt.
-    // item.width / item.height are in device space at scale 1 — same units.
-    const x1 = item.transform[4], y1 = item.transform[5];
-    const x2 = x1 + item.width,   y2 = y1 + item.height;
-    // Redaction rects are in PDF coords with y-up, {xPdf, yPdf, wPdf, hPdf}.
-    const hit = rects.some(r => !(x2 < r.xPdf || x1 > r.xPdf + r.wPdf
-                               || y2 < r.yPdf || y1 > r.yPdf + r.hPdf));
-    if (hit) redactedItems.push({ x: x1, y: y1, str: item.str });
-  }
-
-  // 2. Extract the page's content stream(s) and decompress them.
-  const combined = await extractDecompressedPageContent(pdfDoc, page);
-  if (combined === null) throw new Error('unsupported stream filter');
-
-  // 3. Tokenize + group into (op, operands) sequence.
-  const ops = parseContentOperators(combined);
-
-  // 4. Walk the operators tracking (CTM, text matrix, text-line matrix, Tf,
-  //    Tc, Tw, Th) and, for each text-showing op, compute the pen position
-  //    in device coords at the START of the shown string. If that position
-  //    matches a redacted item within a small tolerance, replace the op with
-  //    a movement-only equivalent so following text stays put.
-  const out = rewriteRedactingTextOps(ops, redactedItems);
-
-  // 5. Serialize back to a content-stream body. Append fill-black-rect ops
-  //    so viewers see a solid black band where the redaction happened.
-  const body = serializeOperators(out) + '\n' +
-    rects.map(r => `q 0 0 0 rg ${pdfNum(r.xPdf)} ${pdfNum(r.yPdf)} ${pdfNum(r.wPdf)} ${pdfNum(r.hPdf)} re f Q`).join('\n') + '\n';
-  const outBytes = new TextEncoder().encode(body);
-
-  // 6. Replace Contents with the rewritten stream. Keep the existing
-  //    Resources — the surviving text still needs its fonts and its XObjects.
-  const streamDict = PDFDict.withContext(pdfDoc.context);
-  streamDict.set(PDFName.of('Length'), pdfDoc.context.obj(outBytes.length));
-  const stream = PDFRawStream.of(streamDict, outBytes);
-  const streamRef = pdfDoc.context.register(stream);
-  page.node.set(PDFName.of('Contents'), streamRef);
-
-  // 7. Drop annotations that fall inside a redaction rect (comments, links,
-  //    embedded form widgets), keep the rest.
-  pruneAnnotationsInRects(pdfDoc, page, rects);
-}
-
-async function extractDecompressedPageContent(pdfDoc, page) {
-  const { PDFName, PDFArray, PDFRawStream } = window.PDFLib;
-  const contents = page.node.get(PDFName.of('Contents'));
-  if (!contents) return new Uint8Array();
-  const looked = pdfDoc.context.lookup(contents);
-  const streams = [];
-  if (looked instanceof PDFArray) {
-    for (let i = 0; i < looked.size(); i++) {
-      streams.push(pdfDoc.context.lookup(looked.get(i)));
+// Rewrite the selected areas and save a standalone revision. Garbage
+// collection is required because appending a revision leaves the source
+// streams in the PDF and a plain rewrite may retain unused objects.
+async function redactPdfContent(bytes, viewer, redactions) {
+  const byPage = new Map();
+  for (const { pageIndex, xPdf, yPdf, wPdf, hPdf } of redactions) {
+    if (![xPdf, yPdf, wPdf, hPdf].every(Number.isFinite) || wPdf <= 0 || hPdf <= 0 ||
+        !Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= viewer.numPages) {
+      throw new Error('Invalid redaction area');
     }
-  } else {
-    streams.push(looked);
+    const rects = byPage.get(pageIndex) || [];
+    rects.push([xPdf, yPdf, xPdf + wPdf, yPdf + hPdf]);
+    byPage.set(pageIndex, rects);
   }
-  const chunks = [];
-  for (const s of streams) {
-    if (!(s instanceof PDFRawStream)) return null;
-    let raw = s.contents;
-    const dict = s.dict;
-    let filter = dict.get(PDFName.of('Filter'));
-    if (filter) filter = pdfDoc.context.lookup(filter);
-    const filterName =
-      filter && filter.constructor && filter.constructor.name === 'PDFName' ? filter.value()
-      : filter && filter.asArray ? (filter.asArray()[0] && pdfDoc.context.lookup(filter.asArray()[0]).value())
-      : null;
-    if (filterName == null || filterName === '' || filterName === '/') {
-      chunks.push(raw);
-    } else if (filterName === 'FlateDecode' || filterName === '/FlateDecode') {
+  const overlaps = (a, b) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
+  for (const [pageIndex, rects] of byPage) {
+    const annotations = await (await viewer.getPage(pageIndex + 1)).getAnnotations();
+    if (annotations.some(annotation => annotation.annotationType === 20 &&
+        annotation.rect && rects.some(rect => overlaps(rect, annotation.rect)))) {
+      throw new Error('A redaction overlaps an interactive form field.');
+    }
+  }
+
+  const { default: mupdf } = await import('https://cdn.jsdelivr.net/npm/mupdf@1.28.6/dist/mupdf.js');
+  const source = mupdf.Document.openDocument(bytes, 'application/pdf');
+  try {
+    const pdf = source.asPDF();
+    if (!pdf || pdf.countPages() !== viewer.numPages) throw new Error('PDF page layout cannot be verified for redaction');
+    const attachments = pdf.getEmbeddedFiles();
+    for (const [name, file] of Object.entries(attachments)) {
+      try { pdf.deleteEmbeddedFile(name); }
+      finally { file.destroy(); }
+    }
+    for (let pageIndex = 0; pageIndex < pdf.countPages(); pageIndex++) {
+      const page = pdf.loadPage(pageIndex);
       try {
-        const ds = new DecompressionStream('deflate');
-        const buf = await new Response(new Blob([raw]).stream().pipeThrough(ds)).arrayBuffer();
-        chunks.push(new Uint8Array(buf));
-      } catch (e) {
-        // Some PDFs use raw deflate without zlib header — try 'deflate-raw'.
-        try {
-          const ds2 = new DecompressionStream('deflate-raw');
-          const buf = await new Response(new Blob([raw]).stream().pipeThrough(ds2)).arrayBuffer();
-          chunks.push(new Uint8Array(buf));
-        } catch (e2) {
-          return null;
-        }
-      }
-    } else {
-      return null;
-    }
-  }
-  const total = chunks.reduce((a, c) => a + c.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) { out.set(c, offset); offset += c.length; }
-  return out;
-}
-
-/* ── Content-stream tokenizer + operator grouper ─────────────────────── */
-
-const OP_DELIMS = new Set(['(', ')', '<', '>', '[', ']', '{', '}', '/', '%']);
-function isWs(c) { return c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\0'; }
-
-function parseContentOperators(bytes) {
-  const s = new TextDecoder('latin1').decode(bytes);
-  const ops = [];
-  let operands = [];
-  let i = 0;
-  function readObj() {
-    // Skip whitespace + comments
-    while (i < s.length) {
-      if (isWs(s[i])) { i++; continue; }
-      if (s[i] === '%') { while (i < s.length && s[i] !== '\n' && s[i] !== '\r') i++; continue; }
-      break;
-    }
-    if (i >= s.length) return null;
-    const c = s[i];
-    if (c === '(') return readString();
-    if (c === '<') {
-      if (s[i + 1] === '<') return readDict();
-      return readHexString();
-    }
-    if (c === '[') return readArray();
-    if (c === '/') return readName();
-    if (/[0-9+\-.]/.test(c)) return readNumberOrOp();
-    return readOperator();
-  }
-  function readString() {
-    let depth = 1, out = '';
-    i++;
-    while (i < s.length && depth > 0) {
-      const ch = s[i];
-      if (ch === '\\') {
-        i++;
-        const n = s[i];
-        if (n === 'n') { out += '\n'; i++; }
-        else if (n === 'r') { out += '\r'; i++; }
-        else if (n === 't') { out += '\t'; i++; }
-        else if (n === 'b') { out += '\b'; i++; }
-        else if (n === 'f') { out += '\f'; i++; }
-        else if (n === '(') { out += '('; i++; }
-        else if (n === ')') { out += ')'; i++; }
-        else if (n === '\\') { out += '\\'; i++; }
-        else if (/[0-7]/.test(n)) {
-          let oct = n; i++;
-          if (i < s.length && /[0-7]/.test(s[i])) { oct += s[i]; i++; }
-          if (i < s.length && /[0-7]/.test(s[i])) { oct += s[i]; i++; }
-          out += String.fromCharCode(parseInt(oct, 8));
-        } else if (n === '\r') { i++; if (s[i] === '\n') i++; }
-        else if (n === '\n') { i++; }
-        else { out += n; i++; }
-      } else if (ch === '(') { depth++; out += ch; i++; }
-      else if (ch === ')') { depth--; if (depth > 0) out += ch; i++; }
-      else { out += ch; i++; }
-    }
-    return { type: 'str', bytes: out };  // bytes: latin1-string of raw codes
-  }
-  function readHexString() {
-    let hex = '';
-    i++;
-    while (i < s.length && s[i] !== '>') {
-      if (!isWs(s[i])) hex += s[i];
-      i++;
-    }
-    i++;
-    if (hex.length % 2) hex += '0';
-    let out = '';
-    for (let j = 0; j < hex.length; j += 2) out += String.fromCharCode(parseInt(hex.substr(j, 2), 16));
-    return { type: 'str', bytes: out, hex: true };
-  }
-  function readDict() {
-    let depth = 1, start = i;
-    i += 2;
-    while (i < s.length && depth > 0) {
-      if (s[i] === '<' && s[i + 1] === '<') { depth++; i += 2; }
-      else if (s[i] === '>' && s[i + 1] === '>') { depth--; i += 2; }
-      else if (s[i] === '(') { readString(); }
-      else i++;
-    }
-    return { type: 'dict', raw: s.substring(start, i) };
-  }
-  function readArray() {
-    i++;
-    const arr = [];
-    while (i < s.length) {
-      while (i < s.length && isWs(s[i])) i++;
-      if (s[i] === ']') { i++; break; }
-      const el = readObj();
-      if (el == null) break;
-      arr.push(el);
-    }
-    return { type: 'arr', value: arr };
-  }
-  function readName() {
-    let start = i + 1;
-    i++;
-    while (i < s.length && !isWs(s[i]) && !OP_DELIMS.has(s[i])) i++;
-    return { type: 'name', value: s.substring(start, i) };
-  }
-  function readNumberOrOp() {
-    let start = i;
-    if (s[i] === '+' || s[i] === '-') i++;
-    let sawDigit = false, sawDot = false;
-    while (i < s.length && (/[0-9]/.test(s[i]) || (s[i] === '.' && !sawDot))) {
-      if (s[i] === '.') sawDot = true;
-      else sawDigit = true;
-      i++;
-    }
-    if (!sawDigit && !sawDot) {
-      // Not a number after all — treat as operator start.
-      i = start;
-      return readOperator();
-    }
-    return { type: 'num', value: parseFloat(s.substring(start, i)) };
-  }
-  function readOperator() {
-    let start = i;
-    while (i < s.length && !isWs(s[i]) && !OP_DELIMS.has(s[i])) i++;
-    return { type: 'op', value: s.substring(start, i) };
-  }
-  while (i < s.length) {
-    const tok = readObj();
-    if (tok == null) break;
-    if (tok.type === 'op') {
-      ops.push({ op: tok.value, args: operands });
-      operands = [];
-    } else {
-      operands.push(tok);
-    }
-  }
-  return ops;
-}
-
-/* ── State-machine rewriter: drop text-showing ops that fall in a redaction ── */
-
-function matMul(A, B) {
-  // 2D affine: A × B, using [a b c d e f] convention.
-  const [a1, b1, c1, d1, e1, f1] = A;
-  const [a2, b2, c2, d2, e2, f2] = B;
-  return [
-    a1 * a2 + b1 * c2,
-    a1 * b2 + b1 * d2,
-    c1 * a2 + d1 * c2,
-    c1 * b2 + d1 * d2,
-    e1 * a2 + f1 * c2 + e2,
-    e1 * b2 + f1 * d2 + f2,
-  ];
-}
-const I6 = [1, 0, 0, 1, 0, 0];
-
-function rewriteRedactingTextOps(ops, redactedItems) {
-  const out = [];
-  let ctmStack = [I6.slice()];
-  let ctm = () => ctmStack[ctmStack.length - 1];
-  let inText = false;
-  let Tm = I6.slice(), Tlm = I6.slice();
-  let Tf_size = 0;
-  let Tc = 0, Tw = 0, Th = 100, TL = 0;
-  const TOL = 2;              // 2 pt slop between pdf.js positions and ours
-
-  function currentPenDevice() {
-    // Text rendering start position: CTM × Tm × (0, 0)
-    const M = matMul(Tm, ctm());
-    return [M[4], M[5]];
-  }
-  function shouldRedactAt(x, y /*, str */) {
-    // Match by pen-position only. Comparing strings is unreliable because the
-    // raw Tj bytes use the font's encoding (e.g. WinAnsi 0x97 for em-dash)
-    // while pdf.js reports it.str already decoded to Unicode (—). Position
-    // alone is unambiguous: if pdf.js says a text item lives here and our
-    // op's pen lands here, that's the redaction target.
-    for (const it of redactedItems) {
-      if (Math.abs(it.x - x) <= TOL && Math.abs(it.y - y) <= TOL) return true;
-    }
-    return false;
-  }
-  function replaceWithMovement(x0, y0) {
-    // Emit a Td that lands the text position at (x0, y0) BEFORE the next real
-    // op, so the removed glyphs don't disturb the flow. Simpler: since Tm is
-    // already at (x0, y0) and we didn't advance it, do nothing.
-  }
-
-  for (const { op, args } of ops) {
-    switch (op) {
-      case 'q': ctmStack.push(ctm().slice()); out.push({ op, args }); continue;
-      case 'Q': if (ctmStack.length > 1) ctmStack.pop(); out.push({ op, args }); continue;
-      case 'cm': {
-        if (args.length === 6 && args.every(a => a.type === 'num')) {
-          ctmStack[ctmStack.length - 1] = matMul(args.map(a => a.value), ctm());
-        }
-        out.push({ op, args }); continue;
-      }
-      case 'BT': inText = true; Tm = I6.slice(); Tlm = I6.slice(); out.push({ op, args }); continue;
-      case 'ET': inText = false; out.push({ op, args }); continue;
-      case 'Tf':
-        if (args.length >= 2 && args[1].type === 'num') Tf_size = args[1].value;
-        out.push({ op, args }); continue;
-      case 'Tc': if (args[0]?.type === 'num') Tc = args[0].value; out.push({ op, args }); continue;
-      case 'Tw': if (args[0]?.type === 'num') Tw = args[0].value; out.push({ op, args }); continue;
-      case 'Tz': if (args[0]?.type === 'num') Th = args[0].value; out.push({ op, args }); continue;
-      case 'TL': if (args[0]?.type === 'num') TL = args[0].value; out.push({ op, args }); continue;
-      case 'Td':
-      case 'TD': {
-        if (args.length === 2 && args.every(a => a.type === 'num')) {
-          const tx = args[0].value, ty = args[1].value;
-          const trans = [1, 0, 0, 1, tx, ty];
-          Tlm = matMul(trans, Tlm);
-          Tm = Tlm.slice();
-          if (op === 'TD') TL = -ty;
-        }
-        out.push({ op, args }); continue;
-      }
-      case 'Tm': {
-        if (args.length === 6 && args.every(a => a.type === 'num')) {
-          Tm = args.map(a => a.value);
-          Tlm = Tm.slice();
-        }
-        out.push({ op, args }); continue;
-      }
-      case 'T*': {
-        const trans = [1, 0, 0, 1, 0, -TL];
-        Tlm = matMul(trans, Tlm);
-        Tm = Tlm.slice();
-        out.push({ op, args }); continue;
-      }
-      case "'":
-      case '"':
-      case 'Tj':
-      case 'TJ': {
-        // Compute pen position and check for redaction.
-        const [px, py] = currentPenDevice();
-        let showedStr = '';
-        if (op === 'Tj' || op === "'" || op === '"') {
-          const s = args.find(a => a.type === 'str');
-          if (s) showedStr = s.bytes;
-        } else {
-          for (const a of args) {
-            if (a.type === 'arr') {
-              for (const el of a.value) if (el.type === 'str') showedStr += el.bytes;
+        const rects = (byPage.get(pageIndex) || []).map(rect => mupdf.Rect.transform(rect, page.getTransform()));
+        for (const annotation of page.getAnnotations()) {
+          try {
+            if (annotation.getType() === 'FileAttachment' || rects.some(rect => overlaps(rect, annotation.getBounds()))) {
+              page.deleteAnnotation(annotation);
             }
-          }
+          } finally { annotation.destroy(); }
         }
-        const redact = shouldRedactAt(px, py, showedStr);
-        if (redact) {
-          // Drop the showing op. If it was a next-line variant (' or "), emit
-          // an equivalent T* so the following line is still positioned right.
-          if (op === "'" || op === '"') out.push({ op: 'T*', args: [] });
-          continue;
+        for (const rect of rects) {
+          const annotation = page.createAnnotation('Redact');
+          try {
+            annotation.setRect(rect);
+            annotation.update();
+            annotation.applyRedaction(1, mupdf.PDFPage.REDACT_IMAGE_PIXELS,
+              mupdf.PDFPage.REDACT_LINE_ART_REMOVE_IF_TOUCHED, mupdf.PDFPage.REDACT_TEXT_REMOVE);
+          } finally { annotation.destroy(); }
         }
-        out.push({ op, args }); continue;
-      }
-      default:
-        out.push({ op, args }); continue;
+      } finally { page.destroy(); }
     }
-  }
-  return out;
-}
-
-function serializeOperators(ops) {
-  const bits = [];
-  const serArg = (a) => {
-    if (a.type === 'num') return pdfNum(a.value);
-    if (a.type === 'name') return '/' + a.value;
-    if (a.type === 'str') {
-      if (a.hex) {
-        let hex = '';
-        for (let i = 0; i < a.bytes.length; i++) hex += a.bytes.charCodeAt(i).toString(16).padStart(2, '0');
-        return '<' + hex + '>';
+    // Associated files can also be referenced outside the EmbeddedFiles
+    // name tree. Remove those links before collecting unreachable objects.
+    const seen = new Set();
+    const removeAssociatedFiles = object => {
+      if (object.isIndirect()) {
+        const number = object.asIndirect();
+        if (seen.has(number)) return;
+        seen.add(number);
       }
-      // Escape ( ) \ and control bytes as octal.
-      let out = '(';
-      for (let i = 0; i < a.bytes.length; i++) {
-        const cc = a.bytes.charCodeAt(i);
-        const ch = a.bytes[i];
-        if (ch === '(' || ch === ')' || ch === '\\') out += '\\' + ch;
-        else if (cc < 32 || cc > 126) out += '\\' + cc.toString(8).padStart(3, '0');
-        else out += ch;
+      if (object.isDictionary()) object.delete('AF');
+      if (object.isDictionary() || object.isArray()) {
+        object.forEach(child => {
+          try { removeAssociatedFiles(child); }
+          finally { child.destroy(); }
+        });
       }
-      out += ')';
-      return out;
-    }
-    if (a.type === 'arr') return '[' + a.value.map(serArg).join(' ') + ']';
-    if (a.type === 'dict') return a.raw;
-    return '';
-  };
-  for (const { op, args } of ops) {
-    const line = (args.length ? args.map(serArg).join(' ') + ' ' : '') + op;
-    bits.push(line);
-  }
-  return bits.join('\n');
-}
+    };
+    const trailer = pdf.getTrailer();
+    try { removeAssociatedFiles(trailer); }
+    finally { trailer.destroy(); }
 
-function pruneAnnotationsInRects(pdfDoc, page, rects) {
-  const { PDFName } = window.PDFLib;
-  let annots = page.node.get(PDFName.of('Annots'));
-  if (!annots) return;
-  annots = pdfDoc.context.lookup(annots);
-  if (!annots || typeof annots.asArray !== 'function') return;
-  const arr = annots.asArray();
-  for (let i = arr.length - 1; i >= 0; i--) {
-    const a = pdfDoc.context.lookup(arr[i]);
-    if (!a || typeof a.get !== 'function') continue;
-    const rect = a.get(PDFName.of('Rect'));
-    if (!rect || typeof rect.asArray !== 'function') continue;
-    const r = rect.asArray().map(v => pdfDoc.context.lookup(v));
-    if (r.length < 4) continue;
-    const [x1, y1, x2, y2] = r.map(v => (v && typeof v.value === 'function' ? v.value() : Number(v)));
-    const ax1 = Math.min(x1, x2), ay1 = Math.min(y1, y2);
-    const ax2 = Math.max(x1, x2), ay2 = Math.max(y1, y2);
-    const hit = rects.some(rd => !(ax2 < rd.xPdf || ax1 > rd.xPdf + rd.wPdf
-                                || ay2 < rd.yPdf || ay1 > rd.yPdf + rd.hPdf));
-    if (hit) annots.remove(i);
-  }
+    const output = pdf.saveToBuffer('garbage=4,compress');
+    try { return new Uint8Array(output.asUint8Array()); }
+    finally { output.destroy(); }
+  } finally { source.destroy(); }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
    Incremental signing (adds a signature without rewriting the file, so
    prior signatures stay valid). PDF §7.5.6.
    ═══════════════════════════════════════════════════════════════════════ */
+
+function isWs(char) { return !!char && /^[\x00\x09\x0a\x0c\x0d\x20]$/.test(char); }
 
 function latin1Encode(str) {
   const out = new Uint8Array(str.length);
@@ -8620,7 +8334,11 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // Load with pdf-lib for object graph lookups (chain-of-refs, page tree,
   // AcroForm entry) — works regardless of xref form or object-stream use.
   const pdfDoc = await PDFDocument.load(bytes, { updateMetadata: false });
-  const { permission } = getPdfSigningPermissions(pdfDoc);
+  const { permission, locks } = getPdfSigningPermissions(pdfDoc);
+  if (permission === 1 || locks.some(rule => rule.action === 'All')) throw new Error('A previous signature locked this document.');
+  const restrictedField = [...formEdits.map(field => field.name), ...routedSigs.map(({ p }) => p.formFieldName)]
+    .find(name => locks.some(rule => fieldMatchesLock(name, rule)));
+  if (restrictedField) throw new Error(`A previous signature locked "${restrictedField}".`);
   if (permission === 2 && newSigs.length) {
     throw new Error('This certification requires signing in an existing signature field.');
   }
@@ -9182,60 +8900,33 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
     }
   }
 
-  // ── PAdES-B-LT: DSS embedding for the incremental path ──
-  // Best-effort: fetch OCSP responses for the signer's chain, emit cert
-  // and OCSP stream objects, then a DSS dict, then splice /DSS into the
-  // catalog so Adobe unlocks the "LTV enabled" badge. Skipped silently if
-  // the chain has no OCSP responder or the fetch fails (self-signed, CORS).
-  try {
-    const chainForOcsp = Array.isArray(chain) && chain.length ? chain : [cert];
-    const ocspResults = await fetchChainOcsp(chainForOcsp);
-    if (ocspResults.length > 0) {
-      const certRefs = [];
-      for (const c of chainForOcsp) {
-        const der = forge.asn1.toDer(forge.pki.certificateToAsn1(c)).getBytes();
-        const num = alloc();
-        // Raw binary stream — build the object body manually to avoid pdf-lib
-        // adding /Filter or re-encoding.
-        const bodyPre = `${num} 0 obj\n<< /Length ${der.length} >>\nstream\n`;
-        const bodyPost = `\nendstream\nendobj\n`;
-        // Concatenate as latin1 so binary bytes pass through cleanly.
-        objBodies.push({ num, body: bodyPre + der + bodyPost });
-        certRefs.push(num);
-      }
-      const ocspRefs = [];
-      for (const r of ocspResults) {
-        const bin = r.ocsp instanceof Uint8Array ? Array.from(r.ocsp).map(b => String.fromCharCode(b)).join('') : String(r.ocsp);
-        const num = alloc();
-        const bodyPre = `${num} 0 obj\n<< /Length ${bin.length} >>\nstream\n`;
-        const bodyPost = `\nendstream\nendobj\n`;
-        objBodies.push({ num, body: bodyPre + bin + bodyPost });
-        ocspRefs.push(num);
-      }
-      const dssNum = alloc();
-      const certsArr = certRefs.map(n => `${n} 0 R`).join(' ');
-      const ocspsArr = ocspRefs.map(n => `${n} 0 R`).join(' ');
-      objBodies.push({ num: dssNum, body:
-        `${dssNum} 0 obj\n<< /Type /DSS /Certs [${certsArr}] /OCSPs [${ocspsArr}] >>\nendobj\n`
-      });
-      // Splice /DSS <ref> into the catalog. Byte-preserving if possible so
-      // strict DocMDP verifiers don't flag the catalog change as a
-      // disallowed modification.
-      const catalogNum = parsed.rootRef.num;
-      const catalogOrig = await readOriginalObjectBytes(bytes, xref.entries, catalogNum);
-      if (catalogOrig) {
-        const updated = spliceCatalogSetIndirect(catalogOrig, 'DSS', `${dssNum} 0 R`);
-        if (updated) {
-          const inner = new TextDecoder('latin1').decode(updated).replace(/^\s*\d+\s+\d+\s+obj\s*/, '').replace(/\s*endobj\s*$/, '');
-          // Avoid duplicate catalog emission if some other branch already
-          // pushed it (e.g. AcroForm re-serialise fallback).
-          const existing = objBodies.findIndex(o => o.num === catalogNum);
-          if (existing >= 0) objBodies[existing] = { num: catalogNum, body: `${catalogNum} 0 obj\n${inner}\nendobj\n` };
-          else objBodies.push({ num: catalogNum, body: `${catalogNum} 0 obj\n${inner}\nendobj\n` });
-        }
+  const evidenceObjects = [];
+  const registerEvidence = object => {
+    const ref = PDFRef.of(alloc());
+    evidenceObjects.push(incrementalObject(ref, object));
+    return ref;
+  };
+  const dss = await prepareDss(pdfDoc, cert, chain, registerEvidence);
+  if (dss) {
+    const existing = pdfDoc.catalog.get(PDFName.of('DSS'));
+    if (existing instanceof PDFRef && ctx.lookup(existing) instanceof PDFLib.PDFDict) {
+      objBodies.push(...evidenceObjects, incrementalObject(existing, dss));
+    } else {
+      const catalog = parsed.rootRef;
+      const previous = objBodies.findIndex(object => object.num === catalog.num);
+      const original = previous >= 0 ? latin1Encode(objBodies[previous].body)
+        : await readOriginalObjectBytes(bytes, xref.entries, catalog.num);
+      const dssRef = registerEvidence(dss);
+      const revised = original && spliceCatalogSetIndirect(original, 'DSS', dssRef.toString());
+      if (revised) {
+        const body = u8ToBinStr(revised).replace(/^\s*\d+\s+\d+\s+obj\s*/, '').replace(/\s*endobj\s*$/, '');
+        const entry = { num: catalog.num, gen: catalog.gen, body: `${catalog.num} ${catalog.gen} obj\n${body}\nendobj\n` };
+        if (previous >= 0) objBodies[previous] = entry;
+        else objBodies.push(entry);
+        objBodies.push(...evidenceObjects);
       }
     }
-  } catch (e) { console.warn('DSS embedding skipped:', e && e.message); }
+  }
 
   // ── Assemble the incremental append ──
   //
@@ -9410,43 +9101,68 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   const hexStart = contentsStart + 1;
   for (let i = 0; i < sig.hexPadded.length; i++) combined[hexStart + i] = sig.hexPadded.charCodeAt(i);
   if (tsaUrl && !backdated) {
-    if (sig.tsaEmbedded) toast('Trusted timestamp embedded from ' + tsaUrl, 'ok');
-    else if (sig.tsaError) toast('TSA failed — signed WITHOUT trusted timestamp: ' + sig.tsaError, 'err');
+    if (sig.tsaEmbedded) toast('Timestamp token embedded from ' + tsaUrl, 'ok');
+    else if (sig.tsaError) toast('TSA failed. Signed without a timestamp token: ' + sig.tsaError, 'err');
   }
 
   return combined;
 }
 
+let signingInProgress = false;
 $('btnSign').onclick = async () => {
-  if (doc.isEncrypted || doc.signingLocked || !doc.placements.some(p => p.type === 'digital')) return;
+  if (openingPdf || signingInProgress || doc.isEncrypted || doc.signingLocked ||
+      !doc.file || !doc.placements.some(p => p.type === 'digital')) return;
+  const { file, bytes, pdfjs, alreadySigned, sigFieldMap } = doc;
+  const placements = doc.placements.map(placement => ({ ...placement }));
+  const removedSigFields = new Set(doc.removedSigFields);
+  const formEdits = Object.values(doc.formFields).filter(field => field.value !== field.originalValue)
+    .map(field => ({ ...field }));
+  const identityId = identity.id;
+  const config = ghVault.config && { ...ghVault.config };
+  const sigPngU8 = sigImage.pngU8;
+  const reason = $('reason').value.trim(), location = $('location').value.trim();
+  const role = $('stampRole').value.trim();
+  const certifyPermission = $('certifyPermission').value === '2' ? 2 : 3;
+  const stampEnabled = $('stampEnable').checked && !alreadySigned;
+  const keepLocalVault = $('vaultKeepLocal').checked;
+  const optionalTime = $('signDate').value.trim();
+  const configuredTsa = $('tsaEnable').checked ? $('tsaUrl').value.trim() : '';
+  const vaultHost = document.querySelector('input[name="vaultHost"]:checked')?.value || 'github';
+  const appearance = document.querySelector('input[name="appearance"]:checked').value;
+  const lockmodeVal = document.querySelector('input[name="lockmode"]:checked').value;
+  const lockedFields = lockmodeVal === 'locked' ? [] :
+    Array.from($('fieldLockList').querySelectorAll('input:checked'), input => input.value);
+  signingInProgress = true;
+  $('btnSign').disabled = true;
+  $('btnSign').textContent = 'Working…';
   try {
-    const unlocked = await ensureUnlocked();
-    $('btnSign').disabled = true;
-    $('btnSign').textContent = 'Working…';
-
-    const appearance = document.querySelector('input[name="appearance"]:checked').value;
-    const lockmodeVal = document.querySelector('input[name="lockmode"]:checked').value;
+    if (placements.some(p => p.type === 'redact')) {
+      const confirmed = await modal({
+        title: 'Export redacted copy',
+        body: 'The selected content and embedded file attachments will be removed from the signed copy. Text outside the selected areas remains searchable.',
+        confirmText: 'Redact and sign',
+      });
+      if (!confirmed) return;
+    }
+    const unlocked = await ensureUnlocked(identityId);
     // Follow-up sigs cannot certify (ISO 32000-1 §12.8.2.2). "Lock" maps to
     // a signature field-lock instead of DocMDP — see makeIncrementalSignedPdf
     // for the /Lock + FieldMDP emission.
-    const certifyMode = doc.alreadySigned ? 'none' : lockmodeVal;
-    const lockAfterSign = doc.alreadySigned && (lockmodeVal === 'locked');
-    const lockedFields = lockmodeVal === 'locked' ? [] :
-      Array.from($('fieldLockList').querySelectorAll('input:checked'), input => input.value);
+    const certifyMode = alreadySigned ? 'none' : lockmodeVal;
+    const lockAfterSign = alreadySigned && (lockmodeVal === 'locked');
     const lock = certifyMode === 'locked' || certifyMode === 'lock';
     // We need to build a vault (encrypt the signed PDF, upload it, embed a
     // vault QR in the widget) whenever ANY signature uses the stamp
     // appearance OR the per-page integrity strip is enabled. That way
     // scanning the QR takes the recipient straight into the verifier's
     // full report — same as vault QRs have always done.
-    const integrityStripEnabled = $('stampEnable').checked && !doc.alreadySigned;
-    const anyStampAppearance = doc.placements.some(p =>
+    const integrityStripEnabled = stampEnabled;
+    const anyStampAppearance = placements.some(p =>
       p.type === 'digital' && (p.appearance || appearance) === 'stamp');
     const needsVault = integrityStripEnabled || anyStampAppearance;
-    const stampEnabled = integrityStripEnabled; // keeps existing per-page-strip semantics
 
     // Custom signing time (backdate). Blank = now.
-    const rawDate = ($('signDate').value || '').trim();
+    const rawDate = optionalTime;
     let signingTime, backdated = false;
     if (rawDate) {
       const t = new Date(rawDate);
@@ -9458,15 +9174,14 @@ $('btnSign').onclick = async () => {
     }
 
     // Trusted timestamp (RFC 3161) — mutually exclusive with backdating.
-    const tsaEnabled = $('tsaEnable') && $('tsaEnable').checked && !backdated;
-    const tsaUrl = tsaEnabled ? (($('tsaUrl') && $('tsaUrl').value.trim()) || null) : null;
+    const tsaUrl = !backdated && safeHttpsUrl(configuredTsa) || null;
 
     // Auto-publish the identity's cert to the GH vault so verifiers can
     // transitively trust it via the vault's HTTPS chain. Idempotent — first
     // sign uploads, subsequent signs reuse the cached URL.
     let certVaultUrl = null;
-    if (ghVault.config) {
-      try { certVaultUrl = await ensureCertPublishedToVault(unlocked); }
+    if (config) {
+      try { certVaultUrl = await ensureCertPublishedToVault(unlocked, config, identityId); }
       catch (e) { console.warn('cert vault publish failed:', e.message); toast('Cert vault publish failed: ' + e.message, 'err'); }
     }
 
@@ -9474,14 +9189,13 @@ $('btnSign').onclick = async () => {
     // QR is drawn into the PDF that later gets encrypted with this same key.
     let vault = null;
     if (needsVault) {
-      const hostRadio = document.querySelector('input[name="vaultHost"]:checked');
-      let host = hostRadio ? hostRadio.value : 'github';
+      let host = vaultHost;
       // Stamp-appearance signatures need a vault by construction. If the user
       // hasn't configured a GitHub vault, silently fall back to a local
       // .vault download so scanning the QR still leads somewhere the
       // recipient can decrypt (they'll paste it into the verifier's
       // "Verify from vault QR" panel).
-      if (host === 'github' && !ghVault.config) {
+      if (host === 'github' && !config) {
         if (integrityStripEnabled) {
           toast('Configure GitHub vault first (or switch to local .vault)', 'err');
           return;
@@ -9494,23 +9208,22 @@ $('btnSign').onclick = async () => {
       const now = signingTime;
       const dateStr = now.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
       const filename = csv + '.vault';
-      const url = host === 'github' ? ghRawUrl(ghVault.config, filename) : '';
+      const url = host === 'github' ? ghRawUrl(config, filename) : '';
       const signer = unlocked.meta.name;
-      const verifierUrl = (ghVault.config && ghVault.config.verifierUrl) || autoDetectVerifierUrl();
+      const verifierUrl = safeHttpsUrl(config?.verifierUrl) || CANONICAL_VERIFIER_URL;
       vault = {
         host, key, csv, filename, url, signer, dateStr, verifierUrl,
         qrPayload: buildVaultQr({ key, signer, dateStr, csv, url, verifierUrl }),
       };
     }
 
-    const formEdits = Object.values(doc.formFields).filter(field => field.value !== field.originalValue);
     let signed;
-    if (doc.alreadySigned) {
+    if (alreadySigned) {
       // Incremental append — keeps prior signatures valid. Only signature
       // placements are honored here (text boxes / page-content stamps would
       // modify the page and void the prior signature; the "stamp" *appearance*
       // stays inside the widget and is safe).
-      const sigPlacements = doc.placements.filter(p => p.type === 'digital');
+      const sigPlacements = placements.filter(p => p.type === 'digital');
       // Force stamp/text appearances on placements that inherited unsupported
       // ones (image/both need PNG XObject embedding into the incremental
       // section, which we don't emit yet).
@@ -9518,17 +9231,17 @@ $('btnSign').onclick = async () => {
         if (p.appearance !== 'stamp' && p.appearance !== 'text') p.appearance = appearance;
       }
       signed = await makeIncrementalSignedPdf({
-        bytes: doc.bytes,
+        bytes,
         formEdits,
         placements: sigPlacements,
         meta: unlocked.meta,
-        reason: $('reason').value.trim(),
-        location: $('location').value.trim(),
+        reason,
+        location,
         cert: unlocked.cert,
         key: unlocked.key,
         chain: unlocked.chain,
         signingTime, tsaUrl, backdated, certVaultUrl,
-        sigFieldMap: doc.sigFieldMap || {},
+        sigFieldMap: sigFieldMap || {},
         lockAfterSign, lockedFields,
         // Full vault QR (`#v={u,k,s,t,c}`) when a vault is being built —
         // scanning it drops the recipient straight into the verifier's full
@@ -9537,73 +9250,72 @@ $('btnSign').onclick = async () => {
         // built (which can't happen for a stamp-appearance sig thanks to
         // needsVault above, but the fallback keeps the parameter well-typed).
         qrPayload: vault ? vault.qrPayload : buildStampVerifierUrl({
-          verifierUrl: (ghVault.config && ghVault.config.verifierUrl) ||
-                       (typeof autoDetectVerifierUrl === 'function' ? autoDetectVerifierUrl() : '') ||
-                       CANONICAL_VERIFIER_URL,
+          verifierUrl: safeHttpsUrl(config?.verifierUrl) || CANONICAL_VERIFIER_URL,
           certVaultUrl,
           signer: unlocked.meta.name,
           dateStr: signingTime.toISOString().slice(0, 19).replace('T', ' ') + ' UTC',
         }),
-        sigPngU8: sigImage.pngU8,
+        sigPngU8,
       });
     } else {
       signed = await makeSignedPdf({
-        bytes: doc.bytes,
+        bytes,
         formEdits,
-        placements: doc.placements,
+        placements,
         lock,
         certifyMode: certifyMode === 'certify' ? 'certify' : (certifyMode === 'locked' ? 'lock' : 'none'),
-        certifyPermission: $('certifyPermission').value === '2' ? 2 : 3,
+        certifyPermission,
         lockedFields,
         meta: unlocked.meta,
-        reason: $('reason').value.trim(),
-        location: $('location').value.trim(),
+        reason,
+        location,
         appearance,
         cert: unlocked.cert,
         key: unlocked.key,
         chain: unlocked.chain,
-        sigPngU8: sigImage.pngU8,
+        sigPngU8,
         signingTime,
-        sigFieldMap: doc.sigFieldMap || {},
+        sigFieldMap: sigFieldMap || {},
         stamp: vault ? {
           // `enabled` still gates the per-page integrity strip; the stamp
           // *appearance* only reads qrPayload / csv / signer / dateStr from
           // this object (so scanning its widget QR opens the full vault
           // verifier) regardless of whether the strip is drawn.
           enabled: stampEnabled,
-          role: ($('stampRole').value || '').trim(),
+          role,
           qrPayload: vault.qrPayload,
           csv: vault.csv,
           signer: vault.signer,
           dateStr: vault.dateStr,
         } : { enabled: false },
-        pdfjsDoc: doc.pdfjs,
+        pdfjsDoc: pdfjs,
         tsaUrl, backdated, certVaultUrl,
-        removedSigFields: doc.removedSigFields,
+        removedSigFields,
       });
     }
-    const outBase = doc.file.name.replace(/\.pdf$/i, '');
+    const outBase = file.name.replace(/\.pdf$/i, '');
     const outName = outBase + '-signed.pdf';
 
     // Hand the user the signed PDF first — that's the primary artefact they
     // asked for. Vault encryption + upload happens after, in the background.
-    download(outName, signed, 'application/pdf');
+    if (!await download(outName, signed, 'application/pdf')) return;
 
     if (vault) {
       $('btnSign').textContent = 'Encrypting vault…';
       const cipher = await aesGcmEncrypt(vault.key, signed);
+      let savedFallback = false;
       if (vault.host === 'github') {
         $('btnSign').textContent = 'Uploading to GitHub…';
         try {
-          await ghPutFile(ghVault.config, vault.filename, cipher, 'pdf-signer vault ' + vault.csv);
+          await ghPutFile(config, vault.filename, cipher, 'pdf-signer vault ' + vault.csv);
           toast('Vault uploaded → ' + vault.url, 'ok');
         } catch (e) {
           toast('GitHub upload failed: ' + e.message + ' — saved local copy instead', 'err');
-          download(outBase + '.vault', cipher, 'application/octet-stream');
+          savedFallback = await download(outBase + '.vault', cipher, 'application/octet-stream');
         }
       }
-      if (vault.host === 'local' || $('vaultKeepLocal').checked) {
-        download(outBase + '.vault', cipher, 'application/octet-stream');
+      if (!savedFallback && (vault.host === 'local' || keepLocalVault)) {
+        await download(outBase + '.vault', cipher, 'application/octet-stream');
       }
     }
     toast('Done: ' + outName, 'ok');
@@ -9612,6 +9324,7 @@ $('btnSign').onclick = async () => {
     console.error(e);
     if (e.message !== 'cancelled') toast('Failed: ' + e.message, 'err');
   } finally {
+    signingInProgress = false;
     updateSignButton();
   }
 };
@@ -9619,6 +9332,20 @@ $('btnSign').onclick = async () => {
 /* ═══════════════════════════════════════════════════════════════════════
    Signature verification
    ═══════════════════════════════════════════════════════════════════════ */
+function readPaddedSignatureDer(hex) {
+  if (hex.length < 4 || hex.length % 2 || !hex.startsWith('30')) throw new Error('Invalid CMS sequence');
+  const lengthByte = parseInt(hex.slice(2, 4), 16);
+  const lengthBytes = lengthByte < 128 ? 0 : lengthByte & 127;
+  if ((lengthByte >= 128 && lengthBytes === 0) || lengthBytes > 4 || hex.length < 4 + lengthBytes * 2) {
+    throw new Error('Unsupported CMS length');
+  }
+  const headerSize = 2 + lengthBytes;
+  const payloadSize = lengthBytes ? parseInt(hex.slice(4, headerSize * 2), 16) : lengthByte;
+  const end = (headerSize + payloadSize) * 2;
+  if (end > hex.length || /[^0]/.test(hex.slice(end))) throw new Error('Invalid CMS length or padding');
+  return forge.util.hexToBytes(hex.slice(0, end));
+}
+
 function verifyPdfSignatures(bytes) {
   const results = [];
   const text = new TextDecoder('latin1').decode(bytes);
@@ -9635,69 +9362,72 @@ function verifyPdfSignatures(bytes) {
     // Signatures have real values here, our placeholder (9999999999) will be gone
     // in a fully-written signed PDF. Skip if any range value is a leftover placeholder.
     if (br[1] === 9999999999) continue;
-    // Find the /Contents <hex> that belongs to this signature (nearest around the ByteRange).
-    // Window must be large enough to contain the ENTIRE hex payload including
-    // the closing >, or the regex fails silently and verifyPdfSignatures
-    // returns no results. Use the actual byteRange gap size as a hint —
-    // that's the exact size of the /Contents hex value.
-    const winStart = Math.max(0, m.index - 200);
-    const contentsSpan = Math.max(0, br[2] - br[1]);   // BR[2] - BR[1] = "<..hex..>" length
-    const winEnd = Math.min(text.length, m.index + 200 + contentsSpan + 4096);
-    const window = text.substring(winStart, winEnd);
-    const contentsRe = /\/Contents\s*<([0-9a-fA-F]+)>/g;
-    // Position within window closest (following) to (m.index - winStart)
-    let contentsHex = null, contentsAbsStart = -1;
-    let cm;
-    const anchor = m.index - winStart;
-    let bestDist = Infinity;
-    while ((cm = contentsRe.exec(window)) !== null) {
-      const d = Math.abs(cm.index - anchor);
-      if (d < bestDist) { bestDist = d; contentsHex = cm[1]; contentsAbsStart = winStart + cm.index; }
+    const [start, gapStart, gapEnd, tailLength] = br;
+    const revisionEnd = gapEnd + tailLength;
+    const markerEnd = m.index + m[0].length;
+    if (!br.every(Number.isSafeInteger) || start !== 0 || gapStart <= 0 ||
+        gapEnd <= gapStart || gapEnd - gapStart > 4 * 1024 * 1024 || tailLength === 0 ||
+        revisionEnd > bytes.length || !((markerEnd <= gapStart) ||
+        (m.index >= gapEnd && markerEnd <= revisionEnd))) {
+      results.push({ error: 'Invalid signature byte range', byteRange: br });
+      continue;
     }
-    if (!contentsHex) continue;
-    // Also look for our /PdfsignerCertUrl (URL) entry in the same sig-dict
-    // neighborhood — verifier uses it to auto-fetch the vault-published cert.
-    let certVaultUrl = null;
-    const urlM = window.match(/\/PdfsignerCertUrl\s*\(([^)\\]*)\)/);
-    if (urlM) certVaultUrl = urlM[1];
-
-    const hexStripped = contentsHex.replace(/(00)+$/, '');
-    if (hexStripped.length < 20) { results.push({ error: 'Empty signature', br }); continue; }
-
-    let derBin = '';
-    for (let i = 0; i < hexStripped.length; i += 2) {
-      derBin += String.fromCharCode(parseInt(hexStripped.substr(i, 2), 16));
+    const contents = /^<([0-9a-fA-F\x00\x09\x0a\x0c\x0d\x20]+)>$/.exec(text.slice(gapStart, gapEnd));
+    if (!contents || !/\/Contents[\x00\x09\x0a\x0c\x0d\x20]*$/.test(text.slice(Math.max(0, gapStart - 256), gapStart))) {
+      results.push({ error: 'Signature contents do not match the excluded byte range', byteRange: br });
+      continue;
     }
-
+    const cmsHex = contents[1].replace(/\s|\x00/g, '').toLowerCase();
     try {
-      const asn1 = forge.asn1.fromDer(derBin);
+      const derBin = readPaddedSignatureDer(cmsHex);
+      const asn1 = forge.asn1.fromDer(derBin, { maxDepth: 64 });
       const p7 = forge.pkcs7.messageFromAsn1(asn1);
-      const cert = p7.certificates && p7.certificates[0];
-      if (!cert) throw new Error('No certificate in signature');
-      const signer = p7.rawCapture.signerInfos[0];
-
-      // Reassemble the signed byte range from the PDF.
-      const signedContent = new Uint8Array(br[1] + br[3]);
-      signedContent.set(bytes.subarray(br[0], br[0] + br[1]), 0);
-      signedContent.set(bytes.subarray(br[2], br[2] + br[3]), br[1]);
+      const signerInfos = p7.rawCapture.signerInfos;
+      if (signerInfos.length !== 1) throw new Error('Expected one CMS signer');
+      const signer = signerInfos[0];
+      if (forge.asn1.derToOid(signer.value[2].value[0].value) !== OID_SHA256) {
+        throw new Error('Unsupported CMS digest algorithm');
+      }
+      const sid = signer.value[1];
+      const cert = (p7.certificates || []).find(candidate => {
+        if (sid.tagClass === forge.asn1.Class.CONTEXT_SPECIFIC) {
+          return candidate.getExtension('subjectKeyIdentifier')?.subjectKeyIdentifier?.toLowerCase() ===
+            forge.util.bytesToHex(sid.value);
+        }
+        const tbs = forge.pki.certificateToAsn1(candidate).value[0].value;
+        const index = tbs[0].tagClass === forge.asn1.Class.CONTEXT_SPECIFIC ? 1 : 0;
+        return tbs[index].value === sid.value[1]?.value &&
+          forge.asn1.toDer(tbs[index + 2]).getBytes() === forge.asn1.toDer(sid.value[0]).getBytes();
+      });
+      if (!cert) throw new Error('No certificate matches the CMS signer identifier');
 
       // Pull authenticated attributes.
       const authAttrs = signer.value[3]; // [0] IMPLICIT SignedAttributes
-      let msgDigestVal = null, sigTime = null;
+      let msgDigestVal = null, sigTime = null, certBound = false;
       for (const attr of authAttrs.value) {
         const oid = forge.asn1.derToOid(attr.value[0].value);
         const val = attr.value[1].value[0];
-        if (oid === forge.pki.oids.messageDigest) msgDigestVal = val.value;
+        if (oid === forge.pki.oids.messageDigest) {
+          if (msgDigestVal !== null) throw new Error('Duplicate CMS content digest');
+          msgDigestVal = val.value;
+        } else if (oid === OID_SIGNING_CERT_V2) {
+          const ess = val.value[0].value[0].value;
+          const withAlgorithm = ess[0].type === forge.asn1.Type.SEQUENCE;
+          const algorithm = withAlgorithm ? forge.asn1.derToOid(ess[0].value[0].value) : OID_SHA256;
+          if (algorithm !== OID_SHA256) throw new Error('Unsupported signing certificate digest');
+          const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
+          const certHash = forge.md.sha256.create().update(certDer).digest().bytes();
+          if (certHash !== ess[withAlgorithm ? 1 : 0].value) throw new Error('CMS signing certificate hash mismatch');
+          certBound = true;
+        }
         else if (oid === forge.pki.oids.signingTime) sigTime = val.value;
       }
       if (msgDigestVal === null) throw new Error('No messageDigest attribute');
 
       // 1. messageDigest matches SHA-256 of signed range?
       const md = forge.md.sha256.create();
-      const CH = 0x8000;
-      for (let i = 0; i < signedContent.length; i += CH) {
-        md.update(String.fromCharCode.apply(null, signedContent.subarray(i, Math.min(i + CH, signedContent.length))));
-      }
+      md.update(u8ToBinStr(bytes.subarray(0, gapStart)));
+      md.update(u8ToBinStr(bytes.subarray(gapEnd, revisionEnd)));
       const digestMatch = md.digest().bytes() === msgDigestVal;
 
       // 2. RSA signature over the DER-encoded authenticated attributes as a SET (0x31).
@@ -9716,7 +9446,8 @@ function verifyPdfSignatures(bytes) {
 
       // 3. Does the byte range cover everything?
       const covered = br[2] + br[3];
-      const totalCovered = covered >= bytes.length - 3; // small trailing-whitespace tolerance
+      const totalCovered = covered === bytes.length ||
+        (bytes.length - covered <= 3 && /^[\t\r\n ]*$/.test(text.slice(covered)));
 
       // 4. RFC 3161 timestamp token (unauthenticated attribute [1] IMPLICIT SET).
       let tsaTime = null, tsaOk = false, tsaSubject = null, tsaChainCerts = [];
@@ -9739,7 +9470,8 @@ function verifyPdfSignatures(bytes) {
       const cn = cert.subject.getField('CN');
       const em = cert.subject.getField('E') || cert.subject.getField('emailAddress');
       const certFp = certFingerprint(cert);
-      const chainInfo = verifyChain(cert, p7.certificates || []);
+      const chainInfo = certBound ? verifyChain(cert, p7.certificates || []) :
+        { trusted: false, reason: 'Signer certificate hash was not authenticated' };
       const isSelfSigned = cert.subject.hash === cert.issuer.hash;
       results.push({
         cn: cn ? cn.value : '(unknown)',
@@ -9747,6 +9479,7 @@ function verifyPdfSignatures(bytes) {
         signingTime: sigTime,
         tsaTime, tsaOk, tsaSubject, tsaChainCerts,
         byteRange: br,
+        cmsHex,
         digestMatch, rsaOk,
         totalCovered,
         docLength: bytes.length,
@@ -9755,7 +9488,6 @@ function verifyPdfSignatures(bytes) {
         trusted: chainInfo.trusted,
         trustReason: chainInfo.reason,
         selfSigned: isSelfSigned,
-        certVaultUrl,           // present in the sig dict; verifier can auto-fetch
         cert,                   // stash the parsed cert so a follow-up async pass can compare
         chainCerts: p7.certificates || [cert],   // full chain from the CMS, leaf first
         hasDss,                 // /DSS in the PDF — Adobe's LTV enabling condition
@@ -9767,107 +9499,78 @@ function verifyPdfSignatures(bytes) {
   return results;
 }
 
-// Fetch the AATL/EUTL trust anchors JSON bundled in the app (or a nearby
-// curated copy). Returns { anchors: [{list, name, sha256}] }; empty on
-// failure so verification degrades cleanly. Cached per session.
-let _trustAnchorsCache = null;
-async function loadTrustAnchors() {
-  if (_trustAnchorsCache) return _trustAnchorsCache;
-  try {
-    const url = new URL('trust-anchors.json', location.href).toString();
-    const r = await fetch(url, { cache: 'no-cache' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const j = await r.json();
-    _trustAnchorsCache = { anchors: Array.isArray(j.anchors) ? j.anchors : [] };
-  } catch (_) { _trustAnchorsCache = { anchors: [] }; }
-  return _trustAnchorsCache;
-}
+async function verifyDocumentSignatures(bytes) {
+  const results = verifyPdfSignatures(bytes);
+  const { PDFDocument, PDFForm, PDFSignature, PDFName, PDFDict, PDFArray, PDFNumber, PDFHexString } = PDFLib;
 
-// SHA-256 of an X.509 cert's DER encoding, lowercase hex.
-function certSha256Fp(cert) {
-  try {
-    const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
-    return forge.md.sha256.create().update(der).digest().toHex().toLowerCase();
-  } catch (_) { return null; }
-}
-
-// Cross-check each sig's chain against the AATL/EUTL fingerprints. Stamps
-// r.trustListMatch = { list, name, fp } on the first matching cert (usually
-// a root or a well-known intermediate). Mutates results in place.
-async function verifyTrustListsAsync(results) {
-  const { anchors } = await loadTrustAnchors();
-  if (!anchors.length) return;
-  const byFp = new Map();
-  for (const a of anchors) if (a && a.sha256) byFp.set(String(a.sha256).toLowerCase(), a);
-  for (const r of results) {
-    if (r.error) continue;
-    const chain = r.chainCerts || (r.cert ? [r.cert] : []);
-    for (const c of chain) {
-      const fp = certSha256Fp(c);
-      if (!fp) continue;
-      const hit = byFp.get(fp);
-      if (hit) { r.trustListMatch = { list: hit.list, name: hit.name, fp }; break; }
+  async function readRevision(revision) {
+    const pdf = await PDFDocument.load(revision, { updateMetadata: false, ignoreEncryption: true });
+    const acroForm = pdf.catalog.getAcroForm();
+    if (!acroForm) return { signatures: [], values: new Map(), permission: null, locks: [] };
+    const signatureFields = [];
+    const values = new Map();
+    for (const field of PDFForm.of(acroForm, pdf).getFields()) {
+      const name = field.getName();
+      const value = field.acroField.dict.lookup(PDFName.of('V'));
+      const describeValue = item => item instanceof PDFArray
+        ? item.asArray().map(entry => pdf.context.lookup(entry)?.toString()) : item?.toString() ?? null;
+      values.set(name, JSON.stringify(describeValue(value)));
+      if (!(field instanceof PDFSignature) || !(value instanceof PDFDict)) continue;
+      const range = value.lookup(PDFName.of('ByteRange'));
+      const contents = value.lookup(PDFName.of('Contents'));
+      const certUrl = value.lookup(PDFName.of('PdfsignerCertUrl'));
+      const nums = range instanceof PDFArray ? range.asArray().map(item => pdf.context.lookup(item)) : [];
+      signatureFields.push({
+        name,
+        range: nums.length === 4 && nums.every(item => item instanceof PDFNumber)
+          ? nums.map(item => item.asNumber()).join(',') : null,
+        contents: contents instanceof PDFHexString ? contents.asString().replace(/\s/g, '').toLowerCase() : null,
+        certVaultUrl: certUrl?.decodeText ? safeHttpsUrl(certUrl.decodeText()) : '',
+      });
     }
+    return { signatures: signatureFields, values, ...getPdfSigningPermissions(pdf) };
   }
-}
 
-// Fetch OCSP status for each signer cert (best-effort). Mutates results in
-// place, stamping ocspStatus = 'good' | 'revoked' | 'unknown' |
-// 'noResponder' | 'error' along with ocspNote (short human string).
-// Reuses fetchChainOcsp which already handles AIA parsing + POST to
-// responder. Safe to call after verifyPdfSignatures; safe to skip if
-// running offline.
-async function verifyOcspAsync(results) {
-  for (const r of results) {
-    if (r.error || !r.cert) continue;
-    try {
-      const chain = Array.isArray(r.chainCerts) && r.chainCerts.length ? r.chainCerts : [r.cert];
-      const out = await fetchChainOcsp(chain);
-      // fetchChainOcsp returns entries for whichever certs had a responder
-      // AND a successful fetch. Find the signer's entry (leaf cert = chain[0]).
-      const signerOcsp = out.find(o => o.cert === r.cert || o.cert === chain[0]);
-      if (!signerOcsp) { r.ocspStatus = 'noResponder'; r.ocspNote = 'signer cert has no OCSP responder in AIA'; continue; }
-      // signerOcsp.ocsp is the raw DER OCSPResponse. Parse the status.
-      const parsed = parseOcspStatus(signerOcsp.ocsp);
-      r.ocspStatus = parsed.status;
-      r.ocspNote = parsed.note;
-    } catch (e) {
-      r.ocspStatus = 'error'; r.ocspNote = e.message;
+  const currentRevision = await readRevision(bytes).catch(() => null);
+  if (!currentRevision) {
+    return results.length ? [{ error: 'Could not inspect the PDF signature fields' }] : [];
+  }
+  const coveredFields = new Set();
+  const verified = [];
+  const revisions = new Map([[bytes.length, Promise.resolve(currentRevision)]]);
+  for (const result of results) {
+    if (!result.byteRange || !result.cryptoValid) continue;
+    const end = result.byteRange[2] + result.byteRange[3];
+    if (!revisions.has(end)) revisions.set(end, readRevision(bytes.subarray(0, end)).catch(() => null));
+    const revision = await revisions.get(end);
+    const matches = field => field.range === result.byteRange.join(',') && field.contents === result.cmsHex;
+    const field = revision?.signatures.find(matches);
+    if (!field || verified.some(signature => signature.fieldName === field.name &&
+        signature.byteRange?.join(',') === field.range)) continue;
+    const current = currentRevision.signatures.find(candidate => candidate.name === field.name && matches(candidate));
+    let error;
+    if (!current) {
+      error = 'Earlier signature field was removed or replaced';
+    } else {
+      coveredFields.add(current);
+      if (!result.totalCovered && revision.permission === 1) {
+        error = 'The document changed after a certification that prohibited changes';
+      } else if (!result.totalCovered) {
+        const changed = [...revision.values].find(([name, value]) =>
+          revision.locks.some(rule => fieldMatchesLock(name, rule)) && currentRevision.values.get(name) !== value);
+        if (changed) error = `Locked field "${changed[0]}" changed after signing`;
+      }
     }
+    const { cmsHex, ...signature } = result;
+    verified.push({ ...signature, fieldName: field.name, certVaultUrl: field.certVaultUrl, error });
   }
-}
-
-// Parse an RFC 6960 OCSPResponse (raw DER) and return the certStatus
-// of the first (and only) SingleResponse: 'good' | 'revoked' | 'unknown'.
-// Cheap and permissive — falls back to 'unknown' if any parse step fails.
-function parseOcspStatus(ocspDer) {
-  try {
-    const asn1 = forge.asn1;
-    let bin = '';
-    for (let i = 0; i < ocspDer.length; i++) bin += String.fromCharCode(ocspDer[i]);
-    const outer = asn1.fromDer(bin);
-    // OCSPResponse ::= SEQUENCE { responseStatus ENUMERATED, responseBytes [0] EXPLICIT ResponseBytes OPTIONAL }
-    const respStatus = outer.value[0].value.charCodeAt(0);
-    if (respStatus !== 0) return { status: 'unknown', note: 'OCSP responder returned status ' + respStatus };
-    const responseBytes = outer.value[1].value[0];
-    // ResponseBytes ::= SEQUENCE { responseType OID, response OCTET STRING }
-    const responseOct = responseBytes.value[1].value;
-    const basicResp = asn1.fromDer(responseOct);
-    // BasicOCSPResponse ::= SEQUENCE { tbsResponseData, signatureAlgorithm, signature, [0] certs OPTIONAL }
-    const tbs = basicResp.value[0];
-    // ResponseData ::= SEQUENCE { [0] version DEFAULT v1, responderID, producedAt, responses SEQUENCE OF SingleResponse, [1] extensions OPTIONAL }
-    // Skip optional [0] version.
-    let idx = 0;
-    if (tbs.value[0].tagClass === asn1.Class.CONTEXT_SPECIFIC && tbs.value[0].type === 0) idx = 1;
-    // Find the SEQUENCE OF SingleResponse — it's the SEQUENCE after producedAt.
-    const responsesSeq = tbs.value[idx + 2];
-    const single = responsesSeq.value[0];
-    // SingleResponse ::= SEQUENCE { certID, certStatus, thisUpdate, nextUpdate OPTIONAL, ... }
-    const certStatus = single.value[1];
-    if (certStatus.tagClass === asn1.Class.CONTEXT_SPECIFIC && certStatus.type === 0) return { status: 'good', note: 'OCSP: certificate is good' };
-    if (certStatus.tagClass === asn1.Class.CONTEXT_SPECIFIC && certStatus.type === 1) return { status: 'revoked', note: 'OCSP: certificate is REVOKED' };
-    return { status: 'unknown', note: 'OCSP: unknown status' };
-  } catch (e) { return { status: 'unknown', note: 'OCSP parse failed: ' + e.message }; }
+  for (const field of currentRevision.signatures) {
+    if (!coveredFields.has(field)) verified.push({
+      fieldName: field.name,
+      error: `Signature field "${field.name}" could not be verified`,
+    });
+  }
+  return verified;
 }
 
 // Open a modal showing the full cert chain from a sig result: CN, issuer,
@@ -9901,6 +9604,45 @@ async function showCertChainModal(sigResult) {
     body.innerHTML = rows;
   }
   await modal({ title: 'Certificate chain', body, confirmText: 'Close', cancelText: '' });
+}
+
+function fetchVerificationResource(value, options = {}) {
+  const url = safeHttpsUrl(value);
+  if (!url) throw new Error('Verification requires an HTTPS URL');
+  return fetch(url, { ...options, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(30000) });
+}
+
+async function readBoundedResponse(response, maxBytes) {
+  if (Number(response.headers.get('Content-Length')) > maxBytes) throw new Error('Response is too large');
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Response has no body');
+  const chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) throw new Error('Response is too large');
+      chunks.push(value);
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
+
+function safeHttpsUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : '';
+  } catch (_) { return ''; }
 }
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -10018,8 +9760,8 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
   const stateColor = overallState === 'valid' ? rgb(0.12, 0.48, 0.23)
                     : overallState === 'modified' ? rgb(0.71, 0.47, 0.13)
                     : rgb(0.76, 0.21, 0.12);
-  const stateLabel = overallState === 'valid' ? 'VERIFIED'
-                   : overallState === 'modified' ? 'VOIDED (modified after signing)'
+  const stateLabel = overallState === 'valid' ? 'CURRENT BYTES MATCH LATEST SIGNATURE'
+                   : overallState === 'modified' ? 'LATER BYTES UNSIGNED'
                    : 'INVALID';
   drawLine('Overall status: ' + stateLabel, { bold: true, size: 14, color: stateColor });
 
@@ -10041,21 +9783,20 @@ async function buildVerificationReceiptPdf({ fileName, fileHash, fileBytes, resu
       continue;
     }
     const st = perSigState(r, results);
-    row('Verdict', st === 'valid' ? 'valid' : st === 'modified' ? 'voided (uncovered bytes past this rev)' : st);
+    row('Verdict', st === 'valid' ? 'matches current bytes' : st === 'broken' ? 'invalid' : 'matches earlier revision');
     row('Signer CN', r.cn || '(unknown)');
     if (r.email) row('Signer email', r.email);
     if (r.signingTime) row('Signing time (claimed)', fmtSigningTime(r.signingTime));
-    if (r.tsaTime) row('TSA time (trusted)', fmtSigningTime(r.tsaTime) + (r.tsaSubject ? ' · ' + r.tsaSubject : ''));
+    if (r.tsaTime) row('TSA time (token not authenticated)', fmtSigningTime(r.tsaTime) + (r.tsaSubject ? ' · ' + r.tsaSubject : ''));
     if (r.certFp) row('Cert SHA-1', r.certFp, { mono: true });
-    const trust = r.trustListMatch ? ('on ' + r.trustListMatch.list + ': ' + r.trustListMatch.name)
-                : r.trusted ? 'chains to a trusted root'
-                : (r.certVaultUrl && r.vaultTrusted) ? "trusted via signer's vault"
+    const trust = r.trusted ? 'chains to a trusted root'
+                : (r.certVaultUrl && r.vaultTrusted) ? "certificate matches vault copy"
                 : r.selfSigned ? 'self-signed'
                 : 'chain not verified';
     row('Trust', trust);
     if (r.certVaultUrl) row('Vault URL', r.certVaultUrl);
-    if (r.ocspStatus) row('OCSP', r.ocspStatus + (r.ocspNote ? ' (' + r.ocspNote + ')' : ''));
-    if (r.hasDss) row('LTV', 'enabled (DSS present in document)');
+    row('Revocation', 'not checked');
+    if (r.hasDss) row('DSS', 'present (not validated)');
     row('Byte range covered', '[' + r.byteRange.join(', ') + ']', { mono: true });
     row('Covers entire file', r.totalCovered ? 'yes' : 'no');
   }
@@ -10075,14 +9816,13 @@ function multiSigTimelineHtml(results) {
   const rows = results.map((r, i) => {
     const st = perSigState(r, results);
     const badge = st === 'valid' ? '<span style="color:var(--good)">✓</span>'
-                : st === 'modified' ? '<span style="color:#b57920">⚠</span>'
+                : (st === 'modified' || st === 'earlier') ? '<span style="color:#b57920">Earlier revision</span>'
                 : '<span style="color:var(--danger)">✕</span>';
     const signer = esc(r.cn || 'unknown');
     const t = r.tsaTime || r.signingTime;
     const timeStr = t ? esc(fmtSigningTime(t)) : '';
-    const trust = r.trustListMatch ? (r.trustListMatch.list + ': ' + r.trustListMatch.name)
-                : r.trusted ? 'trusted root'
-                : (r.certVaultUrl && r.vaultTrusted) ? 'signer vault'
+    const trust = r.trusted ? 'trusted root'
+                : (r.certVaultUrl && r.vaultTrusted) ? 'vault match only'
                 : r.selfSigned ? 'self-signed'
                 : 'untrusted';
     return `<tr>
@@ -10104,11 +9844,11 @@ function multiSigTimelineHtml(results) {
 // result. Mutates results in place; safe to call after verifyPdfSignatures.
 async function verifyVaultTrustAsync(results) {
   for (const r of results) {
-    if (!r.certVaultUrl || !r.cert) continue;
+    if (r.error || !r.cryptoValid || !safeHttpsUrl(r.certVaultUrl) || !r.cert) continue;
     try {
-      const res = await fetch(r.certVaultUrl, { cache: 'no-cache' });
+      const res = await fetch(r.certVaultUrl, { cache: 'no-cache', credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(10000) });
       if (!res.ok) { r.vaultTrusted = false; r.vaultTrustError = 'HTTP ' + res.status; continue; }
-      const pem = await res.text();
+      const pem = new TextDecoder().decode(await readBoundedResponse(res, 1024 * 1024));
       const fetched = forge.pki.certificateFromPem(pem);
       const a = forge.asn1.toDer(forge.pki.certificateToAsn1(fetched)).getBytes();
       const b = forge.asn1.toDer(forge.pki.certificateToAsn1(r.cert)).getBytes();
@@ -10141,7 +9881,7 @@ function perSigState(r, allResults) {
     && o.byteRange[0] === 0
     && o.byteRange[1] >= myEnd - 4  // small whitespace tolerance
     && o.totalCovered);
-  return laterValidCover ? 'valid' : 'modified';
+  return laterValidCover ? 'earlier' : 'modified';
 }
 
 function fmtSigningTime(t) {
@@ -10159,9 +9899,9 @@ function renderVerifyBanner(results, isUnsignedField=false) {
     label = { badge: '? Unsigned', text: 'this PDF has an empty signature field ready to be signed' };
   } else {
     state = overallVerifyState(results);
-    label = state === 'valid'    ? { badge: '✓ Valid', text: 'signed, unchanged since signing' }
-          : state === 'modified' ? { badge: '⚠ Voided', text: 'the document was modified after signing. The signature no longer covers the whole file. Do NOT treat this as valid' }
-          :                        { badge: '✕ Broken', text: 'signature does NOT match the document — the signed bytes have been altered' };
+    label = state === 'valid'    ? { badge: '✓ Signature matches', text: 'The latest signature matches the current bytes. Signer identity and revision permissions require separate checks' }
+          : state === 'modified' ? { badge: '⚠ Later bytes unsigned', text: 'The signature covers an earlier revision and later bytes are unsigned' }
+          :                        { badge: '✕ Verification failed', text: 'One or more signatures could not be verified' };
   }
   banner.className = 'verify-banner ' + state;
   banner.style.display = 'flex';
@@ -10172,7 +9912,7 @@ function renderVerifyBanner(results, isUnsignedField=false) {
     let trustTag = '';
     if (!first.error) {
       trustTag = first.trusted ? ' · trusted CA'
-              : (first.certVaultUrl && first.vaultTrusted) ? ' · trusted via signer\'s vault'
+              : (first.certVaultUrl && first.vaultTrusted) ? ' · certificate matches vault copy'
               : first.selfSigned ? ' · self-signed'
               : ' · chain not verified';
     }
@@ -10188,7 +9928,7 @@ function renderVerifyBanner(results, isUnsignedField=false) {
   banner.innerHTML = '';
   const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = label.badge;
   const body  = document.createElement('div');  body.className  = 'body';
-  body.innerHTML = `<b>${label.text}.</b>` + (sub ? `<br><span style="font-size:12px; opacity:.85">${sub}</span>` : '');
+  body.innerHTML = `<b>${label.text}.</b>` + (sub ? `<br><span style="font-size:12px; opacity:.85">${esc(sub)}</span>` : '');
   const close = document.createElement('button'); close.className = 'close'; close.textContent = '×'; close.title = 'Hide';
   close.onclick = () => { banner.style.display = 'none'; };
   banner.append(badge, body, close);
@@ -10201,31 +9941,32 @@ function verifyResultsHtml(results, isUnsignedField=false) {
   if (results.length === 0) return '<p>This PDF has no digital signatures.</p>';
   return '<div class="verify-list">' + results.map((r, i) => {
     const state = perSigState(r, results);
-    const title = state === 'valid'    ? '✓ Signature is valid'
-                : state === 'modified' ? '⚠ Signature is VOIDED — document was modified after signing'
+    const title = state === 'valid'    ? '✓ Signature matches current bytes'
+                : state === 'earlier' ? 'Signature matches an earlier revision'
+                : state === 'modified' ? '⚠ Signature covers an earlier revision and later bytes are unsigned'
                 : state === 'unsigned' ? '? Empty signature field'
-                :                        '✕ Signature is INVALID — document altered';
+                :                        '✕ Verification failed';
     const tsaLine = r.tsaTime
-      ? `Trusted timestamp: <b style="color:${r.tsaOk ? 'var(--good, #1f7a3a)' : 'var(--danger)'}">${r.tsaOk ? '✓' : '✕'}</b> ${fmtSigningTime(r.tsaTime)}${r.tsaSubject ? ' · TSA: ' + r.tsaSubject : ''}<br>`
+      ? `Timestamp token (TSA not authenticated): <b>${r.tsaOk ? 'imprint matches' : 'imprint mismatch'}</b> ${esc(fmtSigningTime(r.tsaTime))}${r.tsaSubject ? ' · TSA: ' + esc(r.tsaSubject) : ''}<br>`
       : '';
     // Trust hierarchy: chain-to-trusted-root > vault-published-and-matches > self-signed / unverified.
     const trustLine = r.trusted
       ? `Certificate: <b style="color:var(--good, #1f7a3a)">chains to a trusted root</b><br>`
       : (r.certVaultUrl && r.vaultTrusted)
-        ? `Certificate: <b style="color:var(--good, #1f7a3a)">trusted via signer's vault</b> — the cert is published at a URL the signer controls (HTTPS-attested)<br>`
+        ? `Certificate: <span style="color:var(--muted)">certificate matches vault copy</span> — identity remains unverified<br>`
         : r.selfSigned
           ? `Certificate: <b style="color:#b57920">self-signed</b> — trust depends on how you got this signer's cert<br>`
-          : `Certificate: <b style="color:#b57920">chain not verified</b>${r.trustReason ? ' (' + r.trustReason + ')' : ''}<br>`;
+          : `Certificate: <b style="color:#b57920">chain not verified</b>${r.trustReason ? ' (' + esc(r.trustReason) + ')' : ''}<br>`;
     const vaultLine = r.certVaultUrl
       ? (r.vaultTrusted
-          ? `Vault URL: <a href="${r.certVaultUrl}" target="_blank" style="color:var(--accent)">${r.certVaultUrl.replace(/^https?:\/\/[^/]+\//, '…/')}</a><br>`
-          : `Vault-published cert: <b style="color:var(--danger)">✕ ${r.vaultTrustError || 'mismatch'}</b> · <a href="${r.certVaultUrl}" target="_blank" style="color:var(--accent)">${r.certVaultUrl}</a><br>`)
+          ? `Vault URL: <a href="${esc(safeHttpsUrl(r.certVaultUrl))}" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">${esc(r.certVaultUrl.replace(/^https?:\/\/[^/]+\//, '…/'))}</a><br>`
+          : `Vault-published cert: <b style="color:var(--danger)">✕ ${esc(r.vaultTrustError || 'mismatch')}</b> · <a href="${esc(safeHttpsUrl(r.certVaultUrl))}" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">${esc(r.certVaultUrl)}</a><br>`)
       : '';
     const details = r.error
-      ? `<div class="meta">Error: ${r.error}</div>`
+      ? `<div class="meta">Error: ${esc(r.error)}</div>`
       : `<div class="meta">
-           Signer: <b>${r.cn}</b>${r.email ? ' &lt;' + r.email + '&gt;' : ''}<br>
-           Signed: ${fmtSigningTime(r.signingTime) || '(no time)'}<br>
+           Signer: <b>${esc(r.cn)}</b>${r.email ? ' &lt;' + esc(r.email) + '&gt;' : ''}<br>
+           Signed: ${esc(fmtSigningTime(r.signingTime) || '(no time)')}<br>
            ${tsaLine}${trustLine}${vaultLine}Byte range: [${r.byteRange.join(', ')}] · document is ${r.docLength} bytes<br>
            SHA-256 digest match: ${r.digestMatch ? 'yes' : '<b style="color:var(--danger)">NO</b>'}<br>
            RSA signature verifies: ${r.rsaOk ? 'yes' : '<b style="color:var(--danger)">NO</b>'}<br>
@@ -10239,10 +9980,10 @@ $('btnVerify').onclick = async () => {
   const f = await pickFile('application/pdf,.pdf');
   if (!f) return;
   const buf = new Uint8Array(await f.arrayBuffer());
-  const results = verifyPdfSignatures(buf);
+  const results = await verifyDocumentSignatures(buf);
   try { await verifyVaultTrustAsync(results); } catch (_) {}
   const body = document.createElement('div');
-  body.innerHTML = `<p style="margin-bottom:8px"><b>${f.name}</b> · ${buf.length} bytes</p>` + verifyResultsHtml(results);
+  body.innerHTML = `<p style="margin-bottom:8px"><b>${esc(f.name)}</b> · ${buf.length} bytes</p>` + verifyResultsHtml(results);
   await modal({ title: 'Signature verification', body, confirmText: 'OK', cancelText: '' });
 };
 
@@ -10257,8 +9998,7 @@ const CANONICAL_VERIFIER_URL = 'https://nored.github.io/pdf-signer/web/';
 
 function autoDetectVerifierUrl() {
   const cfg = ghVault.config && ghVault.config.verifierUrl;
-  if (cfg) return cfg;
-  return CANONICAL_VERIFIER_URL;
+  return safeHttpsUrl(cfg) || CANONICAL_VERIFIER_URL;
 }
 
 function printPdf(u8) {
@@ -10310,7 +10050,7 @@ async function compareVerifierWithLocal(root, vaultPlaintext) {
       </div>
       <div style="color:var(--muted); font-size:13px; margin-top:8px;">
         ${match
-          ? 'Byte-for-byte identical to what was cryptographically signed. Whatever this file contains, the signer put their signature on it.'
+          ? 'Byte-for-byte identical to the retrieved vault copy. Check the signature results for integrity and trust.'
           : '<b style="color:var(--danger)">This file is not what was signed.</b> Someone modified it after signing. The QR / vault attest to the file inside the vault, not to this one. Do not treat this file as signed.'}
       </div>
     </div>
@@ -10334,15 +10074,7 @@ async function renderVerifierPreview(root, plaintextU8) {
     // Do not measure the card — wire fires before layout so its clientWidth
     // may be 0, which would produce zero-size canvases.
     const targetWidth = Math.max(320, Math.min(600, window.innerWidth - 80));
-    // Firefox has been flaky about cross-origin Web Workers from cdnjs even
-    // when CORS headers are permissive. Disable the worker for the verifier
-    // preview so it runs on the main thread — small perf cost, uniform
-    // behaviour across browsers.
-    const pdf = await pdfjsLib.getDocument({
-      data: plaintextU8.slice(),
-      disableWorker: true,
-      isEvalSupported: false,
-    }).promise;
+    const pdf = await loadPdf({ data: plaintextU8.slice() });
     pagesEl.innerHTML = '';
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
@@ -10363,7 +10095,7 @@ async function renderVerifierPreview(root, plaintextU8) {
     }
   } catch (e) {
     console.error('verifier preview render failed:', e);
-    pagesEl.innerHTML = '<div style="color:var(--danger); padding:20px;">Could not render the decrypted PDF: ' + (e && e.message || e) + '</div>';
+    pagesEl.innerHTML = '<div style="color:var(--danger); padding:20px;">Could not render the decrypted PDF: ' + esc(e && e.message || e) + '</div>';
   }
 }
 
@@ -10380,7 +10112,7 @@ async function runAutoVerifyFromHash() {
 
   function render(state, opts={}) {
     const glyph = state === 'valid' ? '✓' : state === 'modified' ? '⚠' : state === 'broken' ? '✕' : '…';
-    const label = opts.label || (state === 'valid' ? 'Verified' : state === 'modified' ? 'Voided. Modified after signing.' : state === 'broken' ? 'Invalid' : 'Verifying…');
+    const label = opts.label || (state === 'valid' ? 'Signature matches current bytes' : state === 'modified' ? 'Later bytes are unsigned' : state === 'broken' ? 'Invalid' : 'Verifying…');
     const detail = opts.detail || '';
     const fieldsHtml = opts.fields ? '<dl class="verifier-fields">' + Object.entries(opts.fields).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v || '<span style="color:var(--muted)">(none)</span>'}</dd>`).join('') + '</dl>' : '';
     const ctaHtml = opts.cta || '';
@@ -10394,7 +10126,7 @@ async function runAutoVerifyFromHash() {
           <div class="glyph">${glyph}</div>
           <div class="text">
             <span class="label">${esc(label)}</span>
-            ${detail ? `<span class="detail">${detail}</span>` : ''}
+            ${detail ? `<span class="detail">${esc(detail)}</span>` : ''}
           </div>
         </div>
         ${fieldsHtml}
@@ -10433,21 +10165,21 @@ async function runAutoVerifyFromHash() {
 
         <h3>What each status means</h3>
         <div class="states">
-          <div class="state-row"><span class="g" style="background:var(--good)">✓</span><span><b>Verified</b> — the signature is valid and covers the entire document. Nobody has changed a single byte since signing.</span></div>
-          <div class="state-row"><span class="g" style="background:#d99a2b">⚠</span><span><b>Voided</b> — a signature was applied but bytes were appended after it. Treat the document as untrusted; the signer only vouched for the earlier version.</span></div>
-          <div class="state-row"><span class="g" style="background:var(--danger)">✕</span><span><b>Invalid</b> — the signature does not match the document. Either the file was tampered with, or the QR was.</span></div>
+          <div class="state-row"><span class="g" style="background:var(--good)">✓</span><span><b>Signature matches current bytes</b> means the latest signature covers the current PDF. Earlier signatures apply to their own revisions.</span></div>
+          <div class="state-row"><span class="g" style="background:#d99a2b">⚠</span><span><b>Later bytes are unsigned</b> means the signature covers an earlier revision.</span></div>
+          <div class="state-row"><span class="g" style="background:var(--danger)">✕</span><span><b>Verification failed</b> means the app could not establish the signature or document checks. Open the details for the reason.</span></div>
         </div>
 
         <h3>What "trust" means here</h3>
         <p>A valid signature proves the file wasn't modified. It doesn't automatically prove <em>who</em> signed it. The <b>Trust</b> line shows one of:</p>
         <ul style="margin:6px 0 0 18px; padding:0">
-          <li><b>chains to a trusted root</b> — the signer's certificate was issued by a Certificate Authority your browser already knows (Sectigo, DigiCert, Let's Encrypt for domains, etc.). Strongest form of identity trust.</li>
-          <li><b>trusted via signer's vault</b> — the signer publishes their public certificate on their own HTTPS domain. This page fetched it and confirmed it matches. Trust depends on you trusting that HTTPS domain.</li>
+          <li><b>chains to a trusted root</b> — the certificate chain leads to a root you added to the app’s Trusted roots in this browser.</li>
+          <li><b>certificate matches vault copy</b> — the fetched public certificate matches the one in the signature. Publishing it by itself does not add a root or establish the signer’s identity.</li>
           <li><b>self-signed</b> — the signer minted their own certificate. The signature proves the same person who holds the key signed the file, but there's no third party vouching for who they are.</li>
         </ul>
 
         <h3>What to do next</h3>
-        <p>If the status is Verified and you recognise the signer, you're done. If any part looks off (unexpected signer name, red status, or the CSV in the QR doesn't match), don't trust the document and contact the sender through a channel other than the one that sent you the QR.</p>
+        <p>Check the signature coverage and certificate trust separately. If the signer or certificate is unexpected, confirm it through a separate channel.</p>
 
         <div class="close-row">
           <button class="primary" id="helpClose">Got it</button>
@@ -10497,7 +10229,7 @@ async function runAutoVerifyFromHash() {
     'CSV in QR':        parsed.csv ? `<code>${esc(parsed.csv)}</code>` : '',
     [isStampQr ? "Signer's certificate" : 'Vault URL']:
       parsed.url
-        ? `<a href="${esc(parsed.url)}" target="_blank" rel="noopener"><code>${esc(parsed.url)}</code></a>`
+        ? `<a href="${esc(safeHttpsUrl(parsed.url))}" target="_blank" rel="noopener"><code>${esc(parsed.url)}</code></a>`
         : (isStampQr
             ? '<span style="color:var(--muted)">(none)</span>'
             : '<span style="color:var(--muted)">(none — pick the local .vault file)</span>'),
@@ -10524,9 +10256,9 @@ async function runAutoVerifyFromHash() {
     } else {
       let cipherU8 = null;
       if (parsed.url) {
-        const res = await fetch(parsed.url);
+        const res = await fetchVerificationResource(parsed.url);
         if (!res.ok) throw new Error('Vault fetch: HTTP ' + res.status);
-        cipherU8 = new Uint8Array(await res.arrayBuffer());
+        cipherU8 = await readBoundedResponse(res, 100 * 1024 * 1024);
       } else {
         const f = await pickFile('.vault,application/octet-stream,*');
         if (!f) {
@@ -10542,15 +10274,8 @@ async function runAutoVerifyFromHash() {
 
       plaintext = await aesGcmDecrypt(parsed.keyBytes, cipherU8);
     }
-    const results = verifyPdfSignatures(plaintext);
+    const results = await verifyDocumentSignatures(plaintext);
     try { await verifyVaultTrustAsync(results); } catch (_) {}
-    // Best-effort revocation check for the signer cert. Skipped if AIA
-    // has no responder or the fetch is CORS-blocked; the UI reflects
-    // "no responder"/"unknown" transparently instead of hiding the row.
-    try { await verifyOcspAsync(results); } catch (_) {}
-    // AATL / EUTL cross-check — promote Trust badge to explicit list
-    // membership when the chain touches a curated fingerprint.
-    try { await verifyTrustListsAsync(results); } catch (_) {}
     // CSV cross-check only makes sense for vault QRs — deriveCsv needs the AES key.
     const csvOk   = parsed.keyBytes && parsed.csv && parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes);
     // Use the multi-sig-aware helper — a first signer's ByteRange
@@ -10561,8 +10286,8 @@ async function runAutoVerifyFromHash() {
     // "modified" and voids the whole document — the wrong verdict.
     const state = overallVerifyState(results);
     const first = results[0] || {};
-    const detail = state === 'valid'    ? 'Cryptographic signature is valid and covers the entire document.'
-                 : state === 'modified' ? 'Bytes were added after signing. The signature no longer covers the whole file. Treat this document as voided.'
+    const detail = state === 'valid'    ? 'The latest signature matches the current bytes. This check does not determine whether earlier revision permissions were respected.'
+                 : state === 'modified' ? 'Bytes were added after the latest signature. That signature covers an earlier revision.'
                  : first.error          ? 'Signature could not be verified: ' + first.error
                                         : 'The signed bytes were altered. The digest no longer matches.';
 
@@ -10571,28 +10296,13 @@ async function runAutoVerifyFromHash() {
               : '<span style="color:var(--danger)">does NOT match</span> — the QR was tampered with')
       : '<span style="color:var(--muted)">(no CSV in QR)</span>';
 
-    // Trust cell now clickable — opens the cert chain drilldown.
-    // If the chain matched an AATL/EUTL fingerprint, promote the badge:
-    // an AATL/EUTL membership is a stronger signal than a generic
-    // "chains to a trusted root" (which can include the OS trust store).
-    const listMatch = first.trustListMatch;
-    const trustBase = listMatch
-                        ? `<b style="color:var(--good)">on ${esc(listMatch.list)}: ${esc(listMatch.name)}</b>`
-                        : first.trusted
-                          ? '<b style="color:var(--good)">chains to a trusted root</b>'
-                          : (first.certVaultUrl && first.vaultTrusted)
-                            ? `<b style="color:var(--good)">trusted via signer's vault</b>`
-                            : first.selfSigned
-                              ? '<span style="color:#b57920">self-signed</span>'
-                              : '<span style="color:#b57920">chain not verified</span>';
-    const ocspBadge = first.ocspStatus === 'good' ? ' · <span style="color:var(--good)">OCSP: cert is good</span>'
-                    : first.ocspStatus === 'revoked' ? ' · <b style="color:var(--danger)">OCSP: REVOKED</b>'
-                    : first.ocspStatus === 'noResponder' ? ' · <span style="color:var(--muted)">OCSP: no responder in cert</span>'
-                    : first.ocspStatus === 'unknown' ? ' · <span style="color:var(--muted)">OCSP: unknown</span>'
-                    : first.ocspStatus === 'error' ? ' · <span style="color:var(--muted)">OCSP: check failed</span>'
-                    : '';
-    const ltvBadge = first.hasDss ? ' · <span style="color:var(--good)">LTV enabled (DSS present)</span>' : '';
-    const trustCell = `${trustBase}${ocspBadge}${ltvBadge}<br><a href="#" id="chainDrilldown" style="color:var(--accent); font-size:11px; text-decoration:none">→ inspect certificate chain (${(first.chainCerts||[]).length} cert${(first.chainCerts||[]).length===1?'':'s'})</a>`;
+    const trustBase = first.trusted
+      ? '<b style="color:var(--good)">chains to a trusted root</b>'
+      : first.selfSigned ? '<span style="color:#b57920">self-signed</span>'
+        : '<span style="color:#b57920">chain not verified</span>';
+    const vaultMatch = first.vaultTrusted ? ' · certificate matches vault copy' : '';
+    const ltvBadge = first.hasDss ? ' · <span style="color:var(--muted)">DSS present (not validated)</span>' : '';
+    const trustCell = `${trustBase}${vaultMatch} · revocation not checked${ltvBadge}<br><a href="#" id="chainDrilldown" style="color:var(--accent); font-size:11px; text-decoration:none">→ inspect certificate chain (${(first.chainCerts||[]).length} cert${(first.chainCerts||[]).length===1?'':'s'})</a>`;
 
     const tsaCell = first.tsaTime
       ? `<b>${esc(fmtSigningTime(first.tsaTime))}</b>` +
@@ -10608,10 +10318,10 @@ async function runAutoVerifyFromHash() {
     render(state, {
       detail,
       fields: {
-        'Result':          `<b style="color:${state === 'valid' ? 'var(--good)' : state === 'modified' ? '#b57920' : 'var(--danger)'};">${state === 'modified' ? 'VOIDED' : state.toUpperCase()}</b>`,
+        'Result':          `<b style="color:${state === 'valid' ? 'var(--good)' : state === 'modified' ? '#b57920' : 'var(--danger)'};">${state === 'modified' ? 'LATER BYTES UNSIGNED' : state === 'valid' ? 'BYTE CHECK PASSED' : state.toUpperCase()}</b>`,
         'Signer (in cert)': first.cn ? `<b>${esc(first.cn)}</b>${first.email ? ' &lt;' + esc(first.email) + '&gt;' : ''}` : '',
         'Signed at':        first.signingTime ? esc(fmtSigningTime(first.signingTime)) : '',
-        'TSA (trusted time)': tsaCell,
+        'TSA time (unverified)': tsaCell,
         'Cert SHA-1':       first.certFp ? `<code>${esc(first.certFp)}</code>` : '',
         'Trust':            trustCell,
         'CSV cross-check':  csvRow,
@@ -10692,8 +10402,8 @@ async function runAutoVerifyFromHash() {
         const previewPanel = r.querySelector('.verifier-preview');
         if (previewPanel) {
           const notice = document.createElement('div');
-          notice.style.cssText = 'padding:12px 14px; margin-bottom:10px; border-left: 3px solid var(--good); background: rgba(31,122,58,.08); border-radius: 0 6px 6px 0; font-size:13px; line-height:1.55; color: var(--text);';
-          notice.innerHTML = '<b>This is the signed original.</b> Any file or print from anywhere else is a copy.';
+          notice.style.cssText = 'padding:12px 14px; margin-bottom:10px; border-left: 3px solid var(--muted); background: var(--panel-2); border-radius: 0 6px 6px 0; font-size:13px; line-height:1.55; color: var(--text);';
+          notice.innerHTML = '<b>This is the copy retrieved from the vault.</b> Use the signature results above to assess it.';
           const link = document.createElement('div');
           link.style.cssText = 'margin-top:8px; font-size:12px; color:var(--muted);';
           link.innerHTML = 'Have a digital copy? <a href="#" id="btnCompareLocal" style="color:var(--accent); text-decoration:none;">Byte-compare it</a>. Scans always fail; the bytes differ.';
@@ -10730,9 +10440,9 @@ $('btnVerifyVault').onclick = async () => {
   let cipherU8 = null;
   if (parsed.url) {
     try {
-      const res = await fetch(parsed.url);
+      const res = await fetchVerificationResource(parsed.url);
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      cipherU8 = new Uint8Array(await res.arrayBuffer());
+      cipherU8 = await readBoundedResponse(res, 100 * 1024 * 1024);
     } catch (e) {
       const ok = await modal({
         title: 'Fetch failed',
@@ -10752,13 +10462,13 @@ $('btnVerifyVault').onclick = async () => {
   try { plaintext = await aesGcmDecrypt(parsed.keyBytes, cipherU8); }
   catch (e) { return toast('Decryption failed: ' + e.message + ' (wrong key or corrupted vault)', 'err'); }
 
-  const results = verifyPdfSignatures(plaintext);
+  const results = await verifyDocumentSignatures(plaintext);
   const resBody = document.createElement('div');
   const csvCheck = parsed.csv
-    ? `<p style="margin:8px 0"><b>Vault CSV in QR:</b> <code>${parsed.csv}</code> · <b>Recomputed from key:</b> <code>${deriveCsv(parsed.keyBytes)}</code> — ${
+    ? `<p style="margin:8px 0"><b>Vault CSV in QR:</b> <code>${esc(parsed.csv)}</code> · <b>Recomputed from key:</b> <code>${deriveCsv(parsed.keyBytes)}</code> — ${
         parsed.csv.toUpperCase() === deriveCsv(parsed.keyBytes) ? '<span style="color:var(--good)">match</span>' : '<span style="color:var(--danger)">MISMATCH</span>'
       }</p>` : '';
-  resBody.innerHTML = `<p style="margin-bottom:8px"><b>Decrypted PDF</b> · ${plaintext.length} bytes · signer per QR: <b>${(parsed.signer || '(none)').replace(/</g,'&lt;')}</b></p>${csvCheck}` + verifyResultsHtml(results);
+  resBody.innerHTML = `<p style="margin-bottom:8px"><b>Decrypted PDF</b> · ${plaintext.length} bytes · signer per QR: <b>${esc(parsed.signer || '(none)')}</b></p>${csvCheck}` + verifyResultsHtml(results);
   const dl = document.createElement('button');
   dl.className = 'small';
   dl.style.width = 'auto';
@@ -10770,10 +10480,10 @@ $('btnVerifyVault').onclick = async () => {
 };
 
 // Also expose showVerifyModal via clicking the top banner.
-$('verifyBanner').addEventListener('click', e => {
+$('verifyBanner').addEventListener('click', async e => {
   if (e.target.closest('.close')) return;
   if (!doc.bytes) return;
-  const results = verifyPdfSignatures(doc.bytes);
+  const results = await verifyDocumentSignatures(doc.bytes);
   const rawText = dec.decode(doc.bytes);
   const hasSigPayload = doc.alreadySigned;
   const hasSigField   = /\/FT\s*\/Sig/.test(rawText);

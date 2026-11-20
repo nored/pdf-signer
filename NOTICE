@@ -16,3 +16,9 @@ Ghostscript-WASM is fetched by the user's browser directly from jsDelivr;
 pdf-signer does not distribute, bundle, or modify it. The optional
 "Normalize source PDFs before signing" toggle in identity settings
 enables this feature; disable it to avoid the runtime dependency.
+
+  MuPDF.js (Artifex Software)
+  Licensed under AGPL-3.0-or-later
+  Source: https://github.com/ArtifexSoftware/mupdf
+  Loaded on demand for redaction from:
+    https://cdn.jsdelivr.net/npm/mupdf@1.28.6/dist/

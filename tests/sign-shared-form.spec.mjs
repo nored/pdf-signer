@@ -89,7 +89,7 @@ for (const permission of [null, 2, 3]) {
 
     await dropPdf(page, second, 'review-final.pdf');
     await expect(page.locator('#btnSign')).toHaveText('Document locked by a signature');
-    const signatures = await page.evaluate(() => verifyPdfSignatures(doc.bytes).map(r => r.cryptoValid));
+    const signatures = await page.evaluate(async () => (await verifyDocumentSignatures(doc.bytes)).map(r => r.cryptoValid));
     expect(signatures).toEqual([true, true]);
   });
 }

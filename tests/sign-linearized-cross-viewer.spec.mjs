@@ -78,7 +78,7 @@ test('sign a linearized PDF: opens in pdf.js, Poppler, and Preview.app', async (
     const bin = atob(b64);
     const u8 = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    const results = window.verifyPdfSignatures(u8);
+    const results = await window.verifyDocumentSignatures(u8);
     return {
       count: results.length,
       results: results.map(r => ({ cn: r.cn, cryptoValid: r.cryptoValid, error: r.error })),
