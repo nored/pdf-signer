@@ -33,11 +33,15 @@ async function downloadSigned(page) {
   return readFile(await download.path());
 }
 
-for (const mode of ['void', 'certify']) {
-  test(`keep form fields and earlier signatures through two signing rounds (${mode})`, async ({ page }) => {
+for (const permission of [null, 2, 3]) {
+  const mode = permission ? 'certify' : 'void';
+  test(`keep form fields and earlier signatures through two signing rounds (permission ${permission})`, async ({ page }) => {
     await createIdentity(page);
     await dropPdf(page, await makeSharedForm(), 'review.pdf');
     await page.locator(`input[name="lockmode"][value="${mode}"]`).evaluate(el => el.click());
+    if (permission) await page.locator('#certifyPermission').selectOption(String(permission));
+    await page.locator('#fieldLockOptions summary').click();
+    await page.locator('#fieldLockList').getByLabel('First reviewer', { exact: true }).check();
     await page.locator('[title="PDF form field: First reviewer"]').fill('First review');
     await page.locator('.field-hint[title*="First signature"]').click();
     const first = await downloadSigned(page);
@@ -47,9 +51,21 @@ for (const mode of ['void', 'certify']) {
     expect(firstPdf.getForm().getTextField('Second reviewer').isReadOnly()).toBe(false);
     expect(firstPdf.getForm().getSignature('First signature').acroField.dict.has(PDFName.of('V'))).toBe(true);
     expect(firstPdf.getForm().getSignature('Second signature').acroField.dict.has(PDFName.of('V'))).toBe(false);
-    expect(firstPdf.catalog.has(PDFName.of('Perms'))).toBe(mode === 'certify');
+    const firstField = firstPdf.getForm().getSignature('First signature').acroField.dict;
+    const lock = firstField.lookup(PDFName.of('Lock'));
+    expect(String(lock.get(PDFName.of('Action')))).toBe('/Include');
+    expect(lock.lookup(PDFName.of('Fields')).get(0).decodeText()).toBe('First reviewer');
+    const permissions = firstPdf.catalog.lookup(PDFName.of('Perms'));
+    if (permission) {
+      const certification = permissions.lookup(PDFName.of('DocMDP'));
+      const params = certification.lookup(PDFName.of('Reference')).lookup(0).lookup(PDFName.of('TransformParams'));
+      expect(params.lookup(PDFName.of('P')).asNumber()).toBe(permission);
+    } else {
+      expect(permissions).toBeUndefined();
+    }
 
     await dropPdf(page, first, 'review-round-one.pdf');
+    await expect(page.locator('[title="PDF form field: First reviewer"]')).toHaveCount(0);
     await page.locator('[title="PDF form field: Second reviewer"]').fill('Second review');
     await page.locator('.field-hint[title*="Second signature"]').click();
     await page.locator('input[name="lockmode"][value="locked"]').evaluate(el => el.click());

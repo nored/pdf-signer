@@ -61,7 +61,7 @@ Every setting is per-identity. Export the identity bundle and every setting trav
 
 ## Multi-party workflows
 
-Create any text fields and digital signature fields before the first signature. Each reviewer can fill their section and sign using **Leave open for form filling and signing**. The first signer can also choose **Certify, allow filling and signing** to declare those permissions in the PDF. Save the current PDF and pass that file to the next reviewer.
+Create any text fields and digital signature fields before the first signature. Each reviewer can fill their section and sign using **Leave open for form filling and signing**. The first signer can also choose **Certify with permissions** to allow form filling and signing, with optional annotations. Use **Lock individual form fields** to protect selected fields and leave the other fields available for later reviewers. For certification without annotations, prepare a signature field for each reviewer before the first signature. Save the current PDF and pass that file to the next reviewer.
 
 In Acrobat, click the existing fillable fields to enter text and use a digital signature field or **Use a certificate** to sign. **Edit PDF** changes page content. Make those changes in the unsigned original before circulating it. Converting a signed PDF to images drops the digital signatures and retains only their visible appearance.
 

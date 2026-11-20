@@ -1024,10 +1024,22 @@
             <label title="DocMDP P=1: no further changes, no further signatures. Use when you are the final signer.">
               <input type="radio" name="lockmode" value="locked"> Lock document <span class="info-hint" title="DocMDP P=1: no further changes, no further signatures. Use when you are the final signer.">ⓘ</span>
             </label>
-            <label title="Certify the document (DocMDP P=3) but leave room for further signatures, annotations, and form-fill. Only safe when every downstream tool restricts itself to those operations. Most third-party PDF tools (Apple Preview, iLovePDF, 3-Heights) rewrite the file or stamp onto page content and will invalidate this signature.">
-              <input type="radio" name="lockmode" value="certify"> Certify, allow filling and signing <span class="info-hint" title="DocMDP P=3: certifies the document but permits form-fill, annotations, and further signatures downstream. Anything else invalidates this signature. Most consumer PDF tools rewrite the file and will break it.">ⓘ</span>
+            <label title="Only available for the first signature">
+              <input type="radio" name="lockmode" value="certify"> Certify with permissions
             </label>
           </div>
+          <div id="certifyOptions" hidden>
+            <label for="certifyPermission">Changes allowed after certification</label>
+            <select id="certifyPermission">
+              <option value="2">Fill existing fields and sign</option>
+              <option value="3" selected>Fill existing fields, sign, and annotate</option>
+            </select>
+          </div>
+          <details id="fieldLockOptions" hidden>
+            <summary>Lock individual form fields</summary>
+            <p class="hint">Selected fields are locked when you sign. Other fields follow the signing mode above.</p>
+            <div id="fieldLockList"></div>
+          </details>
           <p class="hint">After a digital signature, collaborators can fill existing form fields and add digital signatures if permitted. Add any missing fields before signing.</p>
           <!-- alreadySignedNote intentionally removed — the top verify
                banner already communicates "signed, unchanged since signing"
@@ -2390,6 +2402,8 @@ function closeDoc() {
   doc.stashedStamps = [];
   doc.alreadySigned = false;
   doc.signingLocked = false;
+  doc.lockedFieldRules = [];
+  renderFieldLockOptions();
   doc.isEncrypted = false;
   doc.pdfPassword = null;
   doc.hash = null;
@@ -2433,7 +2447,10 @@ async function openPdf(file) {
     sourceStructure = await PDFLib.PDFDocument.load(doc.bytes, { updateMetadata: false });
   } catch (_) { /* pdf.js handles unreadable and encrypted sources below. */ }
   const name = PDFLib.PDFName.of;
-  doc.signingLocked = !!sourceStructure && isPdfSigningLocked(sourceStructure);
+  const { permission, locks } = getPdfSigningPermissions(sourceStructure);
+  doc.signingLocked = permission === 1 || locks.some(rule => rule.action === 'All');
+  doc.lockedFieldRules = locks;
+  renderFieldLockOptions(sourceStructure);
   const sourceHasForm = sourceStructure?.catalog.has(name('AcroForm'));
   const hasParsedSignature = sourceStructure?.context.enumerateIndirectObjects().some(([, obj]) =>
     obj instanceof PDFLib.PDFDict && obj.has(name('ByteRange')) && obj.has(name('Contents')));
@@ -2591,6 +2608,40 @@ async function openPdf(file) {
   updateSignButton();
 }
 
+function syncCertificationOptions() {
+  const mode = document.querySelector('input[name="lockmode"]:checked');
+  if (mode?.value === 'certify' && mode.disabled) {
+    document.querySelector('input[name="lockmode"][value="void"]').checked = true;
+  }
+  $('certifyOptions').hidden = mode?.value !== 'certify' || mode.disabled;
+  $('fieldLockOptions').hidden = !$('fieldLockList').childElementCount ||
+    mode?.value === 'locked' || doc.signingLocked;
+}
+$('lockmodeGroup').addEventListener('change', syncCertificationOptions);
+
+function renderFieldLockOptions(pdfDoc) {
+  const list = $('fieldLockList');
+  list.replaceChildren();
+  $('fieldLockOptions').open = false;
+  const acroForm = pdfDoc?.catalog.getAcroForm();
+  if (acroForm && !doc.signingLocked) {
+    try {
+      for (const field of PDFLib.PDFForm.of(acroForm, pdfDoc).getFields()) {
+        const name = field.getName();
+        if (field.isReadOnly() || doc.lockedFieldRules.some(rule => fieldMatchesLock(name, rule))) continue;
+        if (field instanceof PDFLib.PDFSignature && field.acroField.dict.get(PDFLib.PDFName.of('V'))) continue;
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = name;
+        label.append(checkbox, ' ', name);
+        list.appendChild(label);
+      }
+    } catch (error) { console.warn('Form field lock options unavailable', error); }
+  }
+  syncCertificationOptions();
+}
+
 function reflectAlreadySignedInUi() {
   const on = !!doc.alreadySigned;
   const note = $('alreadySignedNote'); if (note) note.style.display = on ? '' : 'none';
@@ -2610,6 +2661,7 @@ function reflectAlreadySignedInUi() {
       if (voidR) voidR.checked = true;
     }
   }
+  syncCertificationOptions();
   // Page-content tools stay unsafe on already-signed docs (they'd modify page
   // content and void the prior sig). Users get the same effect via the "Stamp"
   // appearance option, which lives inside the sig widget's Form XObject.
@@ -2694,7 +2746,7 @@ async function renderFormFieldOverlays() {
     try { anns = await meta.page.getAnnotations(); } catch (_) { continue; }
     for (const a of anns) {
       if (a.annotationType !== 20) continue;              // WIDGET
-      if (a.readOnly) continue;
+      if (a.readOnly || doc.lockedFieldRules.some(rule => fieldMatchesLock(a.fieldName, rule))) continue;
       if (!a.rect || a.rect.length < 4) continue;
       const ft = (a.fieldType || '').toLowerCase();
       const name = a.fieldName || ('unnamed-' + meta.index + '-' + (a.id || Math.random().toString(36).slice(2, 8)));
@@ -2884,7 +2936,8 @@ async function markUnsignedFieldHints() {
     for (const a of anns) {
       if (a.annotationType !== 20) continue;
       if ((a.fieldType || '').toLowerCase() !== 'sig') continue;
-      if (a.readOnly || doc.sigFieldMap[a.fieldName]?.alreadySigned) continue;
+      if (a.readOnly || doc.sigFieldMap[a.fieldName]?.alreadySigned ||
+          doc.lockedFieldRules.some(rule => fieldMatchesLock(a.fieldName, rule))) continue;
       if (!a.rect || a.rect.length < 4) continue;
       const fieldName = a.fieldName || null;
       if (fieldName && claimedFields.has(fieldName)) continue;
@@ -6081,6 +6134,7 @@ const SETTINGS_KEYS = [
   { id: 'reason',         type: 'value' },
   { id: 'location',       type: 'value' },
   { id: 'nameFont',       type: 'value' },
+  { id: 'certifyPermission', type: 'value' },
   { id: 'stampEnable',    type: 'checked' },
   { id: 'stampRole',      type: 'value' },
   { id: 'vaultKeepLocal', type: 'checked' },
@@ -6136,6 +6190,10 @@ function applySettings(obj) {
     const el = document.querySelector(`input[name="${name}"][value="${val}"]`);
     if (el) el.checked = true;
   }
+  if (!['2', '3'].includes($('certifyPermission').value) || !('certifyPermission' in obj)) {
+    $('certifyPermission').value = '3';
+  }
+  syncCertificationOptions();
   // Reflect derived UI state
   $('stampOptions').style.display = $('stampEnable').checked ? '' : 'none';
   const vh = document.querySelector('input[name="vaultHost"]:checked');
@@ -6852,7 +6910,7 @@ async function normalizePdfViaGhostscript(inputBytes) {
   return new Uint8Array(out);
 }
 
-async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formEdits = [], signingTime, pdfjsDoc, tsaUrl, backdated, certVaultUrl, sigFieldMap, removedSigFields}) {
+async function makeSignedPdf({bytes, placements, lock, certifyMode, certifyPermission = 3, lockedFields = [], meta, reason, location, appearance, cert, key, chain, sigPngU8, stamp, formEdits = [], signingTime, pdfjsDoc, tsaUrl, backdated, certVaultUrl, sigFieldMap, removedSigFields}) {
   const {
     PDFDocument, StandardFonts, rgb,
     PDFName, PDFString, PDFHexString, PDFNumber,
@@ -7039,7 +7097,7 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   const sigRef = context.register(sigDict);
 
   // certifyMode: 'lock' → DocMDP P=1 (no further changes)
-  //              'certify' → DocMDP P=3 (form fill + further signatures allowed)
+  //              'certify' → DocMDP P=2 or P=3 (with annotations at P=3)
   //              'none' → no DocMDP (approval-only signature)
   // Legacy `lock` boolean maps to 'lock' vs 'none' when certifyMode isn't given.
   const mdp = certifyMode || (lock ? 'lock' : 'none');
@@ -7055,11 +7113,21 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
       TransformMethod: 'DocMDP',
       TransformParams: context.obj({
         Type: 'TransformParams',
-        P: PDFNumber.of(mdp === 'lock' ? 1 : 3),
+        P: PDFNumber.of(mdp === 'lock' ? 1 : certifyPermission),
         V: PDFName.of('1.2'),
       }),
     });
     sigDict.set(PDFName.of('Reference'), context.obj([sigRefEntry]));
+  }
+
+  if (lockedFields.length && mdp !== 'lock') {
+    const referenceKey = PDFName.of('Reference');
+    const references = sigDict.get(referenceKey) || context.obj([]);
+    references.push(context.obj({
+      Type: 'SigRef', TransformMethod: 'FieldMDP', Data: context.trailerInfo.Root,
+      TransformParams: fieldLockDictionary(context, 'TransformParams', lockedFields),
+    }));
+    sigDict.set(referenceKey, references);
   }
 
   // 3. Signature form fields — split into "routed into an existing empty
@@ -7084,6 +7152,9 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
       V: sigRef,
       Kids: kidsArr,
     });
+    if (lockedFields.length && mdp !== 'lock') {
+      sigField.set(PDFName.of('Lock'), fieldLockDictionary(context, 'SigFieldLock', lockedFields));
+    }
     sigFieldRef = context.register(sigField);
     for (const p of newSigs) {
       const page = pdfDoc.getPage(p.pageIndex);
@@ -7119,7 +7190,12 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, meta, reason
   for (const { target } of routedSigs) {
     const fieldRef = target.fieldRef;
     const fieldDict = context.lookup(fieldRef);
-    if (fieldDict) fieldDict.set(PDFName.of('V'), sigRef);
+    if (fieldDict) {
+      fieldDict.set(PDFName.of('V'), sigRef);
+      if (lockedFields.length && mdp !== 'lock') {
+        fieldDict.set(PDFName.of('Lock'), fieldLockDictionary(context, 'SigFieldLock', lockedFields));
+      }
+    }
   }
 
   // Merge into any existing AcroForm so pre-existing (empty) signature
@@ -8028,21 +8104,54 @@ function spliceCatalogSetIndirect(objBytes, key, refStr) {
   return new TextEncoder().encode(before + ' /' + key + ' ' + refStr + ' ' + after);
 }
 
-function isPdfSigningLocked(pdfDoc) {
-  const { PDFArray, PDFDict, PDFName, PDFNumber } = PDFLib;
+function fieldLockDictionary(context, type, fields) {
+  const { PDFHexString, PDFName } = PDFLib;
+  const lock = context.obj({ Type: type, Action: fields.length ? 'Include' : 'All' });
+  if (fields.length) lock.set(PDFName.of('Fields'), context.obj(fields.map(name => PDFHexString.fromText(name))));
+  if (type === 'TransformParams') lock.set(PDFName.of('V'), PDFName.of('1.2'));
+  return lock;
+}
+
+function fieldMatchesLock(name, { action, fields }) {
+  if (action === 'All') return true;
+  if (!name) return false;
+  const listed = fields.some(field => name === field || name.startsWith(field + '.'));
+  return action === 'Exclude' ? !listed : listed;
+}
+
+function getPdfSigningPermissions(pdfDoc) {
+  const { PDFArray, PDFDict, PDFName, PDFNumber, PDFString, PDFHexString } = PDFLib;
   const key = PDFName.of;
-  const docMdp = pdfDoc.catalog.lookupMaybe(key('Perms'), PDFDict)?.lookupMaybe(key('DocMDP'), PDFDict);
-  return pdfDoc.context.enumerateIndirectObjects().some(([, obj]) => {
-    if (!(obj instanceof PDFDict) || !obj.has(key('ByteRange')) || !obj.has(key('Contents'))) return false;
-    const references = obj.lookupMaybe(key('Reference'), PDFArray);
-    return references?.asArray().some(ref => {
-      const transform = pdfDoc.context.lookupMaybe(ref, PDFDict);
-      const method = transform?.get(key('TransformMethod'));
-      const params = transform?.lookupMaybe(key('TransformParams'), PDFDict);
-      return (obj === docMdp && method === key('DocMDP') && params?.lookupMaybe(key('P'), PDFNumber)?.asNumber() === 1)
-        || (method === key('FieldMDP') && params?.get(key('Action')) === key('All'));
-    });
-  });
+  const locks = [];
+  let permission = null;
+  if (!pdfDoc) return { permission, locks };
+  const permissions = pdfDoc.catalog.lookup(key('Perms'));
+  const certification = permissions instanceof PDFDict ? permissions.lookup(key('DocMDP')) : null;
+  for (const [, obj] of pdfDoc.context.enumerateIndirectObjects()) {
+    if (!(obj instanceof PDFDict) || !obj.has(key('ByteRange')) || !obj.has(key('Contents'))) continue;
+    const references = obj.lookup(key('Reference'));
+    if (!(references instanceof PDFArray)) continue;
+    for (const reference of references.asArray()) {
+      const transform = pdfDoc.context.lookup(reference);
+      const params = transform instanceof PDFDict ? transform.lookup(key('TransformParams')) : null;
+      if (!(params instanceof PDFDict)) continue;
+      const method = transform.get(key('TransformMethod'));
+      if (obj === certification && method === key('DocMDP')) {
+        const value = params.lookup(key('P'));
+        permission = value instanceof PDFNumber ? value.asNumber() : 2;
+      }
+      if (method !== key('FieldMDP')) continue;
+      const action = params.lookup(key('Action'));
+      const actionName = action instanceof PDFName ? action.decodeText() : null;
+      if (!['All', 'Include', 'Exclude'].includes(actionName)) continue;
+      const names = params.lookup(key('Fields'));
+      const fields = names instanceof PDFArray ? names.asArray().map(item => pdfDoc.context.lookup(item))
+        .filter(item => item instanceof PDFString || item instanceof PDFHexString)
+        .map(item => item.decodeText()) : [];
+      locks.push({ action: actionName, fields });
+    }
+  }
+  return { permission, locks };
 }
 
 // Walk AcroForm.Fields (recursively via /Kids) and return a map keyed by the
@@ -8453,7 +8562,7 @@ function stdFontNameFor(key) {
   }
 }
 
-async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated, certVaultUrl, sigFieldMap, lockAfterSign, qrPayload, sigPngU8, formEdits = [] }) {
+async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, location, cert, key, chain, signingTime, tsaUrl, backdated, certVaultUrl, sigFieldMap, lockAfterSign, lockedFields = [], qrPayload, sigPngU8, formEdits = [] }) {
   const { PDFDocument, PDFName, PDFArray, PDFRef, PDFNumber, StandardFonts } = window.PDFLib;
   const parsed = parsePdfForIncremental(bytes);
   const now = signingTime instanceof Date ? signingTime : new Date();
@@ -8481,6 +8590,10 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // Load with pdf-lib for object graph lookups (chain-of-refs, page tree,
   // AcroForm entry) — works regardless of xref form or object-stream use.
   const pdfDoc = await PDFDocument.load(bytes, { updateMetadata: false });
+  const { permission } = getPdfSigningPermissions(pdfDoc);
+  if (permission === 2 && newSigs.length) {
+    throw new Error('This certification requires signing in an existing signature field.');
+  }
   const ctx = pdfDoc.context;
   const objBodies = [];
   if (formEdits.length) {
@@ -8787,7 +8900,9 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
       throw new Error(`Signature field "${p.formFieldName}" is unavailable or already signed`);
     }
     field.set(PDFName.of('V'), PDFRef.of(sigDictNum));
-    if (lockAfterSign) field.set(PDFName.of('Lock'), ctx.obj({ Type: 'SigFieldLock', Action: 'All' }));
+    if (lockAfterSign || lockedFields.length) {
+      field.set(PDFName.of('Lock'), fieldLockDictionary(ctx, 'SigFieldLock', lockedFields));
+    }
     widget.set(PDFName.of('AP'), ctx.obj({ N: PDFRef.of(apNum) }));
     routedObjects.set(target.fieldRef, field);
     routedObjects.set(target.widgetRef, widget);
@@ -8810,9 +8925,9 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   // field lock with FieldMDP /Action /All: viewers that honor it (Adobe,
   // strict PAdES verifiers) refuse further form-fill / signatures after this
   // signature. Emit /Reference on the sig dict AND /Lock on the sig field.
-  const referenceLine = lockAfterSign
+  const referenceLine = lockAfterSign || lockedFields.length
     ? `   /Reference [ << /Type /SigRef /TransformMethod /FieldMDP /Data ${parsed.rootRef.num} ${parsed.rootRef.gen} R\n` +
-      `                   /TransformParams << /Type /TransformParams /Action /All /V /1.2 >> >> ]\n`
+      `                   /TransformParams ${fieldLockDictionary(ctx, 'TransformParams', lockedFields)} >> ]\n`
     : '';
   objBodies.push({ num: sigDictNum, body:
     `${sigDictNum} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached\n` +
@@ -8827,8 +8942,8 @@ async function makeIncrementalSignedPdf({ bytes, placements, meta, reason, locat
   if (sigFieldNum !== null && widgetObjs.length > 0) {
     const kidsStr = widgetObjs.filter(w => !w.isLink).map(w => `${w.num} 0 R`).join(' ');
     const sigFieldName = `Signature-${now.getTime().toString(36)}`;
-    const lockDict = lockAfterSign
-      ? ` /Lock << /Type /SigFieldLock /Action /All >>`
+    const lockDict = lockAfterSign || lockedFields.length
+      ? ` /Lock ${fieldLockDictionary(ctx, 'SigFieldLock', lockedFields)}`
       : '';
     objBodies.push({ num: sigFieldNum, body:
       `${sigFieldNum} 0 obj\n<< /FT /Sig /T (${sigFieldName}) /V ${sigDictNum} 0 R /Kids [${kidsStr}]${lockDict} >>\nendobj\n`
@@ -9286,6 +9401,8 @@ $('btnSign').onclick = async () => {
     // for the /Lock + FieldMDP emission.
     const certifyMode = doc.alreadySigned ? 'none' : lockmodeVal;
     const lockAfterSign = doc.alreadySigned && (lockmodeVal === 'locked');
+    const lockedFields = lockmodeVal === 'locked' ? [] :
+      Array.from($('fieldLockList').querySelectorAll('input:checked'), input => input.value);
     const lock = certifyMode === 'locked' || certifyMode === 'lock';
     // We need to build a vault (encrypt the signed PDF, upload it, embed a
     // vault QR in the widget) whenever ANY signature uses the stamp
@@ -9382,7 +9499,7 @@ $('btnSign').onclick = async () => {
         chain: unlocked.chain,
         signingTime, tsaUrl, backdated, certVaultUrl,
         sigFieldMap: doc.sigFieldMap || {},
-        lockAfterSign,
+        lockAfterSign, lockedFields,
         // Full vault QR (`#v={u,k,s,t,c}`) when a vault is being built —
         // scanning it drops the recipient straight into the verifier's full
         // report (fetch → decrypt → verify → chain/OCSP/TSA/receipt). Falls
@@ -9406,6 +9523,8 @@ $('btnSign').onclick = async () => {
         placements: doc.placements,
         lock,
         certifyMode: certifyMode === 'certify' ? 'certify' : (certifyMode === 'locked' ? 'lock' : 'none'),
+        certifyPermission: $('certifyPermission').value === '2' ? 2 : 3,
+        lockedFields,
         meta: unlocked.meta,
         reason: $('reason').value.trim(),
         location: $('location').value.trim(),
