@@ -42,12 +42,16 @@ for (const permission of [null, 2, 3]) {
     if (permission) await page.locator('#certifyPermission').selectOption(String(permission));
     await page.locator('#fieldLockOptions summary').click();
     await page.locator('#fieldLockList').getByLabel('First reviewer', { exact: true }).check();
+    await page.locator('#fieldLockList').getByLabel('First signature', { exact: true }).check();
     await page.locator('[title="PDF form field: First reviewer"]').fill('First review');
     await page.locator('.field-hint[title*="First signature"]').click();
     const first = await downloadSigned(page);
 
     const firstPdf = await PDFDocument.load(first);
     expect(firstPdf.getForm().getTextField('First reviewer').getText()).toBe('First review');
+    expect(firstPdf.getForm().getTextField('First reviewer').isReadOnly()).toBe(true);
+    expect(firstPdf.getForm().getSignature('First signature').isReadOnly()).toBe(true);
+    expect(firstPdf.getForm().getSignature('Second signature').isReadOnly()).toBe(false);
     expect(firstPdf.getForm().getTextField('Second reviewer').isReadOnly()).toBe(false);
     expect(firstPdf.getForm().getSignature('First signature').acroField.dict.has(PDFName.of('V'))).toBe(true);
     expect(firstPdf.getForm().getSignature('Second signature').acroField.dict.has(PDFName.of('V'))).toBe(false);
@@ -58,7 +62,8 @@ for (const permission of [null, 2, 3]) {
     expect(widgetAppearance.getContents().length).toBeGreaterThan(0);
     const lock = firstField.lookup(PDFName.of('Lock'));
     expect(String(lock.get(PDFName.of('Action')))).toBe('/Include');
-    expect(lock.lookup(PDFName.of('Fields')).get(0).decodeText()).toBe('First reviewer');
+    expect(lock.lookup(PDFName.of('Fields')).asArray().map(name => name.decodeText()))
+      .toEqual(['First reviewer', 'First signature']);
     const permissions = firstPdf.catalog.lookup(PDFName.of('Perms'));
     if (permission) {
       const certification = permissions.lookup(PDFName.of('DocMDP'));
@@ -97,6 +102,8 @@ test('lock an unsigned form with the first signature', async ({ page }) => {
   await page.locator('input[name="lockmode"][value="locked"]').evaluate(el => el.click());
   const signed = await downloadSigned(page);
 
+  const lockedPdf = await PDFDocument.load(signed);
+  expect(lockedPdf.getForm().getFields().every(field => field.isReadOnly())).toBe(true);
   await dropPdf(page, signed, 'locked-review.pdf');
   await expect(page.locator('#btnSign')).toHaveText('Document locked by a signature');
   await expect(page.locator('[title="PDF form field: Second reviewer"]')).toHaveCount(0);

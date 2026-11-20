@@ -7246,6 +7246,17 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, certifyPermi
 
   if (mdp === 'lock' || mdp === 'certify') pdfDoc.catalog.set(PDFName.of('Perms'), context.obj({ DocMDP: sigRef }));
 
+  // Some form fillers don't enforce FieldMDP when deciding which inputs to
+  // enable. Include read-only flags in the first signed revision, where they
+  // can be set without altering a form already covered by someone else's signature.
+  const acroForm = pdfDoc.catalog.getAcroForm();
+  if (acroForm && (mdp === 'lock' || lockedFields.length)) {
+    const fields = new Set(lockedFields);
+    for (const field of PDFLib.PDFForm.of(acroForm, pdfDoc).getFields()) {
+      if (mdp === 'lock' || fields.has(field.getName())) field.enableReadOnly();
+    }
+  }
+
   // DELETE any /Version entry from the catalog. Office-generated source
   // PDFs (from Word / iLovePDF pre-2.0 / older tools) often ship with
   // /Version /1.4 in the catalog, which pins the effective PDF version
