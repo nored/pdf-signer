@@ -52,6 +52,10 @@ for (const permission of [null, 2, 3]) {
     expect(firstPdf.getForm().getSignature('First signature').acroField.dict.has(PDFName.of('V'))).toBe(true);
     expect(firstPdf.getForm().getSignature('Second signature').acroField.dict.has(PDFName.of('V'))).toBe(false);
     const firstField = firstPdf.getForm().getSignature('First signature').acroField.dict;
+    const widget = firstField.lookup(PDFName.of('Kids')).lookup(0);
+    const widgetAppearance = widget.lookup(PDFName.of('AP')).lookup(PDFName.of('N'));
+    expect(String(widgetAppearance.dict.get(PDFName.of('Subtype')))).toBe('/Form');
+    expect(widgetAppearance.getContents().length).toBeGreaterThan(0);
     const lock = firstField.lookup(PDFName.of('Lock'));
     expect(String(lock.get(PDFName.of('Action')))).toBe('/Include');
     expect(lock.lookup(PDFName.of('Fields')).get(0).decodeText()).toBe('First reviewer');

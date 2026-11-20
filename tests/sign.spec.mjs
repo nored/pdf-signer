@@ -1,3 +1,4 @@
+import { PDFDocument, PDFName } from 'pdf-lib';
 import { test, expect, createIdentity, makeFixturePdf, dropPdf } from './fixtures.mjs';
 
 test('sign a fixture PDF and download it', async ({ page }) => {
@@ -32,4 +33,10 @@ test('sign a fixture PDF and download it', async ({ page }) => {
   // We now emit /ETSI.CAdES.detached (PAdES-B-B baseline) on fresh signs;
   // adbe.pkcs7.detached is still accepted on the incremental path.
   expect(text).toMatch(/ETSI\.CAdES\.detached|adbe\.pkcs7\.detached/);
+
+  const signedPdf = await PDFDocument.load(bytesOut);
+  const [field] = signedPdf.getForm().getFields();
+  const widget = field.acroField.dict.lookup(PDFName.of('Kids')).lookup(0);
+  const normalAppearance = widget.lookup(PDFName.of('AP')).lookup(PDFName.of('N'));
+  expect(String(normalAppearance.dict.get(PDFName.of('Subtype')))).toBe('/Form');
 });

@@ -2922,7 +2922,7 @@ function incrementalObject(ref, object) {
 // Non-invasive hint: mark empty signature form fields with a small dashed
 // outline so the user can see them if they want, without touching them.
 async function markUnsignedFieldHints() {
-  if (doc.signingLocked) return false;
+  if (doc.signingLocked || doc.isEncrypted || !doc.sigFieldMap) return false;
   // If the user already has a placement targeting a specific form field
   // (from a previous session that was autosaved), don't re-offer that
   // field's hint — the placement is already sitting on it.
@@ -2936,7 +2936,8 @@ async function markUnsignedFieldHints() {
     for (const a of anns) {
       if (a.annotationType !== 20) continue;
       if ((a.fieldType || '').toLowerCase() !== 'sig') continue;
-      if (a.readOnly || doc.sigFieldMap[a.fieldName]?.alreadySigned ||
+      const target = doc.sigFieldMap[a.fieldName];
+      if (a.readOnly || !target?.widgetRef || target.alreadySigned ||
           doc.lockedFieldRules.some(rule => fieldMatchesLock(a.fieldName, rule))) continue;
       if (!a.rect || a.rect.length < 4) continue;
       const fieldName = a.fieldName || null;
@@ -3915,6 +3916,7 @@ async function rerenderAtScale() {
       for (const s of selects) if (s.title === 'PDF choice: ' + name) s.value = String(prev.value ?? '');
     }
   }
+  await markUnsignedFieldHints();
   refreshSelectedPlacement();
 }
 
@@ -5912,6 +5914,32 @@ function drawDigitalAppearance(page, p, opts) {
   if (location) drawStack('Location: ' + location, bodySize, bodyFont, rgb(0.32, 0.32, 0.32));
 }
 
+function makeSignatureWidgetAppearance(pdfDoc, page, placement, options) {
+  const { PDFPage, PDFPageLeaf, PDFRef, PDFName } = PDFLib;
+  const context = pdfDoc.context;
+  const { xPdf, yPdf, wPdf, hPdf } = placement;
+  // Draw with the same primitives as other PDF artwork, in widget coordinates.
+  const unusedRef = PDFRef.of(-1);
+  const canvas = PDFPage.of(PDFPageLeaf.withContextAndParent(context, unusedRef), unusedRef, pdfDoc);
+  drawDigitalAppearance(canvas, { ...placement, xPdf: 0, yPdf: 0 }, options);
+  const contents = canvas.getContentStream();
+  const { Resources, Annots } = canvas.node.normalizedEntries();
+  const appearance = context.flateStream(contents.getUnencodedContents(), {
+    Type: 'XObject', Subtype: 'Form', FormType: 1,
+    BBox: [0, 0, wPdf, hPdf], Resources,
+  });
+  // Keep the QR link on the real page, above the signature widget.
+  for (const linkRef of Annots.asArray()) {
+    const link = context.lookup(linkRef);
+    const rect = link.lookup(PDFName.of('Rect')).asArray().map((value, index) =>
+      value.asNumber() + (index % 2 === 0 ? xPdf : yPdf));
+    link.set(PDFName.of('Rect'), context.obj(rect));
+    page.node.addAnnot(linkRef);
+  }
+  context.assign(canvas.contentStreamRef, appearance);
+  return context.obj({ N: canvas.contentStreamRef });
+}
+
 function pickTextFieldFont(fonts, family, bold, italic) {
   if (family === 'serif') {
     if (bold && italic) return fonts.timesBoldItalic || fonts.timesBold;
@@ -7029,21 +7057,10 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, certifyPermi
   }
   // ──────────────────────────────────────────────────────────────────────
 
-  // 1. Draw visible appearance for signature placements.
-  //    The stamp appearance always wants a QR payload: prefer the per-page
-  //    integrity-stamp payload (encrypted-vault mode), fall back to the
-  //    published cert URL, and finally to a self-referential app URL so the
-  //    scan lands somewhere useful even without a vault.
-  const stampQrPayload = (stamp && stamp.qrPayload) || certVaultUrl ||
-    (typeof autoDetectVerifierUrl === 'function' ? autoDetectVerifierUrl() : '');
-  for (const p of sigPlacements) {
-    const page = pdfDoc.getPage(p.pageIndex);
-    drawDigitalAppearance(page, p, {
-      fonts, sigImgObj, meta, reason, location, dateStr,
-      appearance: p.appearance || appearance || 'text',
-      qrPayload: stampQrPayload,
-    });
-  }
+  const appearanceOptions = {
+    fonts, sigImgObj, meta, reason, location, dateStr,
+    qrPayload: (stamp && stamp.qrPayload) || certVaultUrl || autoDetectVerifierUrl(),
+  };
   // 2. Draw filled-in text fields.
   for (const p of textPlacements) {
     drawTextField(pdfDoc.getPage(p.pageIndex), p, fonts);
@@ -7158,14 +7175,6 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, certifyPermi
     sigFieldRef = context.register(sigField);
     for (const p of newSigs) {
       const page = pdfDoc.getPage(p.pageIndex);
-      // Widget rect covers the whole placement box. The stamp sig is now
-      // drawn via uniform scaling of a natural layout (see
-      // drawStampSigAppearance), so the QR's exact coords depend on name
-      // length and no longer line up with a static "right-28%" slice.
-      // The Link annotation emitted inside drawStampSigAppearance sits
-      // at the real scaled QR rect and renders after the widget in the
-      // page /Annots array, so desktop viewers that honour annotation
-      // z-order still pick it up on click.
       const widget = context.obj({
         Type: PDFName.of('Annot'),
         Subtype: PDFName.of('Widget'),
@@ -7180,17 +7189,27 @@ async function makeSignedPdf({bytes, placements, lock, certifyMode, certifyPermi
       if (annots && typeof annots.push !== 'function') annots = context.lookup(annots);
       if (!annots) page.node.set(annotsKey, context.obj([widgetRef]));
       else annots.push(widgetRef);
+      widget.set(PDFName.of('AP'), makeSignatureWidgetAppearance(pdfDoc, page, p, {
+        ...appearanceOptions, appearance: p.appearance || appearance || 'text',
+      }));
     }
   }
 
-  // Routed placements: point each existing field's /V at our sigRef.
-  // The visible sig appearance is drawn onto page content at the field's
-  // rect (see below where drawDigitalAppearance is called), so a viewer
-  // still sees the signature at the form-authored spot.
-  for (const { target } of routedSigs) {
-    const fieldRef = target.fieldRef;
-    const fieldDict = context.lookup(fieldRef);
-    if (fieldDict) {
+  // Fill the signature field and render its widget at the authored rectangle.
+  for (const { p, target } of routedSigs) {
+    const fieldDict = context.lookup(target.fieldRef);
+    const widget = context.lookup(target.widgetRef);
+    if (fieldDict && widget) {
+      const [x1, y1, x2, y2] = target.rect;
+      const placement = {
+        ...p,
+        xPdf: Math.min(x1, x2), yPdf: Math.min(y1, y2),
+        wPdf: Math.abs(x2 - x1), hPdf: Math.abs(y2 - y1),
+      };
+      const page = pdfDoc.getPage(target.pageIndex ?? p.pageIndex);
+      widget.set(PDFName.of('AP'), makeSignatureWidgetAppearance(pdfDoc, page, placement, {
+        ...appearanceOptions, appearance: p.appearance || appearance || 'text',
+      }));
       fieldDict.set(PDFName.of('V'), sigRef);
       if (lockedFields.length && mdp !== 'lock') {
         fieldDict.set(PDFName.of('Lock'), fieldLockDictionary(context, 'SigFieldLock', lockedFields));
